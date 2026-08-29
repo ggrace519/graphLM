@@ -15,6 +15,7 @@ Usage as a CLI:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from graphlm.config import Settings
 from graphlm.context import (
@@ -28,6 +29,7 @@ from graphlm.llm import (
     GraphLLError,
     call_llm,
 )
+from graphlm.models import ArchitectureNote
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.render import write_outputs
 from graphlm.scanner import ScanResult, scan_project
@@ -99,6 +101,11 @@ def generate_graph(
     """
     project_path = Path(project_dir).resolve()
 
+    if not project_path.exists():
+        raise FileNotFoundError(f"Project directory not found: {project_dir}")
+    if not project_path.is_dir():
+        raise NotADirectoryError(f"Not a directory: {project_dir}")
+
     # Resolve configuration (not needed for dry run)
     if dry_run:
         settings = None
@@ -135,11 +142,11 @@ def generate_graph(
         graph = CodebaseGraph(
             directory_tree=scan.tree,
             architecture_notes=[
-                {
-                    "note": f"DRY RUN: {len(scan.file_fragments)} files scanned, "
+                ArchitectureNote(
+                    note=f"DRY RUN: {len(scan.file_fragments)} files scanned, "
                     f"{len(pass2_files)} files selected for analysis, "
                     f"{pass2_tokens} estimated pass-2 tokens"
-                },
+                ),
             ],
         )
         return GraphResult(
@@ -150,6 +157,8 @@ def generate_graph(
         )
 
     # Phase 1: LLM identifies key files from tree only
+    assert settings is not None
+
     pass1_prompt = assemble_pass1_prompt(scan.tree)
     pass1_result_json = call_llm(
         base_url=settings.base_url,
@@ -158,6 +167,7 @@ def generate_graph(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=pass1_prompt,
     )
+    pass1_result_json = cast(str, pass1_result_json)
 
     # Parse pass 1 result
     import json as _json
@@ -178,7 +188,8 @@ def generate_graph(
     )
 
     # Phase 2: LLM produces the final graph
-    graph = call_llm(
+    assert settings is not None
+    graph_result = call_llm(
         base_url=settings.base_url,
         api_key=settings.api_key,
         model=settings.model,
@@ -186,6 +197,7 @@ def generate_graph(
         user_prompt=pass2_prompt,
         response_format=CodebaseGraph,
     )
+    graph = cast(CodebaseGraph, graph_result)
 
     # Write outputs if output_dir specified
     if output_dir is not None:

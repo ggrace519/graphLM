@@ -50,8 +50,8 @@ def render_markdown(graph: CodebaseGraph) -> str:
         lines.append("## Data Flow\n")
         lines.append("| Source | Destination | Description |")
         lines.append("|--------|-------------|-------------|")
-        for edge in graph.data_flow:
-            lines.append(f"| {edge.source} | {edge.destination} | {edge.description} |")
+        for flow in graph.data_flow:
+            lines.append(f"| {flow.source} | {flow.destination} | {flow.description} |")
         lines.append("")
 
     # Database schema
