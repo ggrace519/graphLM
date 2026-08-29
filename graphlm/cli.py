@@ -119,7 +119,6 @@ def main(
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
             redact_secrets=not no_redact,
-            ast=ast,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
