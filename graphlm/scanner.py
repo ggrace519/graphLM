@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -412,7 +413,7 @@ def scan_project(
 
     # Collect all text files, ranked
     all_files: list[tuple[int, Path]] = []
-    for root, dirs, files in project_dir.walk():
+    for root, dirs, files in os.walk(project_dir):
         # Check if we're still inside the project (handles symlinks)
         current_root = Path(root)
         if not _path_is_inside(project_dir, current_root):
