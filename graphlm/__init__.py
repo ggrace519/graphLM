@@ -26,6 +26,7 @@ from graphlm.context import (
     assemble_pass2_prompt,
     filter_requested_files,
 )
+from graphlm.cycles import detect_cycles
 from graphlm.llm import (
     CodebaseGraph,
     GraphLLError,
@@ -53,9 +54,11 @@ class GraphResult:
         self.pass2_context_tokens = pass2_context_tokens
         self.files_analyzed = files_analyzed
 
-    def write(self, output_dir: Path) -> tuple[Path, Path]:
-        """Write .md and .json to output_dir. Return both paths."""
-        return write_outputs(self.graph, output_dir)
+    def write(
+        self, output_dir: Path, *, include_html: bool = True
+    ) -> tuple[Path, Path, Path | None]:
+        """Write .md, .json (and optionally .html) to output_dir. Return all paths."""
+        return write_outputs(self.graph, output_dir, html=include_html)
 
 
 def generate_graph(
@@ -74,7 +77,8 @@ def generate_graph(
     dry_run: bool = False,
     redact_secrets: bool = True,
     ast: bool = False,
-    html: bool = True,
+    show_cycles: bool = True,
+    cycle_threshold: float = 0.0,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -213,6 +217,11 @@ def generate_graph(
         response_format=CodebaseGraph,
     )
     graph = cast(CodebaseGraph, graph_result)
+    if show_cycles:
+        graph.import_cycles = [
+            c for c in detect_cycles(graph.import_edges)
+            if c.risk_score >= cycle_threshold
+        ]
 
     # Write outputs if output_dir specified
     if output_dir is not None:

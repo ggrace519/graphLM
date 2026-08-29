@@ -83,6 +83,21 @@ def main(
         "--dry-run",
         help="Analyze and show context stats without calling the LLM.",
     ),
+    no_html: bool = typer.Option(
+        False,
+        "--no-html",
+        help="Do not generate HTML visualization output.",
+    ),
+    no_show_cycles: bool = typer.Option(
+        False,
+        "--no-show-cycles",
+        help="Do not show import cycle detection results.",
+    ),
+    cycle_threshold: float = typer.Option(
+        0.0,
+        "--cycle-threshold",
+        help="Only show cycles with risk score >= this value.",
+    ),
 ) -> None:
     """Analyze a project directory and produce a codebase graph (Markdown + JSON).
 
@@ -109,6 +124,8 @@ def main(
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
             redact_secrets=not no_redact,
+            show_cycles=not no_show_cycles,
+            cycle_threshold=cycle_threshold,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -142,13 +159,21 @@ def main(
         raise typer.Exit(0)
 
     if output_dir:
-        md_path, json_path = result.write(Path(output_dir))
+        md_path, json_path, html_path = result.write(
+            Path(output_dir), include_html=not no_html
+        )
         typer.echo(f"Markdown:  {md_path}", err=True)
         typer.echo(f"JSON:      {json_path}", err=True)
+        if html_path:
+            typer.echo(f"HTML:      {html_path}", err=True)
     else:
-        md_path, json_path = result.write(Path.cwd())
+        md_path, json_path, html_path = result.write(
+            Path.cwd(), include_html=not no_html
+        )
         typer.echo(f"Markdown:  {md_path}", err=True)
         typer.echo(f"JSON:      {json_path}", err=True)
+        if html_path:
+            typer.echo(f"HTML:      {html_path}", err=True)
 
     typer.echo(
         f"Modules: {len(result.graph.modules)} | "
