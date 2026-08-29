@@ -1,0 +1,11 @@
+# Small test project — minimal Python package
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smalltest"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []

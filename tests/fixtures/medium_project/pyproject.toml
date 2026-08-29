@@ -1,0 +1,17 @@
+# Medium test project — multi-package Python app
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "medtest"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["jinja2"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,14 @@
+"""Base template for the web application."""
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <nav>{% block nav %}{% endblock %}</nav>
+    <main>{% block content %}{% endblock %}</main>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
