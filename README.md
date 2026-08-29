@@ -85,9 +85,9 @@ cp .env.example .env
 
 | Variable | Description | Default |
 |---|---|---|
-| `GRAPHLM_BASE_URL` | OpenAI-compatible API endpoint | `https://studio.gracebkp.cloud/v1` |
+| `GRAPHLM_BASE_URL` | OpenAI-compatible API endpoint | `https://openrouter.ai/api/v1` |
 | `GRAPHLM_API_KEY` | API key for authentication | *(required)* |
-| `GRAPHLM_MODEL` | Model name to use | `Qwen3.6-35B` |
+| `GRAPHLM_MODEL` | Model name to use | `openai/gpt-4o` |
 
 Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library arguments.
 
