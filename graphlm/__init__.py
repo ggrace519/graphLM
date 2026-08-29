@@ -37,6 +37,9 @@ from graphlm.parser import build_dependency_graph, ImportEdge
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.render import write_outputs
 from graphlm.scanner import ScanResult, scan_project
+from graphlm.parser import (
+    build_dependency_graph as _build_ast_graph,
+)
 
 
 class GraphResult:
@@ -54,9 +57,11 @@ class GraphResult:
         self.pass2_context_tokens = pass2_context_tokens
         self.files_analyzed = files_analyzed
 
-    def write(self, output_dir: Path) -> tuple[Path, Path]:
-        """Write .md and .json to output_dir. Return both paths."""
-        return write_outputs(self.graph, output_dir)
+    def write(
+        self, output_dir: Path, *, include_html: bool = True
+    ) -> tuple[Path, Path, Path | None]:
+        """Write .md, .json (and optionally .html) to output_dir. Return all paths."""
+        return write_outputs(self.graph, output_dir, html=include_html)
 
 
 def generate_graph(
@@ -75,8 +80,6 @@ def generate_graph(
     dry_run: bool = False,
     redact_secrets: bool = True,
     ast: bool = False,
-    show_cycles: bool = True,
-    cycle_threshold: float = 0.0,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -98,6 +101,8 @@ def generate_graph(
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
         redact_secrets: If True, redact secret-like patterns from file content.
+        ast: If True, run AST-based deterministic import detection and pass
+            those edges to the LLM as ground truth.
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -156,8 +161,14 @@ def generate_graph(
         pass2_prompt, pass2_tokens, _truncated = assemble_pass2_prompt(
             scan.tree, pass2_files, max_context=max_context
         )
+        deterministic_edges: list | None = None
+        if ast:
+            deterministic_edges = _build_ast_graph(
+                scan.file_fragments, max_files, project_path
+            )
         graph = CodebaseGraph(
             directory_tree=scan.tree,
+            deterministic_edges=deterministic_edges,
             architecture_notes=[
                 ArchitectureNote(
                     note=f"DRY RUN: {len(scan.file_fragments)} files scanned, "
@@ -200,8 +211,14 @@ def generate_graph(
 
     # Phase 2: Filter requested files and assemble context
     pass2_files = filter_requested_files(scan, requested_files, max_pass2_files)
+    deterministic_edges: list | None = None
+    if ast:
+        deterministic_edges = _build_ast_graph(
+            scan.file_fragments, max_files, project_path
+        )
     pass2_prompt, pass2_tokens, _truncated = assemble_pass2_prompt(
-        scan.tree, pass2_files, max_context=max_context
+        scan.tree, pass2_files, max_context=max_context,
+        deterministic_edges=deterministic_edges,
     )
 
     # Phase 2: LLM produces the final graph

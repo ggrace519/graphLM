@@ -157,23 +157,36 @@ class TestWriteOutputs:
     def test_writes_both_files(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
-            md_path, json_path = write_outputs(graph, Path(tmpdir))
+            md_path, json_path, html_path = write_outputs(graph, Path(tmpdir))
             assert md_path.exists()
             assert json_path.exists()
+            assert html_path is not None
+            assert html_path.exists()
             assert md_path.name.endswith(".md")
             assert json_path.name.endswith(".json")
+
+    def test_no_html_when_disabled(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            md_path, json_path, html_path = write_outputs(
+                graph, Path(tmpdir), html=False
+            )
+            assert md_path.exists()
+            assert json_path.exists()
+            assert html_path is None
 
     def test_creates_output_directory(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
             out = Path(tmpdir) / "nested" / "dir"
-            md_path, json_path = write_outputs(graph, out)
+            md_path, json_path, html_path = write_outputs(graph, out)
             assert md_path.parent == out
+            assert html_path.parent == out
 
     def test_custom_suffixes(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
-            md_path, json_path = write_outputs(
+            md_path, json_path, html_path = write_outputs(
                 graph, Path(tmpdir), md_suffix="graph", json_suffix="graph"
             )
             assert md_path.name == "graph.md"
