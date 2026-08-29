@@ -54,11 +54,9 @@ class GraphResult:
         self.pass2_context_tokens = pass2_context_tokens
         self.files_analyzed = files_analyzed
 
-    def write(
-        self, output_dir: Path, *, include_html: bool = True
-    ) -> tuple[Path, Path, Path | None]:
-        """Write .md, .json (and optionally .html) to output_dir. Return all paths."""
-        return write_outputs(self.graph, output_dir, html=include_html)
+    def write(self, output_dir: Path) -> tuple[Path, Path]:
+        """Write .md and .json to output_dir. Return both paths."""
+        return write_outputs(self.graph, output_dir)
 
 
 def generate_graph(
