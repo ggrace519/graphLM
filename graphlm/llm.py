@@ -98,7 +98,7 @@ def call_llm(
     *,
     response_format: type[CodebaseGraph] | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> CodebaseGraph:
+) -> CodebaseGraph | str:
     """Call an OpenAI-compatible LLM endpoint and parse the response.
 
     Args:
@@ -140,7 +140,7 @@ def call_llm(
         "Authorization": f"Bearer {api_key}",
     }
 
-    last_error = None
+    last_error: Exception | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
