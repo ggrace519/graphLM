@@ -16,9 +16,10 @@ from graphlm.scanner import FileFragment, ScanResult, estimate_tokens
 logger = logging.getLogger(__name__)
 
 # Conservative context budgets (tokens) for each pass.
-# Reserve for the LLM's response: the exact max_tokens the client requests, so
-# input admission never assumes a smaller response than the model may emit
-# (#17). Sourced from llm.py so the two cannot drift.
+# Default reserve for the LLM's response: the max_tokens the client requests
+# when the caller doesn't override it (assemble_pass2_prompt takes the effective
+# value as max_output_tokens). Input admission reserves exactly this so it never
+# assumes a smaller response than the model may emit (#17). Sourced from llm.py.
 DEFAULT_OUTPUT_BUDGET = LLM_MAX_OUTPUT_TOKENS  # reserve tokens for LLM response
 # Extra pad on top of the output reserve for the system prompt + message framing
 # overhead not counted in the assembled user prompt (SYSTEM_PROMPT is ~370 tok).
@@ -141,6 +142,7 @@ def assemble_pass2_prompt(
     *,
     max_context: int = _DEFAULT_MAX_CONTEXT,
     deterministic_edges: list[ImportEdge] | None = None,
+    max_output_tokens: int = LLM_MAX_OUTPUT_TOKENS,
 ) -> tuple[str, int, list[str]]:
     """Assemble the user prompt for pass 2 (full analysis).
 
@@ -163,12 +165,18 @@ def assemble_pass2_prompt(
         deterministic_edges: Optional AST-extracted import edges to treat as
             ground truth for import_edges. Only the *prompt* copy is budget-capped;
             callers keep the full list for the graph and cycle detection.
+        max_output_tokens: Tokens reserved for the LLM response — MUST equal the
+            max_tokens the client requests, or a prompt sized here can overflow
+            once the model emits its full response (#17). Defaults to
+            LLM_MAX_OUTPUT_TOKENS; the caller passes the configured value.
 
     Returns:
         Tuple of (prompt text, estimated total tokens, list of truncated file paths).
     """
-    # Reserve tokens for LLM output and system prompt overhead
-    output_reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+    # Reserve tokens for LLM output and system prompt overhead. The output slice
+    # is the exact max_tokens the client will request, so the assembled input can
+    # never crowd out the response.
+    output_reserve = max_output_tokens + PASS1_ESTIMATED_TREE_TOKENS
 
     # Build the fixed-cost sections (edge table + instruction block) FIRST and
     # reserve their token cost, so file admission runs against a budget that
@@ -346,7 +354,9 @@ def _build_instruction_block() -> list[str]:
         "",
         "Analyze the above project and produce a JSON object with these sections:",
         "",
-        '1. "directory_tree" - The annotated directory tree (same as above, include it)',
+        '1. "directory_tree" - Return an empty string "". Do NOT echo the tree'
+        "   back — the tool already has it and fills it in itself. Echoing it"
+        "   wastes the entire output budget on a large project (#18).",
         '2. "import_edges" - List of {"from_path", "to_path", "kind"} for import/dependency',
         '   relationships between files. Use kinds: "import", "from", "register", "include",',
         '   "uses".',

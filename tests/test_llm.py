@@ -283,3 +283,118 @@ class TestCallLlm:
         assert len(result.test_organization) == 1
         assert len(result.architecture_notes) == 1
         assert len(result.quick_reference) == 1
+
+
+def _sse_body(content: str, *, finish_reason: str = "stop", chunk_size: int = 7) -> bytes:
+    """Build an OpenAI-style SSE stream body that yields ``content`` split into
+    delta chunks, ending with the finish_reason and a [DONE] sentinel."""
+    lines: list[bytes] = []
+    for i in range(0, len(content), chunk_size):
+        piece = content[i : i + chunk_size]
+        evt = {"choices": [{"delta": {"content": piece}, "index": 0}]}
+        lines.append(b"data: " + json.dumps(evt).encode() + b"\n\n")
+    final = {"choices": [{"delta": {}, "index": 0, "finish_reason": finish_reason}]}
+    lines.append(b"data: " + json.dumps(final).encode() + b"\n\n")
+    lines.append(b"data: [DONE]\n\n")
+    return b"".join(lines)
+
+
+class TestStreaming:
+    """The client streams responses (#18); it must reassemble SSE deltas and
+    still handle a non-SSE body (existing mocks) transparently."""
+
+    def test_sse_response_reassembled(self, httpx_mock):
+        content = '{"directory_tree": "root/", "import_edges": []}'
+        httpx_mock.add_response(
+            status_code=200,
+            content=_sse_body(content, chunk_size=5),
+            headers={"content-type": "text/event-stream"},
+        )
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            system_prompt="Analyze.",
+            user_prompt="root/",
+            response_format=CodebaseGraph,
+        )
+        assert isinstance(result, CodebaseGraph)
+        assert result.directory_tree == "root/"
+        assert result.import_edges == []
+
+    def test_sse_equals_non_streamed_parse(self, httpx_mock):
+        # The reassembled SSE content must parse to the SAME object as the
+        # equivalent buffered body — streaming is transport-only.
+        content = json.dumps(
+            {
+                "directory_tree": "root/\n  a.py\n",
+                "import_edges": [{"from_path": "a.py", "to_path": "b.py", "kind": "import"}],
+                "modules": [{"path": "a.py", "name": "A", "description": "d"}],
+            }
+        )
+        httpx_mock.add_response(status_code=200, content=_sse_body(content))
+        streamed = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        httpx_mock.add_response(
+            status_code=200,
+            json={"choices": [{"message": {"content": content}, "index": 0}]},
+        )
+        buffered = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        assert streamed.model_dump() == buffered.model_dump()
+
+    def test_finish_reason_length_raises_truncated(self, httpx_mock):
+        from graphlm.llm import GraphLLErrorTruncated
+
+        # A truncated (length-capped) stream must raise a distinct, clear error
+        # rather than a confusing parse failure.
+        partial = '{"directory_tree": "root/", "import_edges": [{"from_pa'
+        httpx_mock.add_response(
+            status_code=200, content=_sse_body(partial, finish_reason="length")
+        )
+        with pytest.raises(GraphLLErrorTruncated):
+            call_llm(
+                base_url="http://test.local/v1",
+                api_key="k",
+                model="m",
+                system_prompt="s",
+                user_prompt="u",
+                response_format=CodebaseGraph,
+            )
+
+    def test_stream_flag_sent(self, httpx_mock):
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+        )
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        assert body["stream"] is True
+
+    def test_max_output_tokens_sent_as_max_tokens(self, httpx_mock):
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            max_output_tokens=48000,
+        )
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        assert body["max_tokens"] == 48000

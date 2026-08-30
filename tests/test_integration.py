@@ -63,6 +63,58 @@ class TestFullPipeline:
         assert len(md_files) >= 1
         assert len(json_files) >= 1
 
+    def test_directory_tree_filled_locally_not_from_llm(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        """The model returns an empty directory_tree (to save output tokens);
+        generate_graph fills it from the scan instead (#18)."""
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        # Model returns empty tree, as the pass-2 prompt now instructs.
+        _mock_pass2_response(httpx_mock, _make_graph(directory_tree=""))
+
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        # Despite the LLM returning "", the graph carries the real scanned tree.
+        assert result.graph.directory_tree
+        assert small_project.name in result.graph.directory_tree
+        # And it reached the rendered Markdown.
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert small_project.name in md
+
+    def test_timeout_arg_reaches_http_client(
+        self, httpx_mock, small_project, tmp_path, monkeypatch
+    ):
+        """An explicit generate_graph(timeout=...) must configure the httpx
+        client's timeout — the --timeout flag / GRAPHLM_TIMEOUT path (#18)."""
+        import graphlm.llm as llm_mod
+
+        seen: list[float | None] = []
+        real_client = llm_mod.httpx.Client
+
+        def spy_client(*args, **kwargs):
+            seen.append(kwargs.get("timeout"))
+            return real_client(*args, **kwargs)
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", spy_client)
+
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            timeout=42.0,
+        )
+        # Both passes' clients were built with the explicit timeout.
+        assert seen and all(t == 42.0 for t in seen)
+
     def test_small_project_dry_run(self, httpx_mock, small_project, tmp_path):
         """Dry run should NOT call the LLM."""
         result = generate_graph(
@@ -294,31 +346,40 @@ class TestFullPipeline:
     def test_max_context_precedence_env_then_arg(self, large_project, monkeypatch):
         """max_context resolves flag/arg > GRAPHLM_MAX_CONTEXT env > 120000.
 
-        Uses large_project with a *binding* env budget (20000 — above the
-        ~18.4k output/instruction floor but below what the project's content
-        needs) so the reported pass-2 total actually tracks the resolved budget;
+        Uses large_project with a *binding* env budget — just above the
+        output/instruction floor but below what the project's content needs — so
+        the reported pass-2 total tracks the resolved budget. The budget is
+        derived from the reserve so it stays binding when the reserve changes;
         smaller fixtures fit entirely at every budget and can't show precedence
-        (#17).
+        (#17/#18).
         """
-        # env only: the env var is honored (was previously ignored). 20000 binds
-        # large_project, so its reported total lands below the higher budgets'.
-        monkeypatch.setenv("GRAPHLM_MAX_CONTEXT", "20000")
+        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+
+        reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+        # Above the true floor (reserve + ~1.1k instruction block) but below what
+        # large_project's content needs, so it binds.
+        env_budget = reserve + 2000
+
+        # env only: the env var is honored (was previously ignored).
+        monkeypatch.setenv("GRAPHLM_MAX_CONTEXT", str(env_budget))
         env_result = generate_graph(large_project, dry_run=True)
 
-        # explicit arg wins over the env var.
-        arg_result = generate_graph(large_project, dry_run=True, max_context=50000)
+        # explicit arg wins over the env var (much larger, non-binding).
+        arg_result = generate_graph(
+            large_project, dry_run=True, max_context=reserve + 20000
+        )
 
         # default when neither is set.
         monkeypatch.delenv("GRAPHLM_MAX_CONTEXT", raising=False)
         default_result = generate_graph(large_project, dry_run=True)
 
-        # The binding 20000-token env cap must produce a smaller pass-2 total
-        # than a 50000-token explicit arg or the 120000 default — i.e. the env
-        # var actually takes effect (it was previously ignored entirely).
+        # The binding env cap must produce a smaller pass-2 total than the larger
+        # explicit arg or the 120000 default — i.e. the env var takes effect (it
+        # was previously ignored entirely).
         assert env_result.pass2_context_tokens < arg_result.pass2_context_tokens
         assert env_result.pass2_context_tokens < default_result.pass2_context_tokens
-        # The env cap binds the reported total at or below its 20000 budget.
-        assert env_result.pass2_context_tokens <= 20000
+        # The env cap binds the reported total at or below its budget.
+        assert env_result.pass2_context_tokens <= env_budget
 
     def test_include_html_false_skips_html(self, httpx_mock, small_project, tmp_path):
         """generate_graph with include_html=False must not write GRAPH.html."""

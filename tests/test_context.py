@@ -189,17 +189,18 @@ class TestMaxContext:
 
     def test_truncated_are_lower_priority_files(self, large_project):
         from graphlm.scanner import scan_project
+        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
 
         scan = scan_project(large_project)
-        # 20000 tokens fits the high-priority files but forces truncation of the
-        # lower-priority ones (once the fixed output/tree/instruction reserves
-        # are accounted for). NB: this threshold is coupled to the estimate_tokens
-        # calibration (#17), the ~17.5k output reserve (DEFAULT_OUTPUT_BUDGET,
-        # now the client's real max_tokens), and the size of the instruction
-        # block in _build_instruction_block() — if any grows, the budget that
-        # just forces partial truncation shifts and this number may need raising.
+        # Budget = the fixed output/instruction floor + a small file allowance,
+        # sized so the high-priority files (config, __init__, main) fit but the
+        # lower-priority ones (routes, services, migrations) get truncated. The
+        # allowance is added to the reserve so this test self-tracks changes to
+        # the output reserve or estimate_tokens calibration (#17/#18) instead of
+        # hard-coding a magic number that churns each time the reserve moves.
+        reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
         prompt, tokens, truncated = assemble_pass2_prompt(
-            scan.tree, scan.file_fragments, max_context=20000
+            scan.tree, scan.file_fragments, max_context=reserve + 2500
         )
         # High-priority files (config, __init__, main) should fit first
         # Lower-priority files (routes, services, migrations) get truncated
@@ -226,7 +227,7 @@ class TestMaxContext:
     def test_assembled_prompt_respects_budget_with_huge_edge_table(self):
         """A very large AST-edge table must not push the assembled prompt past
         max_context. Contract: estimate_tokens(prompt) + output_reserve
-        (~17.5k, reserved for the response and never emitted) <= max_context.
+        (reserved for the response and never emitted) <= max_context.
         Regression for #12 — before the edge cap, 6000 rows produced a ~62k
         prompt regardless of the budget.
         """
@@ -247,8 +248,10 @@ class TestMaxContext:
         ]
         tree = "proj/\n" + "\n".join(f"  src/mod{i}.py" for i in range(40))
 
-        # Budgets at or above the ~18.4k-token instruction/output floor.
-        for max_context in (20000, 60000, 120000):
+        # Budgets above the output/instruction floor (floor-relative so the test
+        # tracks reserve changes rather than hard-coding numbers — #17/#18).
+        for extra in (2000, 26000, 86000):
+            max_context = output_reserve + extra
             prompt, reported, truncated = assemble_pass2_prompt(
                 tree, frags, max_context=max_context, deterministic_edges=edges
             )
@@ -261,6 +264,8 @@ class TestMaxContext:
         list is NOT exhaustive (so it still infers the dropped edges), and only
         a subset of rows is emitted.
         """
+        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+
         edges = [
             ImportEdge(
                 from_path=f"src/mod{i}.py", to_path=f"src/mod{j}.py", kind="import"
@@ -268,8 +273,10 @@ class TestMaxContext:
             for i in range(300)
             for j in range(20)
         ]
+        # Enough room above the reserve floor for a capped-but-present edge table.
+        max_context = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS + 2000
         prompt, _tokens, _truncated = assemble_pass2_prompt(
-            "proj/", [], max_context=20000, deterministic_edges=edges
+            "proj/", [], max_context=max_context, deterministic_edges=edges
         )
         assert "NOT exhaustive" in prompt
         assert "showing" in prompt.lower()
@@ -299,10 +306,14 @@ class TestMaxContext:
             for j in range(20)
         ]
         tree = "proj/\n" + "\n".join(f"  m{i}" for i in range(40))
-        # Dense sweep across the rounding-sensitive region, starting above the
-        # ~18.4k-token instruction/output floor (below it, the floor wins and no
-        # budget guarantee is claimed — see assemble_pass2_prompt docstring).
-        for max_context in range(19000, 52000, 311):
+        # Dense sweep across the rounding-sensitive region, starting just above
+        # the output/instruction floor (below it the floor wins and no budget
+        # guarantee is claimed — see assemble_pass2_prompt docstring). Sweep
+        # bounds are floor-relative so this tracks reserve changes (#17/#18).
+        # +2000 clears the instruction block (~1.1k assembled) above the reserve
+        # so every swept budget is above the true floor.
+        start = output_reserve + 2000
+        for max_context in range(start, start + 33000, 311):
             prompt, reported, _truncated = assemble_pass2_prompt(
                 tree, frags, max_context=max_context, deterministic_edges=edges
             )
@@ -311,6 +322,24 @@ class TestMaxContext:
             )
             # Reported total is the authoritative measured value.
             assert reported == estimate_tokens(prompt) + output_reserve
+
+    def test_max_output_tokens_grows_the_reserve(self):
+        """A larger max_output_tokens reserves more of the budget for the
+        response, so fewer input files fit — the reserve must track it (#17/#18).
+        """
+        frags = [
+            FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
+            for i in range(40)
+        ]
+        tree = "proj/"
+        _, tokens_small, trunc_small = assemble_pass2_prompt(
+            tree, frags, max_context=80000, max_output_tokens=16000
+        )
+        _, tokens_big, trunc_big = assemble_pass2_prompt(
+            tree, frags, max_context=80000, max_output_tokens=48000
+        )
+        # Bigger reserve => fewer input files admitted => more truncated.
+        assert len(trunc_big) > len(trunc_small)
 
     def test_small_edge_table_keeps_exhaustive_framing(self):
         """A small edge table that fits must keep the strong 'do not omit'
