@@ -55,3 +55,4 @@ and this project adheres to Semantic Versioning.
 - `.env.example` for LLM endpoint configuration
 - GitHub Actions CI testing on Python 3.11, 3.12, 3.13 with coverage upload to Codecov
 - mypy type checking in CI
+- Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
