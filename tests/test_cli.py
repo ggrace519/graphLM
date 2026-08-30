@@ -2,10 +2,13 @@
 
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from graphlm.cli import app
+from graphlm import GraphResult
+from graphlm.cli import app, output_destination
+from graphlm.models import CodebaseGraph
 
 runner = CliRunner()
 
@@ -98,3 +101,66 @@ class TestCLI:
         result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--no-ast"])
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
+
+    def test_output_destination_defaults_to_project(self, tmp_path):
+        project = tmp_path / "scanned"
+        other = tmp_path / "elsewhere"
+        assert output_destination(project, None) == project
+        assert output_destination(project, str(other)) == other
+
+    def test_cli_writes_into_scanned_project_not_cwd(
+        self, small_project, tmp_path, monkeypatch
+    ):
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        recorded: dict[str, Path] = {}
+
+        def fake_write(self, output_dir, *, include_html=True):
+            dest = Path(output_dir).resolve()
+            recorded["dest"] = dest
+            md = dest / "GRAPH.md"
+            js = dest / "GRAPH.json"
+            html = dest / "GRAPH.html" if include_html else None
+            return md, js, html
+
+        def fake_generate_graph(**_kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(app, [str(small_project)])
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert recorded["dest"] == small_project.resolve()
+        assert not (cwd / "GRAPH.md").exists()
+
+    def test_cli_dash_o_overrides_project_dir(
+        self, small_project, tmp_path, monkeypatch
+    ):
+        cwd = tmp_path / "cwd"
+        out = tmp_path / "out"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        recorded: dict[str, Path] = {}
+
+        def fake_write(self, output_dir, *, include_html=True):
+            dest = Path(output_dir).resolve()
+            recorded["dest"] = dest
+            md = dest / "GRAPH.md"
+            js = dest / "GRAPH.json"
+            return md, js, None
+
+        def fake_generate_graph(**_kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(app, [str(small_project), "-o", str(out)])
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert recorded["dest"] == out.resolve()
