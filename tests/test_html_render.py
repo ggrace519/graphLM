@@ -125,6 +125,46 @@ class TestBuildNodes:
         nodes = _build_nodes(graph)
         assert nodes[0]["path"] == "lib/utils.py"
 
+    def test_duplicate_path_collapsed_to_one_node(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[ModuleDescription(path="app/main.py", name="App", description="Factory")],
+            entry_points=[
+                {
+                    "path": "app/main.py",
+                    "name": "main",
+                    "kind": "main",
+                    "description": "CLI",
+                }
+            ],
+            file_summaries=[FileSummary(path="app/main.py", summary="The main module")],
+        )
+        nodes = _build_nodes(graph)
+        assert len(nodes) == 1
+        assert nodes[0]["type"] == "entry_point"
+        assert nodes[0]["r"] == 12
+        assert nodes[0]["id"] == "app/main.py"
+
+    def test_import_edge_endpoints_become_nodes(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_edges=[
+                ImportEdge(from_path="tests/test_cli.py", to_path="graphlm/cli.py", kind="import"),
+            ],
+        )
+        nodes = _build_nodes(graph)
+        ids = {n["id"] for n in nodes}
+        assert ids == {"tests/test_cli.py", "graphlm/cli.py"}
+
+    def test_data_flow_endpoints_become_nodes(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            data_flow=[{"source": "CLI (cli.py)", "destination": "Library API", "description": "calls"}],
+        )
+        nodes = _build_nodes(graph)
+        ids = {n["id"] for n in nodes}
+        assert ids == {"CLI (cli.py)", "Library API"}
+
 
 class TestBuildLinks:
     def test_import_edges_become_links(self):
@@ -306,6 +346,33 @@ class TestRenderHtml:
         graph = CodebaseGraph(directory_tree="test/")
         html = render_html(graph)
         assert "d3.zoom" in html
+
+    def test_html_contains_tick_handler(self):
+        graph = CodebaseGraph(directory_tree="test/")
+        html = render_html(graph)
+        assert "simulation.on('tick'" in html
+        assert "translate(" in html
+
+    def test_rendered_links_all_resolve_to_nodes(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[ModuleDescription(path="graphlm/cli.py", name="cli", description="CLI")],
+            import_edges=[
+                ImportEdge(from_path="tests/test_cli.py", to_path="graphlm/cli.py", kind="import"),
+            ],
+            data_flow=[
+                {"source": "CLI (cli.py)", "destination": "Library API", "description": "invokes"},
+            ],
+        )
+        html = render_html(graph)
+        data = json.loads(
+            html[html.index("const graphData = ") + len("const graphData = "):html.index(";\nconst _PALETTE")]
+        )
+        ids = {n["id"] for n in data["nodes"]} | {n["path"] for n in data["nodes"]}
+        assert data["links"]
+        for link in data["links"]:
+            assert link["source"] in ids
+            assert link["target"] in ids
 
     def test_file_summaries_with_symbols(self):
         graph = CodebaseGraph(

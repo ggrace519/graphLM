@@ -24,41 +24,108 @@ def _directory_color(dir_name: str) -> str:
     return _PALETTE[idx]
 
 
+_TYPE_RANK = {
+    "entry_point": 3,
+    "module": 2,
+    "file_summary": 1,
+    "file": 0,
+    "component": 0,
+}
+
+
+def _upsert_node(
+    by_id: dict[str, dict[str, Any]],
+    key: str,
+    *,
+    name: str,
+    type: str,
+    path: str,
+    description: str,
+    r: int,
+) -> None:
+    """Insert or merge a node. One node per id so D3 forceLink can resolve links."""
+    existing = by_id.get(key)
+    if existing is None:
+        by_id[key] = {
+            "id": key,
+            "name": name,
+            "type": type,
+            "path": path,
+            "description": description,
+            "r": r,
+            "color": _directory_color(path),
+        }
+        return
+    if _TYPE_RANK.get(type, 0) > _TYPE_RANK.get(existing["type"], 0):
+        existing["type"] = type
+        existing["name"] = name or existing["name"]
+    if r > existing["r"]:
+        existing["r"] = r
+    if description and (
+        not existing["description"] or len(description) > len(existing["description"])
+    ):
+        existing["description"] = description
+
+
 def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
-    """Build D3 node data from the graph."""
-    nodes: list[dict[str, Any]] = []
+    """Build D3 node data from the graph.
+
+    One node per file path (or data-flow label). Import-edge and data-flow
+    endpoints that are not already modules/entry points/summaries are added
+    so every link can resolve — D3 forceLink throws on missing node ids.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
 
     for mod in graph.modules:
-        nodes.append({
-            "name": mod.name,
-            "type": "module",
-            "path": mod.path,
-            "description": mod.description,
-            "r": 8,
-            "color": _directory_color(mod.path),
-        })
-
+        _upsert_node(
+            by_id,
+            mod.path,
+            name=mod.name,
+            type="module",
+            path=mod.path,
+            description=mod.description,
+            r=8,
+        )
     for ep in graph.entry_points:
-        nodes.append({
-            "name": ep.name,
-            "type": "entry_point",
-            "path": ep.path,
-            "description": ep.description,
-            "r": 12,
-            "color": _directory_color(ep.path),
-        })
-
+        _upsert_node(
+            by_id,
+            ep.path,
+            name=ep.name,
+            type="entry_point",
+            path=ep.path,
+            description=ep.description,
+            r=12,
+        )
     for fs in graph.file_summaries:
-        nodes.append({
-            "name": fs.path,
-            "type": "file_summary",
-            "path": fs.path,
-            "description": fs.summary,
-            "r": 5,
-            "color": _directory_color(fs.path),
-        })
+        _upsert_node(
+            by_id,
+            fs.path,
+            name=fs.path,
+            type="file_summary",
+            path=fs.path,
+            description=fs.summary,
+            r=5,
+        )
+    for edge in graph.import_edges:
+        for p in (edge.from_path, edge.to_path):
+            if p not in by_id:
+                _upsert_node(
+                    by_id, p, name=p, type="file", path=p, description="", r=6
+                )
+    for flow in graph.data_flow:
+        for p in (flow.source, flow.destination):
+            if p not in by_id:
+                _upsert_node(
+                    by_id,
+                    p,
+                    name=p,
+                    type="component",
+                    path=p,
+                    description=flow.description,
+                    r=7,
+                )
 
-    return nodes
+    return list(by_id.values())
 
 
 def _build_links(graph: CodebaseGraph) -> list[dict[str, Any]]:

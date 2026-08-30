@@ -142,15 +142,24 @@ function initGraph() {
   const container = document.getElementById('graph');
   const width = container.clientWidth || 1200;
   const height = container.clientHeight || 800;
-  const links = graphData.links.map((l, i) => ({...l, id: 'link_' + i}));
-  const nodeMap = {};
-  graphData.nodes.forEach(n => { nodeMap[n.path] = n; });
-  links.forEach(l => {
-    l.source = nodeMap[l.source] || l.source;
-    l.target = nodeMap[l.target] || l.target;
+  const nodes = graphData.nodes || [];
+  nodes.forEach(n => { n.id = n.id || n.path || n.name; });
+  const nodeById = new Map();
+  nodes.forEach(n => {
+    nodeById.set(n.id, n);
+    if (n.path) nodeById.set(n.path, n);
   });
-  const simulation = d3.forceSimulation(graphData.nodes)
-    .force('link', d3.forceLink(links).id(d => d.path).distance(80))
+  // Pre-resolve to node objects and drop unknown endpoints. D3 forceLink
+  // throws "node not found" if a link id is missing, which blanked the graph.
+  const links = [];
+  (graphData.links || []).forEach((l, i) => {
+    const s = nodeById.get(l.source);
+    const t = nodeById.get(l.target);
+    if (!s || !t) return;
+    links.push({...l, id: 'link_' + i, source: s, target: t});
+  });
+  const simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).distance(80))
     .force('charge', d3.forceManyBody().strength(-200))
     .force('center', d3.forceCenter(width / 2, height / 2))
     .force('collision', d3.forceCollide().radius(d => d.r + 8))
@@ -167,7 +176,7 @@ function initGraph() {
     .attr('stroke', d => d.stroke || '#888')
     .attr('stroke-dasharray', d => d.dash || null)
     .attr('stroke-opacity', 0.5);
-  const node = g.append('g').selectAll('g').data(graphData.nodes)
+  const node = g.append('g').selectAll('g').data(nodes)
     .join('g').attr('class', 'node');
   node.each(function(d) {
     const sel = d3.select(this);
@@ -184,15 +193,26 @@ function initGraph() {
         .attr('stroke', '#fff').attr('stroke-width', 1.5)
         .attr('stroke-opacity', 0.3);
     }
-  });
-  const labels = g.append('g').selectAll('text')
-    .data(graphData.nodes.filter(d => d.r >= 8)).join('text')
-    .attr('class', 'label')
-    .attr('dy', d => d.r + 12)
-    .text(d => {
+    if (d.r >= 8) {
       const parts = (d.name || d.path).split('.');
-      return parts.length > 1 ? parts[parts.length - 1] : (d.name || '');
-    }).attr('opacity', 0.7);
+      sel.append('text')
+        .attr('class', 'label')
+        .attr('dy', d.r + 12)
+        .text(parts.length > 1 ? parts[parts.length - 1] : (d.name || ''))
+        .attr('opacity', 0.7);
+    }
+  });
+  const labels = node.selectAll('text.label');
+  simulation.on('tick', () => {
+    link.attr('d', d => {
+      if (d.source.x == null || d.target.x == null) return null;
+      const x1 = d.source.x, y1 = d.source.y, x2 = d.target.x, y2 = d.target.y;
+      const dx = x2 - x1, dy = y2 - y1;
+      const dr = Math.hypot(dx, dy) || 1;
+      return 'M' + x1 + ',' + y1 + 'A' + dr + ',' + dr + ' 0 0,1 ' + x2 + ',' + y2;
+    });
+    node.attr('transform', d => 'translate(' + (d.x ?? 0) + ',' + (d.y ?? 0) + ')');
+  });
   const tooltip = d3.select('#tooltip');
   node.on('mouseover', function(event, d) {
     tooltip.style('display', 'block').html(
