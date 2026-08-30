@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+import logging
+
 from graphlm.config import Settings
 from graphlm.context import (
     Pass2Context,
@@ -30,6 +32,7 @@ from graphlm.llm import (
     call_llm,
 )
 from graphlm.models import ArchitectureNote
+from graphlm.parser import build_dependency_graph, ImportEdge
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.render import write_outputs
 from graphlm.scanner import ScanResult, scan_project
@@ -70,6 +73,8 @@ def generate_graph(
     exclude_patterns: tuple[str, ...] = (),
     dry_run: bool = False,
     redact_secrets: bool = True,
+    ast: bool = False,
+    html: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -131,6 +136,16 @@ def generate_graph(
         exclude_patterns=exclude_patterns,
         redact_secrets=redact_secrets,
     )
+
+    # If --ast is enabled, build deterministic import edges from AST parsing
+    deterministic_edges: list[ImportEdge] | None = None
+    if ast:
+        try:
+            deterministic_edges = build_dependency_graph(
+                scan.file_fragments, project_dir=project_path, max_files=max_files,
+            )
+        except Exception as e:
+            logging.warning("AST parsing failed, continuing without it: %s", e)
 
     if dry_run:
         # Don't call the LLM, just show context stats

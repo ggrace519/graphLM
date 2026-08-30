@@ -143,3 +143,7 @@ class CodebaseGraph(BaseModel):
     quick_reference: list[QuickReference] = Field(
         default_factory=list, description="Quick-reference lookup table"
     )
+    deterministic_edges: list[ImportEdge] | None = Field(
+        default=None,
+        description="Import edges derived from AST parsing (deterministic, not LLM-generated)",
+    )
