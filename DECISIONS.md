@@ -69,6 +69,17 @@ and a directive that prompts regeneration when the code has changed.
 - A git SHA is accepted only when `git rev-parse HEAD` exits 0 **and** stdout is
   a 40- or 64-hex hash — this rejects the empty-repo case, where git prints the
   literal `HEAD` with a non-zero exit.
+- **Known limitation (committing the graph → self-invalidation):** the check is
+  `stamped_sha != HEAD`, so committing `GRAPH.*` invalidates the stamp on the
+  very commit that ships it — `HEAD` advances to that commit and the map reads
+  as one commit stale, permanently one behind. This repo gitignores `GRAPH.md`
+  / `GRAPH.json` / `GRAPH.html` (`.gitignore`) and regenerates on demand, which
+  keeps the stamp on a real current SHA. Consumers who commit the graph should
+  regenerate it as the final step of the same commit and accept one-commit
+  staleness until the next regen. The failure mode to avoid is committing a
+  graph with no regeneration step, which reintroduces the per-session refresh
+  tax this design removed. Documented (README + here), not engineered around —
+  a dirty-tree/uncommitted-graph escape hatch is out of scope for release one.
 - **Known limitation (`-o`):** when output is written somewhere other than the
   scanned repo (`-o <elsewhere>`), an agent that reads that `GRAPH.md` and runs
   `git rev-parse HEAD` in *its own* directory compares against the wrong repo.

@@ -16,7 +16,7 @@ Given a project directory, graphLM produces a structured analysis as **Markdown*
 - **Quick reference** — "where do I find X?" lookups
 - **Import cycles** — strongly-connected components with SLOC-based risk scores
 - **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, and theme toggle
-- **Provenance stamp** — every graph records when and against which git commit it was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
+- **Provenance stamp** — `GRAPH.json` records when and against which git commit the map was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
 
 ## Installation
 
@@ -128,6 +128,21 @@ and rides the refresh nudge along in the loop an agent already uses to read
 > A codebase map lives at `GRAPH.md` — read it before exploring the code, and
 > follow its refresh directive (regenerate with `graphlm .` when the stamped
 > commit differs from the current `HEAD`).
+
+**Committing vs. gitignoring the graph.** The refresh check is `stamped_sha !=
+HEAD`, so **if you commit `GRAPH.*`, the stamp is invalidated by the very commit
+that ships it** — `HEAD` moves to that commit, so the map immediately reads as
+one commit stale, and stays perpetually one commit behind. Two sane options:
+
+- **Gitignore `GRAPH.md` / `GRAPH.json` / `GRAPH.html`** (this repo's own choice)
+  and regenerate on demand. The stamp then always reflects a real, current SHA.
+- **Commit it and regenerate as the final step of the same commit** so the map
+  ships fresh — but expect it to show one-commit staleness until the next regen,
+  and treat that as normal.
+
+Committing a graph that goes stale on every push (with no regeneration step) is
+the one workflow to avoid — it reintroduces exactly the per-session refresh tax
+this design set out to remove.
 
 **Note on `-o`:** if you write output somewhere other than the scanned repo
 (`-o <elsewhere>`), an agent reading that `GRAPH.md` and running `git rev-parse

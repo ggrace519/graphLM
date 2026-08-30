@@ -497,26 +497,51 @@ class TestProvenanceStamp:
     """The self-refreshing provenance stamp (meta + rendered directive)."""
 
     def test_full_pipeline_stamps_meta_with_real_sha(
-        self, httpx_mock, small_project, tmp_path
+        self, httpx_mock, tmp_path
     ):
-        # small_project fixture lives inside THIS repo, so git_commit_sha finds
-        # graphLM's own HEAD — a real 40-hex SHA.
+        # Build an ISOLATED git repo (don't depend on graphLM's own ambient
+        # .git, which is absent from an sdist/wheel test run). The stamped SHA
+        # must equal this repo's HEAD exactly, whatever its object format.
+        import re
+        import subprocess
+
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        (repo / "main.py").write_text("def run():\n    return 1\n")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.email=t@t", "-c",
+             "user.name=t", "add", "-A"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.email=t@t", "-c",
+             "user.name=t", "commit", "-q", "-m", "init"], check=True,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+        out = tmp_path / "out"
         _mock_pass1_response(httpx_mock, ["main.py"])
         _mock_pass2_response(httpx_mock, _make_graph())
         result = generate_graph(
-            small_project,
+            repo,
             base_url="http://test.local/v1",
             api_key="test-key",
             model="test-model",
-            output_dir=tmp_path,
+            output_dir=out,
         )
         meta = result.graph.meta
         assert meta is not None
-        assert meta.commit_sha is not None and len(meta.commit_sha) == 40
+        # Exact match to the isolated repo's HEAD, not a length guess (the
+        # module supports SHA-256 too, so don't hardcode SHA-1's 40).
+        assert meta.commit_sha == head
+        assert re.fullmatch(r"[0-9a-f]{40}([0-9a-f]{24})?", meta.commit_sha)
         assert meta.created_at.endswith("Z")
         assert meta.schema_version == 1
         # And the directive reached GRAPH.md.
-        md = (tmp_path / "GRAPH.md").read_text()
+        md = (out / "GRAPH.md").read_text()
         assert "generated against commit" in md
         assert meta.commit_sha[:8] in md
 
