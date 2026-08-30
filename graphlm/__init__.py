@@ -32,11 +32,25 @@ from graphlm.llm import (
     GraphLLError,
     call_llm,
 )
-from graphlm.models import ArchitectureNote, ImportEdge
+from graphlm.models import ArchitectureNote, GraphMeta, ImportEdge
 from graphlm.parser import build_dependency_graph
 from graphlm.prompts import SYSTEM_PROMPT
+from graphlm.provenance import git_commit_sha, graphlm_version, now_utc_iso
 from graphlm.render import write_outputs
 from graphlm.scanner import ScanResult, scan_project
+
+
+def _build_meta(project_path: Path) -> GraphMeta:
+    """Build the provenance stamp for a run against ``project_path``.
+
+    Failure-tolerant throughout: a non-git project yields ``commit_sha=None``,
+    a non-installed checkout yields ``graphlm_version=None``. Never raises.
+    """
+    return GraphMeta(
+        created_at=now_utc_iso(),
+        commit_sha=git_commit_sha(project_path),
+        graphlm_version=graphlm_version(),
+    )
 
 
 class GraphResult:
@@ -233,6 +247,9 @@ def generate_graph(
                 )
                 if c.risk_score >= cycle_threshold
             ]
+        # Stamp the dry-run graph too, so its provenance is consistent with a
+        # real run (a --dry-run write would otherwise carry no directive).
+        graph.meta = _build_meta(project_path)
         return GraphResult(
             graph=graph,
             pass1_context_tokens=pass1_tokens(scan.tree),
@@ -307,6 +324,11 @@ def generate_graph(
         ]
     else:
         graph.import_cycles = []
+
+    # Stamp provenance locally, overwriting anything the model may have emitted
+    # for `meta` (like directory_tree, meta is filled here, never trusted from
+    # the LLM). The GRAPH.md refresh directive is rendered from this.
+    graph.meta = _build_meta(project_path)
 
     # Write outputs if output_dir specified
     if output_dir is not None:

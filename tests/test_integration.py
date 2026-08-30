@@ -491,3 +491,78 @@ class TestFullPipeline:
             show_cycles=False,
         )
         assert result.graph.import_cycles == []
+
+
+class TestProvenanceStamp:
+    """The self-refreshing provenance stamp (meta + rendered directive)."""
+
+    def test_full_pipeline_stamps_meta_with_real_sha(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        # small_project fixture lives inside THIS repo, so git_commit_sha finds
+        # graphLM's own HEAD — a real 40-hex SHA.
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        meta = result.graph.meta
+        assert meta is not None
+        assert meta.commit_sha is not None and len(meta.commit_sha) == 40
+        assert meta.created_at.endswith("Z")
+        assert meta.schema_version == 1
+        # And the directive reached GRAPH.md.
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert "generated against commit" in md
+        assert meta.commit_sha[:8] in md
+
+    def test_llm_hallucinated_meta_is_overwritten(self, httpx_mock, small_project):
+        # If the model emits its own meta, generate_graph overwrites it locally
+        # (like directory_tree) — never trusts LLM-provided provenance.
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(
+            httpx_mock,
+            _make_graph(
+                meta={
+                    "schema_version": 99,
+                    "created_at": "1999-01-01T00:00:00Z",
+                    "commit_sha": "deadbeef" * 5,
+                    "graphlm_version": "hacked",
+                }
+            ),
+        )
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+        )
+        meta = result.graph.meta
+        assert meta is not None
+        assert meta.created_at != "1999-01-01T00:00:00Z"
+        assert meta.commit_sha != "deadbeef" * 5
+        assert meta.schema_version == 1
+
+    def test_dry_run_also_stamps_meta(self, small_project):
+        result = generate_graph(small_project, dry_run=True)
+        assert result.graph.meta is not None
+        assert result.graph.meta.created_at.endswith("Z")
+
+    def test_non_git_project_stamps_null_sha(self, tmp_path):
+        # A scratch dir outside any repo -> commit_sha None, non-git directive.
+        (tmp_path / "mod.py").write_text("x = 1\n")
+        result = generate_graph(tmp_path, dry_run=True)
+        assert result.graph.meta is not None
+        assert result.graph.meta.commit_sha is None
+        md = render_markdown_of(result.graph)
+        assert "No git commit tracking" in md
+
+
+def render_markdown_of(graph):
+    from graphlm.render import render_markdown
+
+    return render_markdown(graph)

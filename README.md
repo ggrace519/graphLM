@@ -16,6 +16,7 @@ Given a project directory, graphLM produces a structured analysis as **Markdown*
 - **Quick reference** — "where do I find X?" lookups
 - **Import cycles** — strongly-connected components with SLOC-based risk scores
 - **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, and theme toggle
+- **Provenance stamp** — every graph records when and against which git commit it was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
 
 ## Installation
 
@@ -99,6 +100,40 @@ This keeps the first pass lightweight (~tree tokens) and ensures the second pass
 
 A Tree-sitter pass (Python imports) runs by default. It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip.
 
+## Self-refreshing graph
+
+A generated graph goes stale the moment the code moves on. graphLM makes the
+output *self-refreshing without any hook or flag*: it stamps its own provenance
+and rides the refresh nudge along in the loop an agent already uses to read
+`GRAPH.md`.
+
+- **The stamp.** `GRAPH.json` carries a versioned `meta` block — `created_at`
+  (UTC), `commit_sha` (the git `HEAD` the graph was generated against, or `null`
+  outside a git repo), `graphlm_version`, and `schema_version`. `GRAPH.md` opens
+  with a short **refresh directive** rendered from that stamp.
+- **The agent is the scheduler.** graphLM has no staleness logic — invoked, it
+  always regenerates and re-stamps. The directive tells a reading agent to
+  compare the repo's current `git rev-parse HEAD` to the stamped commit and, if
+  they differ, regenerate with `graphlm .`. Staleness = SHA mismatch.
+- **It's advisory.** The agent may ignore the directive; the map is best-effort,
+  not guaranteed current. Non-git projects have no SHA, so the directive falls
+  back to "regenerate when you believe the code has changed."
+- **Honest wording.** The stamp says "generated *against* commit X", not
+  "reflects X": the graph is built from files on disk, which may include
+  uncommitted changes, so a graph can be SHA-fresh yet not match the working
+  tree.
+
+**Adoption — one line for an `AGENTS.md` / rules file:**
+
+> A codebase map lives at `GRAPH.md` — read it before exploring the code, and
+> follow its refresh directive (regenerate with `graphlm .` when the stamped
+> commit differs from the current `HEAD`).
+
+**Note on `-o`:** if you write output somewhere other than the scanned repo
+(`-o <elsewhere>`), an agent reading that `GRAPH.md` and running `git rev-parse
+HEAD` in its own directory will compare against the wrong repo. Keep the graph
+in the project it describes for the staleness check to work.
+
 ## Configuration
 
 graphLM reads its LLM settings from environment variables. Copy `.env.example` to `.env` and fill in your values:
@@ -151,6 +186,7 @@ graphlm/
 ├── models.py             # Pydantic v2 data models
 ├── parser.py             # Tree-sitter AST import parser
 ├── prompts.py            # System prompt (injection guard)
+├── provenance.py         # Git SHA / timestamp / version capture for the stamp
 ├── render.py             # Markdown + JSON + HTML output rendering
 └── scanner.py            # Project directory scanner
 tests/
@@ -165,6 +201,7 @@ tests/
 ├── test_models.py
 ├── test_parser.py
 ├── test_prompts.py
+├── test_provenance.py
 ├── test_render.py
 ├── test_scanner.py
 └── fixtures/             # Small, medium, large test projects

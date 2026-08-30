@@ -3,12 +3,15 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import json
+
 from graphlm.models import (
     ArchitectureNote,
     CodebaseGraph,
     DBColumn,
     DBTable,
     DataFlowEdge,
+    GraphMeta,
     ImportEdge,
     ModuleDescription,
     QuickReference,
@@ -192,3 +195,99 @@ class TestWriteOutputs:
             )
             assert md_path.name == "graph.md"
             assert json_path.name == "graph.json"
+
+    def test_meta_bearing_graph_renders_html_default_path(self):
+        # The CLI default is html=True, so the real path renders a meta-bearing
+        # graph to HTML. The directive is GRAPH.md-only and must NOT leak in.
+        graph = CodebaseGraph(
+            directory_tree="root/\n",
+            meta=GraphMeta(
+                created_at="2026-08-30T00:00:00Z", commit_sha="a" * 40
+            ),
+        )
+        with TemporaryDirectory() as tmpdir:
+            md_path, json_path, html_path = write_outputs(graph, Path(tmpdir))
+            assert html_path is not None and html_path.stat().st_size > 0
+            assert "Provenance & refresh directive" not in html_path.read_text()
+            assert "Provenance & refresh directive" in md_path.read_text()
+
+
+_GIT_META = GraphMeta(
+    created_at="2026-08-30T14:22:05Z",
+    commit_sha="d38e47d21406cf6482c0272587d17d92629059be",
+    graphlm_version="0.1.0",
+)
+_NONGIT_META = GraphMeta(
+    created_at="2026-08-30T14:22:05Z", commit_sha=None, graphlm_version=None
+)
+
+
+class TestRefreshDirective:
+    def test_git_form_present_when_sha_set(self):
+        md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=_GIT_META))
+        # Directive is the first line, above the heading.
+        assert md.lstrip().startswith(">")
+        assert "generated against commit `d38e47d2`" in md
+        assert "2026-08-30T14:22:05Z" in md
+        assert "graphlm ." in md
+        assert "git rev-parse HEAD" in md
+        assert "advisory" in md.lower()
+
+    def test_non_git_form_when_sha_none(self):
+        md = render_markdown(
+            CodebaseGraph(directory_tree="root/\n", meta=_NONGIT_META)
+        )
+        assert md.lstrip().startswith(">")
+        assert "No git commit tracking" in md
+        assert "whenever you believe the code has changed" in md
+        assert "graphlm ." in md
+        # The git-only comparison instruction must not appear.
+        assert "generated against commit" not in md
+
+    def test_no_directive_without_meta(self):
+        md = render_markdown(CodebaseGraph(directory_tree="root/\n"))
+        assert not md.lstrip().startswith(">")
+        assert "# Codebase Graph" in md
+
+    def test_dirty_tree_honesty_never_says_reflects(self):
+        # Wording guard: "generated against", never "reflects" — a SHA-fresh
+        # graph can still not match an uncommitted working tree.
+        for meta in (_GIT_META, _NONGIT_META):
+            md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=meta))
+            assert "reflect" not in md.lower()
+
+
+class TestRenderJsonMeta:
+    def test_meta_serialized_with_sha(self):
+        data = json.loads(
+            render_json(CodebaseGraph(directory_tree="root/\n", meta=_GIT_META))
+        )
+        assert data["meta"]["commit_sha"] == _GIT_META.commit_sha
+        assert data["meta"]["schema_version"] == 1
+
+    def test_null_commit_sha_preserved_despite_exclude_none(self):
+        # The critical case: exclude_none=True must NOT drop commit_sha=None,
+        # or a non-git graph is indistinguishable from an old meta-less one.
+        data = json.loads(
+            render_json(CodebaseGraph(directory_tree="root/\n", meta=_NONGIT_META))
+        )
+        assert "meta" in data
+        assert "commit_sha" in data["meta"]
+        assert data["meta"]["commit_sha"] is None
+
+    def test_no_meta_key_when_meta_absent(self):
+        data = json.loads(render_json(CodebaseGraph(directory_tree="root/\n")))
+        assert "meta" not in data
+
+    def test_round_trips_through_model_validate(self):
+        graph = CodebaseGraph(directory_tree="root/\n", meta=_GIT_META)
+        reloaded = CodebaseGraph.model_validate_json(render_json(graph))
+        assert reloaded.meta is not None
+        assert reloaded.meta.commit_sha == _GIT_META.commit_sha
+
+    def test_backward_read_of_meta_less_json(self):
+        # Versioned-contract guarantee: an OLD GRAPH.json with no meta block
+        # still validates, with meta defaulting to None.
+        old = '{"directory_tree": "root/\\n", "modules": []}'
+        graph = CodebaseGraph.model_validate_json(old)
+        assert graph.meta is None
