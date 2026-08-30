@@ -126,6 +126,24 @@ class TestScanProject:
         for p in paths:
             assert "js" not in p.lower() or not p.endswith(".js")
 
+    def test_source_outranks_docs_under_file_cap(self, tmp_path):
+        # Regression for #19: under a tight max_files cap, source (.py) must be
+        # scanned in preference to documentation (.md), so a doc-heavy repo
+        # doesn't starve the AST import graph. Many docs + a few modules, cap
+        # smaller than the doc count.
+        project = tmp_path / "proj"
+        project.mkdir()
+        for i in range(30):
+            (project / f"doc{i:02d}.md").write_text(f"# doc {i}\n")
+        for i in range(5):
+            (project / f"mod{i}.py").write_text("x = 1\n")
+
+        result = scan_project(project, max_files=6)
+        scanned = {f.rel_path for f in result.file_fragments}
+        py = {p for p in scanned if p.endswith(".py")}
+        # All 5 source modules must be scanned despite 30 docs competing.
+        assert py == {f"mod{i}.py" for i in range(5)}
+
     def test_nonexistent_directory_raises(self):
         with pytest.raises(FileNotFoundError):
             scan_project(Path("/nonexistent/path/xyz"))

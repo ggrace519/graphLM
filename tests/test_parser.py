@@ -246,6 +246,45 @@ class TestBuildDependencyGraph:
         assert ("app/services/user_service.py", "app/models/user.py") in edge_set
         assert ("app/services/user_service.py", "app/services/auth.py") in edge_set
 
+    def test_src_layout_imports_resolve(self, tmp_path):
+        # Regression for #19: a src-layout project (package under src/) imports by
+        # package name (`from mypkg.core import X`), but the scanned file is at
+        # src/mypkg/core.py. Edges must still resolve across the src/ root.
+        src = tmp_path / "src" / "mypkg"
+        (src / "core").mkdir(parents=True)
+        (src / "__init__.py").write_text("")
+        (src / "core" / "__init__.py").write_text("")
+        (src / "core" / "engine.py").write_text("class Engine:\n    pass\n")
+        (src / "app.py").write_text(
+            "from mypkg.core.engine import Engine\n"
+            "import mypkg.core\n"
+        )
+
+        from graphlm.scanner import scan_project
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        edge_set = {(e.from_path, e.to_path) for e in edges}
+        assert ("src/mypkg/app.py", "src/mypkg/core/engine.py") in edge_set
+        assert ("src/mypkg/app.py", "src/mypkg/core/__init__.py") in edge_set
+
+    def test_root_layout_unaffected_by_src_roots(self, tmp_path):
+        # A root-layout project must resolve exactly as before — root "" is tried
+        # first, so adding src-root support (#19) doesn't change it or add edges.
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "__init__.py").write_text("")
+        (tmp_path / "pkg" / "a.py").write_text("x = 1\n")
+        (tmp_path / "main.py").write_text("from pkg.a import x\n")
+
+        from graphlm.scanner import scan_project
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        edge_set = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.py", "pkg/a.py") in edge_set
+        # No spurious src/-prefixed target.
+        assert not any("src/" in e.to_path for e in edges)
+
     def test_from_import_prefers_submodule_then_package_fallback(self, tmp_path):
         from graphlm.scanner import scan_project
 
@@ -261,6 +300,41 @@ class TestBuildDependencyGraph:
         assert main_targets.count("pkg/sub.py") == 1
         assert main_targets.count("pkg/__init__.py") == 1
         assert "pkg.py" not in main_targets
+
+    def test_source_roots_derivation(self):
+        from graphlm.parser import _source_roots
+
+        known = {
+            "src/pkg/__init__.py",  # src-layout -> "src/" root
+            "src/pkg/mod.py",
+            "top/__init__.py",  # top-level package -> NO extra root
+            "tests/stub/requests/__init__.py",  # junk shadow -> must NOT be a root
+            "README.md",
+        }
+        roots = _source_roots(known)
+        assert "" in roots  # project root always present
+        assert "src/" in roots  # conventional source root, accepted
+        # A top-level package yields no extra root beyond "".
+        assert "top/" not in roots
+        # An arbitrary directory that merely contains an __init__.py is NOT a
+        # source root — deriving it manufactured false third-party edges (#19).
+        assert "tests/" not in roots
+        assert "tests/stub/" not in roots
+
+    def test_source_roots_rejects_non_conventional_shadow_root(self, tmp_path):
+        # End-to-end: a stub package shadowing a third-party import under a
+        # non-conventional directory must NOT create a false project edge (#19).
+        (tmp_path / "app.py").write_text("import requests\n")
+        stub = tmp_path / "tests" / "stub" / "requests"
+        stub.mkdir(parents=True)
+        (stub / "__init__.py").write_text("")
+
+        from graphlm.scanner import scan_project
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        # import requests is third-party — it must resolve to nothing, not the stub.
+        assert edges == []
 
     def test_cyclic_project_includes_cycle_edges(self):
         from graphlm.scanner import scan_project
