@@ -1,5 +1,6 @@
 """Tests for the CLI."""
 
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -7,6 +8,13 @@ from typer.testing import CliRunner
 from graphlm.cli import app
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI color codes so flag names are searchable in Rich help."""
+    return _ANSI.sub("", text)
 
 
 class TestCLI:
@@ -81,8 +89,9 @@ class TestCLI:
     def test_help_lists_no_ast(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "--no-ast" in result.stdout
-        assert "--ast" not in result.stdout.replace("--no-ast", "")
+        help_text = _plain(result.stdout)
+        assert "--no-ast" in help_text
+        assert "--ast" not in help_text.replace("--no-ast", "")
 
     def test_dry_run_no_ast(self):
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
