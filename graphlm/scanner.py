@@ -49,6 +49,21 @@ _ALWAYS_EXCLUDE = {
     "htmlcov",
     ".idea",
     ".vscode",
+    # graphlm's own output artifacts. On a re-run over a project graphlm has
+    # already mapped, these sit in the scanned dir; excluding them keeps graphlm
+    # from ingesting its own map (and, since #28, its own diff) as source. Named
+    # explicitly (not a broad GRAPH*) so a user's GRAPHICS.md etc. is untouched.
+    # NOTE: these are the *default* suffix ("GRAPH") only. write_outputs accepts
+    # custom *_suffix / diff_suffix params, so a library caller writing e.g.
+    # `map.json` / `map_DIFF.json` and then re-scanning that dir would re-ingest
+    # them. Not reachable today (the CLI exposes no suffix flag), so it's not
+    # live — but if a `--json-suffix` / `--diff-suffix` flag is ever added, make
+    # this exclusion suffix-aware (or the self-ingestion bug reopens for it).
+    "GRAPH.md",
+    "GRAPH.json",
+    "GRAPH.html",
+    "GRAPH_DIFF.md",
+    "GRAPH_DIFF.json",
 }
 
 # Hard cap on how many listed children any one directory contributes to the

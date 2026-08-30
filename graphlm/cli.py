@@ -118,6 +118,12 @@ def main(
         "--no-html",
         help="Do not generate GRAPH.html visualization output.",
     ),
+    no_diff: bool = typer.Option(
+        False,
+        "--no-diff",
+        help="Do not write the GRAPH_DIFF.* graph-vs-graph diff (what changed "
+        "in the map since the prior run).",
+    ),
     no_show_cycles: bool = typer.Option(
         False,
         "--no-show-cycles",
@@ -160,6 +166,7 @@ def main(
             show_cycles=not no_show_cycles,
             cycle_threshold=cycle_threshold,
             include_html=not no_html,
+            include_diff=not no_diff,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -193,11 +200,16 @@ def main(
         raise typer.Exit(0)
 
     dest = output_destination(project_dir, output_dir)
-    md_path, json_path, html_path = result.write(dest, include_html=not no_html)
+    written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+    md_path, json_path, html_path = written
     typer.echo(f"Markdown:  {md_path}", err=True)
     typer.echo(f"JSON:      {json_path}", err=True)
     if html_path:
         typer.echo(f"HTML:      {html_path}", err=True)
+    if written.diff_md:
+        typer.echo(f"Diff (md): {written.diff_md}", err=True)
+    if written.diff_json:
+        typer.echo(f"Diff (json): {written.diff_json}", err=True)
 
     typer.echo(
         f"Modules: {len(result.graph.modules)} | "

@@ -162,7 +162,8 @@ help still says "else 32000" — the default is 128000 since #26. Correct it.
 **Scoped (2026-08-30):** tracking issue **#28**; design decisions settled in
 `DECISIONS.md` **ADR-002** (where the diff runs, added/removed-only, the three
 baseline states, `deterministic_edges` None-vs-empty, artifact shape,
-on-by-default). Building is still gated — no code yet.
+on-by-default). **Implemented (2026-08-30)** — `graphlm/diff.py`, wired into
+`write_outputs`, `--no-diff` flag; tests in `tests/test_diff.py`.
 
 ## Non-goals / explicit traps to avoid
 

@@ -47,6 +47,22 @@ class TestShouldExclude:
     def test_no_match(self):
         assert _should_exclude("src/main.py", ("__pycache__",)) is False
 
+    def test_graphlm_own_outputs_excluded(self):
+        """graphlm's own GRAPH.* / GRAPH_DIFF.* artifacts are never re-ingested."""
+        from graphlm.scanner import _ALWAYS_EXCLUDE
+
+        pats = tuple(_ALWAYS_EXCLUDE)
+        for name in ("GRAPH.md", "GRAPH.json", "GRAPH.html", "GRAPH_DIFF.md", "GRAPH_DIFF.json"):
+            assert _should_exclude(name, pats) is True, name
+
+    def test_user_graph_named_files_not_excluded(self):
+        """The exclusion is named, not a broad GRAPH* glob, so user files survive."""
+        from graphlm.scanner import _ALWAYS_EXCLUDE
+
+        pats = tuple(_ALWAYS_EXCLUDE)
+        for name in ("GRAPHICS.md", "GRAPHITE.json", "my_GRAPH.md", "docs/GRAPHING.md"):
+            assert _should_exclude(name, pats) is False, name
+
 
 class TestIsBinary:
     def test_binary_extensions(self):

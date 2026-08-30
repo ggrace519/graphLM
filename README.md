@@ -17,6 +17,7 @@ Given a project directory, graphLM produces a structured analysis as **Markdown*
 - **Import cycles** — strongly-connected components with SLOC-based risk scores
 - **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, and theme toggle
 - **Provenance stamp** — `GRAPH.json` records when and against which git commit the map was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
+- **Graph-vs-graph diff** — every run also writes `GRAPH_DIFF.md` / `GRAPH_DIFF.json`: what changed in the *map* (modules, edges, cycles, data flows, entry points, file summaries added and removed) since the prior run, so you see a new entry point or a broken import cycle at a glance without re-reading the whole graph (see [Graph diff](#graph-diff))
 
 ## Installation
 
@@ -56,6 +57,9 @@ graphlm /path/to/project -o ./output --no-ast
 
 # Skip writing GRAPH.html
 graphlm /path/to/project -o ./output --no-html
+
+# Skip writing the GRAPH_DIFF.* graph-vs-graph diff
+graphlm /path/to/project --no-diff
 ```
 
 ### Library API
@@ -65,11 +69,14 @@ from graphlm import generate_graph
 from pathlib import Path
 
 result = generate_graph("/path/to/project")
-md_path, json_path, html_path = result.write(Path("./output"))
+written = result.write(Path("./output"))
+md_path, json_path, html_path = written
 # html_path is Path | None (None if include_html=False)
+diff_md = written.diff_md      # Path | None (None if include_diff=False)
+diff_json = written.diff_json  # Path | None
 ```
 
-`GraphResult.write` accepts `str | Path` and returns `tuple[Path, Path, Path | None]` (Markdown, JSON, HTML).
+`GraphResult.write` accepts `str | Path` and returns a `WriteResult` — the `(Markdown, JSON, HTML)` path tuple you can unpack three ways, with `.diff_md` / `.diff_json` attributes for the graph diff (`None` when `include_diff=False`).
 
 ```python
 result = generate_graph(
@@ -80,6 +87,7 @@ result = generate_graph(
     output_dir="./output",
     ast=True,              # Tree-sitter import edges + SLOC cycle scores (default)
     include_html=True,     # skip GRAPH.html when False (default: write it)
+    include_diff=True,     # skip GRAPH_DIFF.* when False (default: write it)
     show_cycles=True,      # skip the cycle section when False
     cycle_threshold=0.0,   # min cycle risk score
 )
@@ -128,6 +136,43 @@ and rides the refresh nudge along in the loop an agent already uses to read
 > A codebase map lives at `GRAPH.md` — read it before exploring the code, and
 > follow its refresh directive (regenerate with `graphlm .` when the stamped
 > commit differs from the current `HEAD`).
+
+## Graph diff
+
+Once the map is self-stamped and regenerated as the code moves, the natural next
+question is "what changed in the *map* since last time?" Every real run answers
+it by also writing **`GRAPH_DIFF.md`** and **`GRAPH_DIFF.json`** — a
+graph-vs-graph diff, not a code diff (git already does code diffs better).
+
+- **What it reports.** Per dimension — modules, import edges (LLM and AST),
+  import cycles, data flows, entry points, file summaries — the entities
+  **added** and **removed** since the prior `GRAPH.json`. So a new entry point, a
+  dropped module, or a newly broken/resolved import cycle is visible at a glance
+  without re-reading the whole graph.
+- **Added/removed only.** Identity is *structural* (a module's `path`, an edge's
+  `(from, to, kind)`, a cycle's node set), so a pure prose rewrite — a
+  description or summary the LLM regenerates every run — is intentionally
+  invisible. It would otherwise drown the structural signal in nondeterministic
+  churn. Renames show as remove + add (no rename-matching).
+- **Three baseline states, never conflated.** *First run* ("initial graph — no
+  prior version to compare"), *uncomparable* (the prior file is corrupt or an
+  unrecognized `schema_version` — this is **not** silently treated as a first
+  run), and *normal*. An agent can always tell "nothing changed" from "never
+  compared."
+- **Commit range.** The diff header shows the old→new `commit_sha` range (a
+  `null` side — non-git or an old graph — reads as `unknown`).
+- **`--no-ast` safety.** Toggling AST parsing off between runs reports the AST
+  edge dimension as "not compared" rather than fabricating a mass deletion.
+- **Reads graphlm's own prior output.** This is *why* the `meta` block is a
+  versioned input contract (above): a future format change is detected, not
+  misparsed.
+
+On by default. Pass `--no-diff` (or `include_diff=False`) to skip it. `--dry-run`
+writes no diff — it makes no LLM call and produces no authoritative graph. The
+diff is pure local computation over the two graphs: no extra network or LLM call.
+Opting out only *skips writing* — like `--no-html`, it does not delete a
+`GRAPH_DIFF.*` left by a previous run, so a stale diff can linger on disk;
+regenerate (or remove it) if that matters.
 
 **Committing vs. gitignoring the graph.** The refresh check is `stamped_sha !=
 HEAD`, so **if you commit `GRAPH.*`, the stamp is invalidated by the very commit
