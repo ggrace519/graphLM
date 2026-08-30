@@ -260,10 +260,67 @@ def _module_candidates(dotted: str) -> tuple[str, ...]:
     return (f"{rel}.py", f"{rel}/__init__.py")
 
 
+# Directory names conventionally placed on the interpreter path (so packages
+# under them are imported by bare package name). Only these are accepted as
+# source roots — deriving arbitrary prefixes instead manufactured FALSE edges,
+# e.g. a `tests/stub/requests/__init__.py` shadow letting third-party
+# `import requests` resolve to a project-internal file, which a plain suffix or
+# every-prefix search cannot avoid (#19). A false edge in the "do-not-contradict"
+# ground-truth table is worse than a missing one, so the set is deliberately a
+# small allowlist of real Python source-layout roots.
+_SOURCE_ROOT_NAMES = ("src", "lib", "python")
+
+
+def _source_roots(known: set[str]) -> tuple[str, ...]:
+    """Directory prefixes under which packages live (for src-layout projects).
+
+    A module imported as ``argus.core`` resolves to ``argus/core/__init__.py``
+    relative to the *package root*, but in a src-layout project the scanned file
+    is ``src/argus/core/__init__.py`` — the ``src/`` root is on the interpreter
+    path, not in the import name. Without accounting for it, no intra-project
+    edge resolves and the whole AST graph comes back empty (#19).
+
+    Returns the prefixes to try before a candidate path, always including "" (the
+    project root). A prefix is accepted only when its final segment is a
+    conventional source-root name (``_SOURCE_ROOT_NAMES``) AND it directly
+    contains a Python package (``<root>/<pkg>/__init__.py`` is in the scan). This
+    is intentionally conservative — it will not invent a root from an arbitrary
+    directory that merely happens to contain an ``__init__.py`` (which produced
+    false edges), at the cost of missing an unconventional custom source root.
+    """
+    roots: set[str] = {""}
+    for path in known:
+        if not path.endswith("/__init__.py"):
+            continue
+        parts = path.split("/")
+        # parts[-2] is the package dir; parts[:-2] is the prefix before it. The
+        # root's LAST segment must be a conventional source-root name.
+        prefix_parts = parts[:-2]
+        if prefix_parts and prefix_parts[-1] in _SOURCE_ROOT_NAMES:
+            roots.add("/".join(prefix_parts) + "/")
+    return tuple(sorted(roots, key=len))
+
+
 def _first_known(candidates: tuple[str, ...], known: set[str]) -> str | None:
     for candidate in candidates:
         if candidate in known:
             return candidate
+    return None
+
+
+def _first_known_rooted(
+    candidates: tuple[str, ...], known: set[str], roots: tuple[str, ...]
+) -> str | None:
+    """Like _first_known, but tries each candidate under every source root.
+
+    Root "" (project root) is tried first via the candidate order, so a
+    root-layout project keeps its existing exact-match behavior.
+    """
+    for candidate in candidates:
+        for root in roots:
+            rooted = root + candidate
+            if rooted in known:
+                return rooted
     return None
 
 
@@ -286,19 +343,25 @@ def _resolve_module_name(from_path: str, module: str, level: int) -> str | None:
     return ".".join(base + extra)
 
 
-def _resolve_import(imp: _ParsedImport, from_path: str, known: set[str]) -> list[str]:
+def _resolve_import(
+    imp: _ParsedImport,
+    from_path: str,
+    known: set[str],
+    roots: tuple[str, ...] = ("",),
+) -> list[str]:
     """Map one import statement onto existing project files.
 
     ``from a.b import name1, name2`` prefers each name as a submodule
     (``a/b/name.py`` or ``a/b/name/__init__.py``). Names that are not
-    submodules fall back to the package/module itself once.
+    submodules fall back to the package/module itself once. ``roots`` are the
+    source-root prefixes to try before each candidate (src-layout support, #19).
     """
     dotted = _resolve_module_name(from_path, imp.module, imp.level)
     if dotted is None:
         return []
 
     if imp.kind == "import":
-        hit = _first_known(_module_candidates(dotted), known)
+        hit = _first_known_rooted(_module_candidates(dotted), known, roots)
         return [hit] if hit else []
 
     found: list[str] = []
@@ -309,7 +372,7 @@ def _resolve_import(imp: _ParsedImport, from_path: str, known: set[str]) -> list
             need_fallback = True
             continue
         sub = f"{dotted}.{name}" if dotted else name
-        hit = _first_known(_module_candidates(sub), known)
+        hit = _first_known_rooted(_module_candidates(sub), known, roots)
         if hit is None:
             need_fallback = True
             continue
@@ -317,7 +380,7 @@ def _resolve_import(imp: _ParsedImport, from_path: str, known: set[str]) -> list
             seen.add(hit)
             found.append(hit)
     if need_fallback:
-        hit = _first_known(_module_candidates(dotted), known)
+        hit = _first_known_rooted(_module_candidates(dotted), known, roots)
         if hit is not None and hit not in seen:
             found.append(hit)
     return found
@@ -508,6 +571,10 @@ def build_dependency_graph(
         List of ImportEdge instances.
     """
     known_files = {_posix_rel(frag.rel_path) for frag in fragments}
+    # Source-root prefixes (e.g. "src/") so imports resolve in src-layout
+    # projects, where scanned files live under src/ but are imported by their
+    # package name (#19). Computed once; "" (project root) is always included.
+    roots = _source_roots(known_files)
     all_edges: list[ImportEdge] = []
 
     for frag in fragments[:max_files]:
@@ -518,7 +585,7 @@ def build_dependency_graph(
         if not code or not code.strip():
             continue
         for imp in _imports_from_source(code, Path(rel_path)):
-            for to_path in _resolve_import(imp, rel_path, known_files):
+            for to_path in _resolve_import(imp, rel_path, known_files, roots):
                 all_edges.append(
                     ImportEdge(from_path=rel_path, to_path=to_path, kind=imp.kind)
                 )
