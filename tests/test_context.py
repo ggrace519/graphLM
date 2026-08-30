@@ -217,32 +217,107 @@ class TestMaxContext:
         for path in truncated:
             assert f"File: {path}" not in prompt
 
-    def test_assembled_prompt_respects_budget_with_many_edges(self):
-        """The edge table and instruction block must not push the assembled
-        prompt past max_context (regression for the file-admission-only budget).
+    def test_assembled_prompt_respects_budget_with_huge_edge_table(self):
+        """A very large AST-edge table must not push the assembled prompt past
+        max_context. Contract: estimate_tokens(prompt) + output_reserve
+        (~5500, reserved for the response and never emitted) <= max_context.
+        Regression for #12 — before the edge cap, 6000 rows produced a ~62k
+        prompt regardless of the budget.
         """
+        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+
+        output_reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
         frags = [
-            FileFragment(f"src/mod{i}.py", "x" * 4000, estimate_tokens("x" * 4000))
-            for i in range(50)
+            FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
+            for i in range(40)
         ]
-        # A large AST-edge table — the block that used to be appended unbudgeted.
+        # 6000 rows — far more than any realistic budget can hold verbatim.
         edges = [
             ImportEdge(
                 from_path=f"src/mod{i}.py", to_path=f"src/mod{j}.py", kind="import"
             )
-            for i in range(30)
-            for j in range(3)
+            for i in range(300)
+            for j in range(20)
         ]
-        tree = "proj/\n" + "\n".join(f"  src/mod{i}.py" for i in range(50))
+        tree = "proj/\n" + "\n".join(f"  src/mod{i}.py" for i in range(40))
 
-        for max_context in (8000, 20000, 60000):
+        # Budgets at or above the ~6100-token instruction/output floor.
+        for max_context in (8000, 20000, 60000, 120000):
             prompt, reported, truncated = assemble_pass2_prompt(
                 tree, frags, max_context=max_context, deterministic_edges=edges
             )
-            # The whole assembled prompt (files + edges + instructions) must fit.
-            assert estimate_tokens(prompt) <= max_context, (
+            assert estimate_tokens(prompt) + output_reserve <= max_context, (
                 f"prompt overflowed at max_context={max_context}"
             )
+
+    def test_huge_edge_table_is_truncated_with_non_exhaustive_framing(self):
+        """When the edge table is capped, the framing must tell the model the
+        list is NOT exhaustive (so it still infers the dropped edges), and only
+        a subset of rows is emitted.
+        """
+        edges = [
+            ImportEdge(
+                from_path=f"src/mod{i}.py", to_path=f"src/mod{j}.py", kind="import"
+            )
+            for i in range(300)
+            for j in range(20)
+        ]
+        prompt, _tokens, _truncated = assemble_pass2_prompt(
+            "proj/", [], max_context=20000, deterministic_edges=edges
+        )
+        assert "NOT exhaustive" in prompt
+        assert "showing" in prompt.lower()
+        # Not all 6000 rows are present.
+        assert prompt.count("| src/mod") < len(edges)
+
+    def test_prompt_budget_exact_across_rounding_boundaries(self):
+        """estimate_tokens floors each section, so per-section sums can
+        under-count the joined prompt. The final whole-prompt guard must keep
+        estimate_tokens(prompt) + output_reserve <= max_context at every budget,
+        including ones where the section-sum estimate would have overshot.
+        """
+        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+
+        output_reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+        frags = [
+            FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
+            for i in range(40)
+        ]
+        edges = [
+            ImportEdge(
+                from_path=f"src/very/deep/path/mod{i}.py",
+                to_path=f"src/other/mod{j}.py",
+                kind="import",
+            )
+            for i in range(300)
+            for j in range(20)
+        ]
+        tree = "proj/\n" + "\n".join(f"  m{i}" for i in range(40))
+        # Dense sweep across the rounding-sensitive region.
+        for max_context in range(6200, 40000, 311):
+            prompt, reported, _truncated = assemble_pass2_prompt(
+                tree, frags, max_context=max_context, deterministic_edges=edges
+            )
+            assert estimate_tokens(prompt) + output_reserve <= max_context, (
+                f"overflow at max_context={max_context}"
+            )
+            # Reported total is the authoritative measured value.
+            assert reported == estimate_tokens(prompt) + output_reserve
+
+    def test_small_edge_table_keeps_exhaustive_framing(self):
+        """A small edge table that fits must keep the strong 'do not omit'
+        framing and emit every row (no false truncation).
+        """
+        edges = [
+            ImportEdge(from_path="a.py", to_path="b.py", kind="import"),
+            ImportEdge(from_path="b.py", to_path="c.py", kind="import"),
+        ]
+        prompt, _tokens, _truncated = assemble_pass2_prompt(
+            "proj/", [], max_context=120000, deterministic_edges=edges
+        )
+        assert "do not" in prompt and "contradict or omit" in prompt
+        assert "NOT exhaustive" not in prompt
+        assert "a.py" in prompt and "b.py" in prompt and "c.py" in prompt
 
     def test_config_max_context_in_settings(self, monkeypatch):
         monkeypatch.setenv("GRAPHLM_BASE_URL", "http://test.local/v1")

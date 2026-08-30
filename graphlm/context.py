@@ -21,6 +21,11 @@ PASS1_ESTIMATED_TREE_TOKENS = 1500
 DEFAULT_OUTPUT_BUDGET = 4000  # reserve tokens for LLM response
 # Default maximum context window (tokens) — ~128k with room for output
 _DEFAULT_MAX_CONTEXT = 120000
+# Max fraction of the post-reserve (files + edges) budget the AST-edge table
+# may consume. A very large edge table is truncated to this share so it can
+# never starve files or push the prompt past max_context; the framing is
+# adjusted to tell the model the truncated list is not exhaustive.
+EDGE_SHARE = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +143,20 @@ def assemble_pass2_prompt(
     Args:
         tree: The directory tree string.
         file_fragments: File fragments to include.
-        max_context: Maximum context window in tokens (reserves space for output).
+        max_context: Maximum context window in tokens (reserves space for
+            output). The assembled prompt is kept within this budget: the
+            AST-edge table is capped first at EDGE_SHARE of the room left after
+            the fixed reserves, then files are admitted from the remainder in
+            rank order. A final whole-prompt check trims trailing files if the
+            summed section estimates under-counted the joined prompt, so the
+            budget is an exact guarantee, and the returned token count is the
+            measured prompt plus output reserve. NOTE: the output reserve
+            (~5500) plus the fixed instruction block (~600) form a floor of
+            ~6100 tokens; a max_context below that cannot fit even an empty
+            prompt and the floor wins (no error is raised).
         deterministic_edges: Optional AST-extracted import edges to treat as
-            ground truth for import_edges.
+            ground truth for import_edges. Only the *prompt* copy is budget-capped;
+            callers keep the full list for the graph and cycle detection.
 
     Returns:
         Tuple of (prompt text, estimated total tokens, list of truncated file paths).
@@ -153,12 +169,22 @@ def assemble_pass2_prompt(
     # already accounts for everything appended after the files. Without this,
     # a large AST-edge table or the instruction block could push the assembled
     # prompt past max_context.
-    edge_block = _build_edge_block(deterministic_edges)
     instruction_block = _build_instruction_block()
-    edge_tokens = estimate_tokens("\n".join(edge_block)) if edge_block else 0
     instruction_tokens = estimate_tokens("\n".join(instruction_block))
-
     tree_tokens = estimate_tokens(tree)
+
+    # Cap the edge table at a bounded share of the room left after the
+    # non-negotiable reserves (output, tree, instruction), so a huge edge table
+    # can neither starve files nor overflow the prompt. The full edge list is
+    # still attached to the graph and used for cycle detection upstream — only
+    # the *prompt* copy is capped.
+    room_for_files_and_edges = max(
+        0, max_context - output_reserve - tree_tokens - instruction_tokens
+    )
+    edge_budget = int(room_for_files_and_edges * EDGE_SHARE)
+    edge_block = _build_edge_block(deterministic_edges, max_tokens=edge_budget)
+    edge_tokens = estimate_tokens("\n".join(edge_block)) if edge_block else 0
+
     # total_tokens starts already carrying every fixed reserve (output, tree,
     # edge table, instruction block), so a file is admitted only while the
     # running total stays within max_context — which reserves the remaining
@@ -181,48 +207,130 @@ def assemble_pass2_prompt(
         file_sections_parts.append(f"```\n{frag.content}\n```\n")
         total_tokens += frag_with_header
 
-    file_sections = "\n".join(file_sections_parts)
+    def _assemble(file_parts: list[str]) -> str:
+        lines = [
+            "You are a codebase analyst. Given a project directory tree",
+            "and selected source files, produce a structured analysis of the entire project.",
+            "",
+            "## Directory Tree",
+            "",
+            "```",
+            tree,
+            "```",
+            "",
+            "## Source Files",
+            "",
+            "\n".join(file_parts),
+            "",
+        ]
+        lines.extend(edge_block)
+        lines.extend(instruction_block)
+        return "\n".join(lines)
 
-    prompt_lines = [
-        "You are a codebase analyst. Given a project directory tree",
-        "and selected source files, produce a structured analysis of the entire project.",
+    prompt = _assemble(file_sections_parts)
+
+    # Per-section token estimates are summed above, but estimate_tokens floors
+    # each section independently, so the sum can under-count the joined prompt by
+    # a few tens of tokens. Measure the actual assembled prompt and, if it plus
+    # the output reserve overshoots max_context, drop whole files (two parts each:
+    # header + fenced body) from the end until it fits. This makes the budget an
+    # exact guarantee rather than an estimate. Files are already ranked, so the
+    # last-admitted (lowest-priority) ones go first.
+    while file_sections_parts and (
+        estimate_tokens(prompt) + output_reserve > max_context
+    ):
+        dropped_body = file_sections_parts.pop()
+        dropped_header = file_sections_parts.pop() if file_sections_parts else ""
+        rel = dropped_header.split("### File: ", 1)[-1].strip()
+        if rel:
+            truncated_paths.append(rel)
+        prompt = _assemble(file_sections_parts)
+
+    total_tokens = estimate_tokens(prompt) + output_reserve
+    return prompt, total_tokens, truncated_paths
+
+
+def _edge_block(rows: list[str], *, truncated: bool, total: int) -> list[str]:
+    """Assemble the edge-table block from pre-rendered rows.
+
+    ``truncated`` selects the framing: the strong "do not omit" wording for a
+    complete table, or a "showing N of M — not exhaustive, infer the rest"
+    note when only a subset of rows is included.
+    """
+    if truncated:
+        framing = (
+            f"NOTE: showing {len(rows)} of {total} parser-extracted import edges "
+            "(truncated to fit the context budget). Treat the listed edges as "
+            'ground truth for "import_edges" and DO infer additional edges from '
+            "the files — this list is NOT exhaustive."
+        )
+    else:
+        framing = (
+            "These edges were extracted from source by a parser. Treat them as "
+            'ground truth for "import_edges". You may add additional edges of kinds '
+            "register/include/uses if evidence exists in the files, but do not "
+            "contradict or omit these parser edges."
+        )
+    return [
+        "## Deterministic import edges (AST ground truth)",
         "",
-        "## Directory Tree",
+        framing,
         "",
-        "```",
-        tree,
-        "```",
-        "",
-        "## Source Files",
-        "",
-        file_sections,
+        "| From | To | Kind |",
+        "| --- | --- | --- |",
+        *rows,
         "",
     ]
-    prompt_lines.extend(edge_block)
-    prompt_lines.extend(instruction_block)
-
-    prompt = "\n".join(prompt_lines)
-    return prompt, total_tokens, truncated_paths
 
 
 def _build_edge_block(
     deterministic_edges: list[ImportEdge] | None,
+    *,
+    max_tokens: int,
 ) -> list[str]:
-    """Render the AST ground-truth edge table, or [] if there are no edges."""
+    """Render the AST ground-truth edge table within ``max_tokens``.
+
+    Returns [] when there are no edges, or when not even the header fits. If the
+    full table exceeds the budget, rows are kept (in the edges' existing
+    deterministic order) until the budget is reached and the framing switches to
+    the non-exhaustive note so the model still infers the dropped edges. Row cost
+    is accumulated incrementally, so this is linear in the number of edges.
+    """
     if not deterministic_edges:
         return []
-    edge_block = [
-        "## Deterministic import edges (AST ground truth)",
-        "",
-        'These edges were extracted from source by a parser. Treat them as ground truth for "import_edges". You may add additional edges of kinds register/include/uses if evidence exists in the files, but do not contradict or omit these parser edges.',
-        "",
-        "| From | To | Kind |",
-        "| --- | --- | --- |",
+
+    rows = [
+        f"| {edge.from_path} | {edge.to_path} | {edge.kind} |"
+        for edge in deterministic_edges
     ]
-    for edge in deterministic_edges:
-        edge_block.append(f"| {edge.from_path} | {edge.to_path} | {edge.kind} |")
-    edge_block.append("")
-    return edge_block
+    total = len(rows)
+
+    # Fixed cost of the block shell, measured with the (longer) truncated
+    # framing so the running budget check is conservative in either case.
+    shell_tokens = estimate_tokens("\n".join(_edge_block([], truncated=True, total=total)))
+    if shell_tokens > max_tokens:
+        logger.warning(
+            "edge table dropped: header does not fit the %d-token edge budget",
+            max_tokens,
+        )
+        return []
+
+    # Accumulate per-row cost (row text + its newline) linearly.
+    used = shell_tokens
+    kept: list[str] = []
+    for row in rows:
+        row_cost = estimate_tokens(row) + 1
+        if used + row_cost > max_tokens:
+            break
+        kept.append(row)
+        used += row_cost
+
+    if len(kept) == total:
+        return _edge_block(kept, truncated=False, total=total)
+    logger.warning(
+        "edge table truncated to fit context: kept %d of %d rows", len(kept), total
+    )
+    return _edge_block(kept, truncated=True, total=total)
 
 
 def _build_instruction_block() -> list[str]:
