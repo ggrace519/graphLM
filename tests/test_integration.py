@@ -276,6 +276,21 @@ class TestFullPipeline:
         for rel in ("app/main.py", "app/routes.py", "app/services.py"):
             assert rel in cycle_nodes or any(n.endswith(rel) for n in cycle_nodes)
 
+    def test_edge_prompt_cap_does_not_shrink_graph_edges_or_cycles(self):
+        """The pass-2 prompt caps the edge table under a tight budget, but the
+        graph's deterministic_edges and cycle detection must use the FULL list
+        regardless of max_context (the cap is a prompt-only concern — #12).
+        """
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        full = generate_graph(cyclic_project, dry_run=True, max_context=120000)
+        capped = generate_graph(cyclic_project, dry_run=True, max_context=8000)
+
+        assert full.graph.deterministic_edges  # sanity
+        assert len(capped.graph.deterministic_edges or []) == len(
+            full.graph.deterministic_edges or []
+        )
+        assert len(capped.graph.import_cycles) == len(full.graph.import_cycles)
+
     def test_max_context_precedence_env_then_arg(self, small_project, monkeypatch):
         """max_context resolves flag/arg > GRAPHLM_MAX_CONTEXT env > 120000."""
         # env only: the env var is honored (was previously ignored).
