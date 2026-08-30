@@ -276,6 +276,29 @@ class TestFullPipeline:
         for rel in ("app/main.py", "app/routes.py", "app/services.py"):
             assert rel in cycle_nodes or any(n.endswith(rel) for n in cycle_nodes)
 
+    def test_max_context_precedence_env_then_arg(self, small_project, monkeypatch):
+        """max_context resolves flag/arg > GRAPHLM_MAX_CONTEXT env > 120000."""
+        # env only: the env var is honored (was previously ignored).
+        monkeypatch.setenv("GRAPHLM_MAX_CONTEXT", "6000")
+        env_result = generate_graph(small_project, dry_run=True)
+
+        # explicit arg wins over the env var.
+        arg_result = generate_graph(small_project, dry_run=True, max_context=50000)
+
+        # default when neither is set.
+        monkeypatch.delenv("GRAPHLM_MAX_CONTEXT", raising=False)
+        default_result = generate_graph(small_project, dry_run=True)
+
+        # The 6000-token cap must produce a smaller pass-2 budget than a
+        # 50000-token explicit arg or the 120000 default — i.e. the env var
+        # actually takes effect (it was previously ignored entirely).
+        assert env_result.pass2_context_tokens < arg_result.pass2_context_tokens
+        assert env_result.pass2_context_tokens < default_result.pass2_context_tokens
+        # The env cap binds the budget near 6000 (the reported total includes
+        # the fixed output/tree/instruction reserves, so it sits at the floor
+        # rather than strictly under the small cap).
+        assert env_result.pass2_context_tokens < 7000
+
     def test_include_html_false_skips_html(self, httpx_mock, small_project, tmp_path):
         """generate_graph with include_html=False must not write GRAPH.html."""
         _mock_pass1_response(httpx_mock, ["main.py", "mylib/helpers.py"])

@@ -65,10 +65,11 @@ def main(
         "--max-pass2-files",
         help="Maximum files to include in pass 2 context (after LLM selects).",
     ),
-    max_context: int = typer.Option(
-        120000,
+    max_context: int | None = typer.Option(
+        None,
         "--max-context",
-        help="Maximum context window in tokens (default: 120000).",
+        help="Maximum context window in tokens "
+        "(default: GRAPHLM_MAX_CONTEXT env var, else 120000).",
     ),
     no_tests: bool = typer.Option(
         False,

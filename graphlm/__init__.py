@@ -71,7 +71,7 @@ def generate_graph(
     max_file_chars: int = 4000,
     max_files: int = 200,
     max_pass2_files: int = 80,
-    max_context: int = 120000,
+    max_context: int | None = None,
     include_tests: bool = True,
     exclude_patterns: tuple[str, ...] = (),
     dry_run: bool = False,
@@ -97,7 +97,9 @@ def generate_graph(
         max_file_chars: Maximum characters to read per file.
         max_files: Maximum files to scan initially.
         max_pass2_files: Maximum files to include in pass 2 context.
-        max_context: Maximum context window in tokens (default: 120000).
+        max_context: Maximum context window in tokens. If None, falls back to
+            the GRAPHLM_MAX_CONTEXT env var, then to 120000. An explicit value
+            (e.g. from the CLI --max-context flag) takes precedence over both.
         include_tests: Whether to include test files in the analysis.
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
@@ -120,6 +122,14 @@ def generate_graph(
         raise FileNotFoundError(f"Project directory not found: {project_dir}")
     if not project_path.is_dir():
         raise NotADirectoryError(f"Not a directory: {project_dir}")
+
+    # Resolve the context budget: explicit arg > GRAPHLM_MAX_CONTEXT env > 120000.
+    # Passing max_context=None (the CLI default when --max-context is unset) lets
+    # the env var take effect; an explicit value always wins.
+    if max_context is None:
+        import os
+
+        max_context = int(os.environ.get("GRAPHLM_MAX_CONTEXT", "120000"))
 
     # Resolve configuration (not needed for dry run)
     if dry_run:

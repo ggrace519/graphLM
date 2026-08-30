@@ -54,8 +54,5 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      - name: Install mypy
-        run: uv pip install mypy
-
       - name: Run mypy
         run: uv run mypy graphlm --ignore-missing-imports
