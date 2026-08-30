@@ -19,18 +19,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 300.0
 _MAX_RETRIES = 2
 _RETRY_DELAY = 2.0
-# Default max output tokens requested from the model. Sized from measurement:
-# a real project's full CodebaseGraph JSON needs ~18k output tokens (the argus
-# repo, once the directory-tree echo was removed — #18), so the previous 16000
-# truncated it mid-graph. 32000 fits that with margin; the endpoint accepts far
-# more. Configurable via GRAPHLM_MAX_OUTPUT_TOKENS / --max-output-tokens.
+# Default max output tokens (the `max_tokens` the client requests). This is a
+# *ceiling*, not a reservation — the model stops when its response is complete,
+# so a high value costs nothing (no extra latency, tokens, or budget) but stops
+# a large project's graph from truncating mid-JSON. Truncation defeats the whole
+# tool, so the default is the model's practical output max rather than a tight
+# guess: 128000 is what the Claude/GPT entries on the target endpoint advertise
+# as max_output_tokens, and the Qwen endpoint accepts >=200k. Overridable via
+# GRAPHLM_MAX_OUTPUT_TOKENS / --max-output-tokens (#25).
 #
-# The pass-2 context budget in context.py reserves exactly this many tokens for
-# the response, so the two MUST stay in lock-step: assemble_pass2_prompt takes
-# the effective value as a parameter (defaulting to this constant). Raising it
-# grows the output reserve and shrinks the input budget in step — correct, since
-# more output leaves less room for input (#17).
-LLM_MAX_OUTPUT_TOKENS = 32000
+# NOTE: on the target OpenAI-compatible endpoint, input and output ceilings are
+# INDEPENDENT (measured: 180k input + 200k max_tokens = 380k combined is
+# accepted), so this does NOT come out of the input budget (max_context) — that
+# was a false assumption in #17/#18, now unwound (#25). Some other servers
+# (vLLM max_model_len, Anthropic) do bound prompt+generation together; anyone on
+# such an endpoint lowers this via the flag.
+LLM_MAX_OUTPUT_TOKENS = 128000
 
 
 class GraphLLError(Exception):
