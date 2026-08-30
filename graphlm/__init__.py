@@ -77,6 +77,8 @@ def generate_graph(
     dry_run: bool = False,
     redact_secrets: bool = True,
     ast: bool = False,
+    show_cycles: bool = True,
+    cycle_threshold: float = 0.0,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 

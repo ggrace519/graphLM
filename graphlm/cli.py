@@ -93,6 +93,16 @@ def main(
         "--no-html",
         help="Do not generate HTML visualization output.",
     ),
+    no_show_cycles: bool = typer.Option(
+        False,
+        "--no-show-cycles",
+        help="Do not show import cycle detection results.",
+    ),
+    cycle_threshold: float = typer.Option(
+        0.0,
+        "--cycle-threshold",
+        help="Only show cycles with risk score >= this value.",
+    ),
 ) -> None:
     """Analyze a project directory and produce a codebase graph (Markdown + JSON).
 
@@ -119,6 +129,9 @@ def main(
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
             redact_secrets=not no_redact,
+            ast=ast,
+            show_cycles=not no_show_cycles,
+            cycle_threshold=cycle_threshold,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
