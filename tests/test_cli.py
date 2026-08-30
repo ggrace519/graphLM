@@ -1,5 +1,7 @@
 """Tests for the CLI."""
 
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from graphlm.cli import app
@@ -58,3 +60,20 @@ class TestCLI:
     def test_missing_project_dir_shows_error(self):
         result = runner.invoke(app, [])
         assert result.exit_code != 0
+
+    def test_dry_run_no_html_with_output_dir(self, small_project, tmp_path):
+        result = runner.invoke(
+            app,
+            [str(small_project), "--dry-run", "--no-html", "-o", str(tmp_path)],
+        )
+        assert result.exit_code == 0
+        assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
+        assert not (tmp_path / "graph.html").exists()
+        assert not (tmp_path / "graphs.md").exists()
+        assert not (tmp_path / "graphs.json").exists()
+
+    def test_dry_run_ast_cyclic_project(self):
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--ast"])
+        assert result.exit_code == 0
+        assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr

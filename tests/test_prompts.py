@@ -16,3 +16,10 @@ class TestPrompts:
 
     def test_system_prompt_mentions_json_only(self):
         assert "Return only the requested JSON output" in SYSTEM_PROMPT
+
+    def test_system_prompt_database_schema_not_fixtures(self):
+        lower = SYSTEM_PROMPT.lower()
+        assert "fixture" in lower
+        assert "database_schema" in lower
+        assert "null" in lower
+        assert "database" in lower

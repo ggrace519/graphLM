@@ -5,7 +5,7 @@ Usage as a library:
     from graphlm import generate_graph
 
     result = generate_graph("/path/to/project")
-    md_path, json_path = result.write(output_dir="./output")
+    md_path, json_path, html_path = result.write("./output")
 
 Usage as a CLI:
 
@@ -26,14 +26,14 @@ from graphlm.context import (
     assemble_pass2_prompt,
     filter_requested_files,
 )
-from graphlm.cycles import detect_cycles
+from graphlm.cycles import compute_sloc_map, detect_cycles
 from graphlm.llm import (
     CodebaseGraph,
     GraphLLError,
     call_llm,
 )
-from graphlm.models import ArchitectureNote
-from graphlm.parser import build_dependency_graph, ImportEdge
+from graphlm.models import ArchitectureNote, ImportEdge
+from graphlm.parser import build_dependency_graph
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.render import write_outputs
 from graphlm.scanner import ScanResult, scan_project
@@ -55,10 +55,10 @@ class GraphResult:
         self.files_analyzed = files_analyzed
 
     def write(
-        self, output_dir: Path, *, include_html: bool = True
+        self, output_dir: str | Path, *, include_html: bool = True
     ) -> tuple[Path, Path, Path | None]:
         """Write .md, .json (and optionally .html) to output_dir. Return all paths."""
-        return write_outputs(self.graph, output_dir, html=include_html)
+        return write_outputs(self.graph, Path(output_dir), html=include_html)
 
 
 def generate_graph(
@@ -79,6 +79,7 @@ def generate_graph(
     ast: bool = False,
     show_cycles: bool = True,
     cycle_threshold: float = 0.0,
+    include_html: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -100,8 +101,9 @@ def generate_graph(
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
         redact_secrets: If True, redact secret-like patterns from file content.
-        ast: If True, run AST-based deterministic import detection and pass
-            those edges to the LLM as ground truth.
+        ast: If True, run AST-based deterministic import detection, attach
+            those edges to the graph, and pass them to the LLM as ground truth.
+        include_html: If output_dir is set, whether to also write graph.html.
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -153,12 +155,17 @@ def generate_graph(
         except Exception as e:
             logging.warning("AST parsing failed, continuing without it: %s", e)
 
+    sloc_map = compute_sloc_map(scan.file_fragments)
+
     if dry_run:
         # Don't call the LLM, just show context stats
         # Simulate pass 1 selecting all scanned files
         pass2_files = scan.file_fragments[:max_pass2_files]
         pass2_prompt, pass2_tokens, _truncated = assemble_pass2_prompt(
-            scan.tree, pass2_files, max_context=max_context
+            scan.tree,
+            pass2_files,
+            max_context=max_context,
+            deterministic_edges=deterministic_edges,
         )
         graph = CodebaseGraph(
             directory_tree=scan.tree,
@@ -169,7 +176,16 @@ def generate_graph(
                     f"{pass2_tokens} estimated pass-2 tokens"
                 ),
             ],
+            deterministic_edges=deterministic_edges,
         )
+        if show_cycles:
+            graph.import_cycles = [
+                c
+                for c in detect_cycles(
+                    deterministic_edges or [], sloc_map=sloc_map
+                )
+                if c.risk_score >= cycle_threshold
+            ]
         return GraphResult(
             graph=graph,
             pass1_context_tokens=pass1_tokens(scan.tree),
@@ -205,7 +221,10 @@ def generate_graph(
     # Phase 2: Filter requested files and assemble context
     pass2_files = filter_requested_files(scan, requested_files, max_pass2_files)
     pass2_prompt, pass2_tokens, _truncated = assemble_pass2_prompt(
-        scan.tree, pass2_files, max_context=max_context
+        scan.tree,
+        pass2_files,
+        max_context=max_context,
+        deterministic_edges=deterministic_edges,
     )
 
     # Phase 2: LLM produces the final graph
@@ -219,15 +238,24 @@ def generate_graph(
         response_format=CodebaseGraph,
     )
     graph = cast(CodebaseGraph, graph_result)
+    graph.deterministic_edges = deterministic_edges
     if show_cycles:
+        cycle_edges = (
+            deterministic_edges
+            if deterministic_edges is not None
+            else graph.import_edges
+        )
         graph.import_cycles = [
-            c for c in detect_cycles(graph.import_edges)
+            c
+            for c in detect_cycles(cycle_edges, sloc_map=sloc_map)
             if c.risk_score >= cycle_threshold
         ]
+    else:
+        graph.import_cycles = []
 
     # Write outputs if output_dir specified
     if output_dir is not None:
-        write_outputs(graph, Path(output_dir))
+        write_outputs(graph, Path(output_dir), html=include_html)
 
     return GraphResult(
         graph=graph,

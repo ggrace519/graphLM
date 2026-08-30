@@ -15,10 +15,10 @@ from pathlib import Path
 
 # Parse a single file
 result = parse_file(Path("src/myapp.py"))
-print(result.imports)   # list[ImportEdge]
-print(result.exports)   # list[Symbol]
-print(result.functions) # list[FunctionDef]
-print(result.call_sites) # list[CallSite]
+print(result.imports)    # list[ImportEdge]
+print(result.exports)    # list[str]
+print(result.functions)  # list[str]
+print(result.call_sites) # list[str]
 
 # Build a dependency graph from scan fragments
 edges = build_dependency_graph(file_fragments, max_files=200, project_dir=project_path)
@@ -45,10 +45,14 @@ When `--ast` (or `ast=True`) is enabled, the parser runs after scanning and:
 2. Passes those edges to the LLM as ground truth in the pass-2 prompt
 3. Attaches `deterministic_edges` to the output `CodebaseGraph`
 
+`--ast` does not replace the two-pass LLM analysis.
+
 ## Supported languages
 
 | Language | Import parsing | Function extraction | Class extraction |
 |------------|----------------|--------------------|------------------|
 | Python | Yes | Yes | Yes |
-| JavaScript | Partial | Partial | Partial |
-| TypeScript | Partial | Partial | Partial |
+| JavaScript | Not implemented | Not implemented | Not implemented |
+| TypeScript | Not implemented | Not implemented | Not implemented |
+
+JavaScript and TypeScript files parse to an empty result. Python only.

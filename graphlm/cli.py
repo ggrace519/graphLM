@@ -120,7 +120,7 @@ def main(
             base_url=base_url,
             api_key=api_key,
             model=model,
-            output_dir=output_dir,
+            output_dir=None,
             max_file_chars=max_file_chars,
             max_files=max_files,
             max_pass2_files=max_pass2_files,
@@ -132,6 +132,7 @@ def main(
             ast=ast,
             show_cycles=not no_show_cycles,
             cycle_threshold=cycle_threshold,
+            include_html=not no_html,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -164,22 +165,12 @@ def main(
         )
         raise typer.Exit(0)
 
-    if output_dir:
-        md_path, json_path, html_path = result.write(
-            Path(output_dir), include_html=not no_html
-        )
-        typer.echo(f"Markdown:  {md_path}", err=True)
-        typer.echo(f"JSON:      {json_path}", err=True)
-        if html_path:
-            typer.echo(f"HTML:      {html_path}", err=True)
-    else:
-        md_path, json_path, html_path = result.write(
-            Path.cwd(), include_html=not no_html
-        )
-        typer.echo(f"Markdown:  {md_path}", err=True)
-        typer.echo(f"JSON:      {json_path}", err=True)
-        if html_path:
-            typer.echo(f"HTML:      {html_path}", err=True)
+    dest = Path(output_dir) if output_dir else Path.cwd()
+    md_path, json_path, html_path = result.write(dest, include_html=not no_html)
+    typer.echo(f"Markdown:  {md_path}", err=True)
+    typer.echo(f"JSON:      {json_path}", err=True)
+    if html_path:
+        typer.echo(f"HTML:      {html_path}", err=True)
 
     typer.echo(
         f"Modules: {len(result.graph.modules)} | "

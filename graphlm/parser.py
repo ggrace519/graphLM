@@ -31,6 +31,10 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".tsx": TYPESCRIPT,
 }
 
+_IMPORT_NODE_TYPES = frozenset(
+    {"import_statement", "import_from_statement", "future_import_statement"}
+)
+
 
 @dataclass(frozen=True, slots=True, eq=True)
 class ParsedFile:
@@ -43,13 +47,13 @@ class ParsedFile:
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedFile:
-    """AST-derived information from a single source file."""
+class _ParsedImport:
+    """Unresolved import statement extracted from a Python AST."""
 
-    imports: list[ImportEdge] = field(default_factory=list)
-    exports: list[Symbol] = field(default_factory=list)
-    functions: list[FunctionDef] = field(default_factory=list)
-    call_sites: list[CallSite] = field(default_factory=list)
+    module: str
+    names: tuple[str, ...]
+    level: int
+    kind: str
 
 
 class _TreeSitterBackend:
@@ -133,7 +137,7 @@ def detect_language(path: Path) -> str | None:
 
 
 def _module_to_path(module_str: str, language: str) -> str:
-    """Convert a dotted module name to a file path.
+    """Convert a dotted module name to a naive file path (parse_file placeholder).
 
     Args:
         module_str: Dotted module name (e.g. 'app.routes.users').
@@ -142,57 +146,181 @@ def _module_to_path(module_str: str, language: str) -> str:
     Returns:
         Path string (e.g. 'app/routes/users.py').
     """
-    parts = module_str.split(".")
+    parts = [p for p in module_str.split(".") if p]
+    if not parts:
+        return ""
     if language == PYTHON:
         return "/".join(parts) + ".py"
-    elif language in (JAVASCRIPT, TYPESCRIPT):
+    if language in (JAVASCRIPT, TYPESCRIPT):
         return "/".join(parts)
     return ""
 
 
-def _parse_python_imports(tree, source_lines: list[str]) -> list[ImportEdge]:
-    """Extract import edges from a Python AST tree.
+def _node_text(node) -> str:
+    return node.text.decode("utf-8")
 
-    Uses tree-sitter to identify import statement boundaries, then
-    extracts module names from source text for reliable parsing.
 
-    Args:
-        tree: Tree-sitter parse tree.
-        source_lines: Split source code lines.
+def _field_nodes(node, field: str) -> list:
+    return list(node.children_by_field_name(field))
 
-    Returns:
-        List of ImportEdge instances.
-    """
-    edges: list[ImportEdge] = []
 
-    for node in tree.root_node.children:
-        if node.type not in ("import_statement", "import_from_statement"):
-            continue
+def _symbol_from_name_node(node) -> str:
+    """Module or imported name, ignoring aliases."""
+    if node.type == "aliased_import":
+        target = node.child_by_field_name("name")
+        return _node_text(target) if target is not None else ""
+    if node.type == "wildcard_import":
+        return "*"
+    return _node_text(node)
 
-        line = source_lines[node.start_point.row] if node.start_point.row < len(source_lines) else ""
-        stripped = line.strip()
 
-        if node.type == "import_from_statement":
-            if "import" not in stripped:
-                continue
-            parts = stripped.split("import", 1)
-            module_str = parts[0].replace("from", "", 1).strip()
-            kind = "from"
-        else:
-            if not stripped.startswith("import "):
-                continue
-            rest = stripped[len("import "):].strip()
-            module_str = rest.split(",")[0].split(" as ")[0].strip()
-            kind = "import"
+def _relative_spec(node) -> tuple[int, str]:
+    """Return (dot-count, remaining module) from a relative_import node."""
+    level = 0
+    module = ""
+    for child in node.children:
+        if child.type == "import_prefix":
+            level = len(_node_text(child))
+        elif child.type == "dotted_name":
+            module = _node_text(child)
+    if level == 0:
+        text = _node_text(node)
+        level = len(text) - len(text.lstrip("."))
+        module = text.lstrip(".")
+    return level, module
 
-        if module_str:
-            to_path = _module_to_path(module_str, PYTHON)
-            if to_path:
-                edges.append(
-                    ImportEdge(from_path="", to_path=to_path, kind=kind)
+
+def _parse_import_node(node) -> list[_ParsedImport]:
+    if node.type == "import_statement":
+        result: list[_ParsedImport] = []
+        for name_node in _field_nodes(node, "name"):
+            module = _symbol_from_name_node(name_node)
+            if module:
+                result.append(
+                    _ParsedImport(module=module, names=(), level=0, kind="import")
                 )
+        return result
 
-    return edges
+    if node.type not in ("import_from_statement", "future_import_statement"):
+        return []
+
+    level = 0
+    module = ""
+    if node.type == "future_import_statement":
+        module = "__future__"
+    else:
+        mod_node = node.child_by_field_name("module_name")
+        if mod_node is None:
+            return []
+        if mod_node.type == "relative_import":
+            level, module = _relative_spec(mod_node)
+        else:
+            module = _node_text(mod_node)
+
+    names = tuple(
+        symbol
+        for name_node in _field_nodes(node, "name")
+        if (symbol := _symbol_from_name_node(name_node))
+    )
+    if any(child.type == "wildcard_import" for child in node.children):
+        names = ("*",)
+    return [_ParsedImport(module=module, names=names, level=level, kind="from")]
+
+
+def _parse_python_imports(tree) -> list[_ParsedImport]:
+    """Extract import statements from a Python AST tree.
+
+    Only top-level (module-body) statements are considered.
+    """
+    imports: list[_ParsedImport] = []
+    for node in tree.root_node.children:
+        if node.type in _IMPORT_NODE_TYPES:
+            imports.extend(_parse_import_node(node))
+    return imports
+
+
+def _placeholder_edge(imp: _ParsedImport) -> ImportEdge | None:
+    """Single-file view of an import: module name as a naive .py path."""
+    if not imp.module:
+        return None
+    to_path = _module_to_path(imp.module, PYTHON)
+    if not to_path:
+        return None
+    return ImportEdge(from_path="", to_path=to_path, kind=imp.kind)
+
+
+def _posix_rel(path: str) -> str:
+    return path.replace("\\", "/")
+
+
+def _module_candidates(dotted: str) -> tuple[str, ...]:
+    if not dotted:
+        return ()
+    rel = dotted.replace(".", "/")
+    return (f"{rel}.py", f"{rel}/__init__.py")
+
+
+def _first_known(candidates: tuple[str, ...], known: set[str]) -> str | None:
+    for candidate in candidates:
+        if candidate in known:
+            return candidate
+    return None
+
+
+def _resolve_module_name(from_path: str, module: str, level: int) -> str | None:
+    """Dotted module for an import, or None if a relative import escapes the tree.
+
+    Standard Python: one leading dot is the importing file's package (parent dir).
+    Each extra dot walks up one directory.
+    """
+    if level <= 0:
+        return module
+    parent_parts = _posix_rel(from_path).split("/")[:-1]
+    if parent_parts == [""]:
+        parent_parts = []
+    up = level - 1
+    if up > len(parent_parts):
+        return None
+    base = parent_parts[:-up] if up else parent_parts
+    extra = [p for p in module.split(".") if p] if module else []
+    return ".".join(base + extra)
+
+
+def _resolve_import(imp: _ParsedImport, from_path: str, known: set[str]) -> list[str]:
+    """Map one import statement onto existing project files.
+
+    ``from a.b import name1, name2`` prefers each name as a submodule
+    (``a/b/name.py`` or ``a/b/name/__init__.py``). Names that are not
+    submodules fall back to the package/module itself once.
+    """
+    dotted = _resolve_module_name(from_path, imp.module, imp.level)
+    if dotted is None:
+        return []
+
+    if imp.kind == "import":
+        hit = _first_known(_module_candidates(dotted), known)
+        return [hit] if hit else []
+
+    found: list[str] = []
+    seen: set[str] = set()
+    need_fallback = not imp.names
+    for name in imp.names:
+        if name == "*":
+            need_fallback = True
+            continue
+        sub = f"{dotted}.{name}" if dotted else name
+        hit = _first_known(_module_candidates(sub), known)
+        if hit is None:
+            need_fallback = True
+            continue
+        if hit not in seen:
+            seen.add(hit)
+            found.append(hit)
+    if need_fallback:
+        hit = _first_known(_module_candidates(dotted), known)
+        if hit is not None and hit not in seen:
+            found.append(hit)
+    return found
 
 
 def _parse_python_functions(tree) -> list[str]:
@@ -256,16 +384,14 @@ def _parse_file_python(code: bytes, path: Path) -> ParsedFile:
     Returns:
         ParsedFile with extracted AST data.
     """
-    source_str = code.decode("utf-8", errors="replace")
-    source_lines = source_str.splitlines()
-
     try:
         tree = _backend.parse_source(code, PYTHON)
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", path, e)
         return ParsedFile()
 
-    imports = _parse_python_imports(tree, source_lines)
+    raw_imports = _parse_python_imports(tree)
+    imports = [edge for imp in raw_imports if (edge := _placeholder_edge(imp)) is not None]
     functions = _parse_python_functions(tree)
     classes = _parse_python_classes(tree)
     calls = _parse_python_calls(tree)
@@ -281,6 +407,29 @@ def _parse_file_python(code: bytes, path: Path) -> ParsedFile:
         functions=functions,
         call_sites=calls,
     )
+
+
+def _imports_from_source(code: bytes, path: Path) -> list[_ParsedImport]:
+    try:
+        tree = _backend.parse_source(code, PYTHON)
+    except Exception as e:
+        logger.warning("Tree-sitter parse failed for %s: %s", path, e)
+        return []
+    return _parse_python_imports(tree)
+
+
+def _source_bytes(frag: FileFragment, project_dir: Path | None) -> bytes | None:
+    if project_dir is not None:
+        fpath = project_dir / frag.rel_path
+        if fpath.is_file():
+            try:
+                return fpath.read_bytes()
+            except (OSError, PermissionError) as e:
+                logger.warning("Could not read %s: %s", fpath, e)
+                return None
+    if frag.content:
+        return frag.content.encode("utf-8")
+    return None
 
 
 def parse_file(path: Path, language: str | None = None) -> ParsedFile | None:
@@ -329,6 +478,17 @@ def parse_file(path: Path, language: str | None = None) -> ParsedFile | None:
         return None
 
 
+def _dedupe_edges(edges: list[ImportEdge]) -> list[ImportEdge]:
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[ImportEdge] = []
+    for edge in edges:
+        key = (edge.from_path, edge.to_path, edge.kind)
+        if key not in seen:
+            seen.add(key)
+            unique.append(edge)
+    return unique
+
+
 def build_dependency_graph(
     fragments: list[FileFragment],
     max_files: int = 200,
@@ -336,43 +496,34 @@ def build_dependency_graph(
 ) -> list[ImportEdge]:
     """Build a deterministic dependency graph from file fragments.
 
-    Uses AST parsing on file fragments to extract import edges.
+    Resolves Python imports against files that exist in ``fragments``.
+    Stdlib, third-party, and missing modules are dropped.
 
     Args:
         fragments: File fragments from a scan.
-        max_files: Maximum number of files to parse.
+        max_files: Maximum number of files to parse as import sources.
         project_dir: Base directory for resolving relative file paths.
 
     Returns:
         List of ImportEdge instances.
     """
+    known_files = {_posix_rel(frag.rel_path) for frag in fragments}
     all_edges: list[ImportEdge] = []
-    parsed_files: dict[str, ParsedFile] = {}
 
     for frag in fragments[:max_files]:
-        fpath = Path(frag.rel_path)
-        if project_dir is not None:
-            fpath = project_dir / frag.rel_path
-        parsed = parse_file(fpath)
-        if parsed is not None:
-            parsed_files[frag.rel_path] = parsed
+        rel_path = _posix_rel(frag.rel_path)
+        if detect_language(Path(rel_path)) != PYTHON:
+            continue
+        code = _source_bytes(frag, project_dir)
+        if not code or not code.strip():
+            continue
+        for imp in _imports_from_source(code, Path(rel_path)):
+            for to_path in _resolve_import(imp, rel_path, known_files):
+                all_edges.append(
+                    ImportEdge(from_path=rel_path, to_path=to_path, kind=imp.kind)
+                )
 
-    for rel_path, parsed in parsed_files.items():
-        for edge in parsed.imports:
-            from_p = edge.from_path if edge.from_path else rel_path
-            all_edges.append(
-                ImportEdge(from_path=from_p, to_path=edge.to_path, kind=edge.kind)
-            )
-
-    seen: set[tuple[str, str, str]] = set()
-    unique_edges: list[ImportEdge] = []
-    for edge in all_edges:
-        key = (edge.from_path, edge.to_path, edge.kind)
-        if key not in seen:
-            seen.add(key)
-            unique_edges.append(edge)
-
-    return unique_edges
+    return _dedupe_edges(all_edges)
 
 
 def detect_import_cycles(edges: list[ImportEdge]) -> list[list[str]]:

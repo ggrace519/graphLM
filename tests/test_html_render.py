@@ -328,6 +328,33 @@ class TestRenderHtml:
         assert data["nodes"][0]["type"] == "file_summary"
         assert "Data models" in data["nodes"][0]["description"]
 
+    def test_domcontentloaded_calls_initgraph(self):
+        graph = CodebaseGraph(directory_tree="test/")
+        html = render_html(graph)
+        marker = "window.addEventListener('DOMContentLoaded'"
+        assert marker in html
+        after_load = html.split(marker, 1)[1]
+        assert "initGraph()" in after_load
+
+    def test_initgraph_does_not_call_itself(self):
+        graph = CodebaseGraph(directory_tree="test/")
+        html = render_html(graph)
+        after_def = html.split("function initGraph()", 1)[1]
+        load_markers = (
+            "window.addEventListener('DOMContentLoaded'",
+            "DOMContentLoaded",
+        )
+        cut = len(after_def)
+        for marker in load_markers:
+            idx = after_def.find(marker)
+            if idx != -1:
+                cut = min(cut, idx)
+        body = after_def[:cut]
+        assert "initGraph()" not in body
+        after_load = after_def[cut:]
+        assert "DOMContentLoaded" in after_load
+        assert "initGraph()" in after_load
+
 
 class TestWriteOutputsWithHtml:
     def test_writes_html_by_default(self):

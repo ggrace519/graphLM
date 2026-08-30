@@ -59,9 +59,17 @@ class TestParseFile:
         result = parse_file(main)
         assert result is not None
         assert len(result.imports) >= 3
-        import_paths = {e.to_path for e in result.imports}
-        assert "app/routes.py" in import_paths
-        assert "app/services/auth.py" in import_paths
+
+        from graphlm.scanner import scan_project
+
+        scan = scan_project(large_project, include_tests=False)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=large_project)
+        main_targets = {e.to_path for e in edges if e.from_path == "app/main.py"}
+        assert "app/routes/users.py" in main_targets
+        assert "app/routes/items.py" in main_targets
+        assert "app/services/auth.py" in main_targets
+        assert "app/routes.py" not in main_targets
+        assert "fastapi.py" not in main_targets
 
     def test_parse_routes_items(self, large_project):
         items = large_project / "app" / "routes" / "items.py"
@@ -189,10 +197,81 @@ class TestBuildDependencyGraph:
         scan = scan_project(large_project, include_tests=False)
         edges = build_dependency_graph(scan.file_fragments, project_dir=large_project)
         edge_set = {(e.from_path, e.to_path) for e in edges}
+        targets = {e.to_path for e in edges}
 
         assert ("app/routes/items.py", "app/models/item.py") in edge_set
         assert ("app/routes/items.py", "app/services/item_service.py") in edge_set
         assert ("app/services/user_service.py", "app/services/auth.py") in edge_set
+        assert ("app/main.py", "app/routes/users.py") in edge_set
+        assert ("app/main.py", "app/routes/items.py") in edge_set
+        assert ("app/main.py", "app/services/auth.py") in edge_set
+        assert "app/routes.py" not in targets
+        assert "fastapi.py" not in targets
+        assert "os.py" not in targets
+
+    def test_stdlib_and_future_produce_zero_edges(self, tmp_path):
+        from graphlm.scanner import FileFragment
+
+        src = tmp_path / "mod.py"
+        src.write_text(
+            "from __future__ import annotations\n"
+            "import os\n"
+            "import json\n"
+            "from json import dumps\n"
+        )
+        frag = FileFragment("mod.py", src.read_text(), 1)
+        edges = build_dependency_graph([frag], project_dir=tmp_path)
+        assert edges == []
+
+    def test_relative_imports_resolve(self, tmp_path):
+        from graphlm.scanner import scan_project
+
+        app = tmp_path / "app"
+        (app / "models").mkdir(parents=True)
+        (app / "services").mkdir(parents=True)
+        (app / "__init__.py").write_text("")
+        (app / "models" / "__init__.py").write_text("")
+        (app / "models" / "user.py").write_text("class User:\n    pass\n")
+        (app / "services" / "__init__.py").write_text("")
+        (app / "services" / "auth.py").write_text("def hash_password(p): return p\n")
+        (app / "services" / "user_service.py").write_text(
+            "from ..models.user import User\n"
+            "from .auth import hash_password\n"
+            "from . import auth\n"
+        )
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        edge_set = {(e.from_path, e.to_path) for e in edges}
+        assert ("app/services/user_service.py", "app/models/user.py") in edge_set
+        assert ("app/services/user_service.py", "app/services/auth.py") in edge_set
+
+    def test_from_import_prefers_submodule_then_package_fallback(self, tmp_path):
+        from graphlm.scanner import scan_project
+
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("foo = 1\n")
+        (pkg / "sub.py").write_text("x = 1\n")
+        (tmp_path / "main.py").write_text("from pkg import sub, foo\n")
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        main_targets = [e.to_path for e in edges if e.from_path == "main.py"]
+        assert main_targets.count("pkg/sub.py") == 1
+        assert main_targets.count("pkg/__init__.py") == 1
+        assert "pkg.py" not in main_targets
+
+    def test_cyclic_project_includes_cycle_edges(self):
+        from graphlm.scanner import scan_project
+
+        project = FIXTURES_DIR / "cyclic_project"
+        scan = scan_project(project, include_tests=True)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=project)
+        edge_set = {(e.from_path, e.to_path) for e in edges}
+        assert ("app/main.py", "app/routes.py") in edge_set
+        assert ("app/routes.py", "app/services.py") in edge_set
+        assert ("app/services.py", "app/main.py") in edge_set
 
 
 class TestImportCycles:
@@ -252,10 +331,13 @@ class TestDeterministicEdgesMatchFixture:
 
         scan = scan_project(large_project, include_tests=False)
         edges = build_dependency_graph(scan.file_fragments, project_dir=large_project)
-        main_edges = [e for e in edges if "app/main.py" in e.from_path]
+        main_edges = [e for e in edges if e.from_path == "app/main.py"]
         main_targets = {e.to_path for e in main_edges}
-        assert "app/routes.py" in main_targets
+        assert "app/routes/users.py" in main_targets
+        assert "app/routes/items.py" in main_targets
         assert "app/services/auth.py" in main_targets
+        assert "app/routes.py" not in main_targets
+        assert "fastapi.py" not in main_targets
 
     def test_all_py_files_parsed(self, large_project):
         py_files = list(large_project.rglob("*.py"))
