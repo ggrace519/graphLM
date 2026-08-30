@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT = 120.0
 _MAX_RETRIES = 2
 _RETRY_DELAY = 2.0
+# Max output tokens requested from the model. The context budget in context.py
+# reserves exactly this many tokens for the response, so the two must stay in
+# lock-step — import this constant there rather than duplicating the number,
+# or an input prompt sized against a smaller reserve can overflow the window
+# when the model actually emits up to this many output tokens (#17).
+LLM_MAX_OUTPUT_TOKENS = 16000
 
 
 class GraphLLError(Exception):
@@ -132,7 +138,7 @@ def call_llm(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.1,  # Low temperature for structured output
-        "max_tokens": 16000,
+        "max_tokens": LLM_MAX_OUTPUT_TOKENS,
     }
 
     headers = {

@@ -17,16 +17,18 @@ from graphlm.scanner import (
 
 
 class TestEstimateTokens:
+    # Calibrated at ~2.5 bytes/token (``bytes * 2 // 5``) to stay above the
+    # ~2.83 bytes/token measured on real content \u2014 see estimate_tokens (#17).
     def test_short_text(self):
-        assert estimate_tokens("hello") == 5 // 4  # 5 bytes, 1 token
-        assert estimate_tokens("hello world") == 11 // 4  # 11 bytes, 2 tokens
+        assert estimate_tokens("hello") == 5 * 2 // 5  # 5 bytes -> 2 tokens
+        assert estimate_tokens("hello world") == 11 * 2 // 5  # 11 bytes -> 4
 
     def test_empty_text(self):
         assert estimate_tokens("") == 0
 
     def test_unicode_text(self):
         text = "hello w\u00f6rld"  # 12 bytes in UTF-8
-        assert estimate_tokens(text) == 12 // 4
+        assert estimate_tokens(text) == 12 * 2 // 5
 
 
 class TestShouldExclude:
@@ -175,6 +177,94 @@ class TestScanProject:
         assert "zzz_a.py" in paths
         assert "zzz_b.py" in paths
         assert "aaa_linked.py" not in paths
+
+
+class TestTreeBounds:
+    """The pass-1 tree must be size-bounded regardless of repo size (#17)."""
+
+    def test_per_directory_cap_emits_marker_and_omits_extras(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        # One directory with far more than the cap of listable children.
+        big = project / "many"
+        big.mkdir()
+        for i in range(300):
+            (big / f"f{i:03d}.py").write_text("x = 1\n")
+        (project / "keep.py").write_text("y = 1\n")
+
+        result = scan_project(project, max_tree_entries_per_dir=200)
+        lines = result.tree.split("\n")
+        # Exactly 200 of the 300 files are listed, plus one marker.
+        listed = [ln for ln in lines if ln.strip().startswith("many/f")]
+        assert len(listed) == 200
+        marker = [ln for ln in lines if "more entries not shown" in ln]
+        assert len(marker) == 1
+        # The omitted count is exact (300 listable - 200 shown = 100).
+        assert "100 more entries not shown" in marker[0]
+
+    def test_shown_subdirectories_still_recurse(self, tmp_path):
+        # A directory under the cap must still have its children walked — the
+        # two-phase refactor must not stop recursion for shown dirs.
+        project = tmp_path / "proj"
+        project.mkdir()
+        sub = project / "pkg"
+        sub.mkdir()
+        (sub / "deep.py").write_text("z = 1\n")
+        (project / "top.py").write_text("a = 1\n")
+
+        result = scan_project(project, max_tree_entries_per_dir=200)
+        assert "pkg/deep.py" in result.tree
+
+    def test_build_and_cache_dirs_excluded_from_tree(self, tmp_path):
+        # Regression for #17: Rust target/, hypothesis caches, etc. must never
+        # reach the tree — they were the bulk of the 400KB argus pass-1 prompt.
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "main.py").write_text("print('hi')\n")
+        for junk in ("target", ".hypothesis", "dist", "build", ".ruff_cache", "node_modules"):
+            d = project / junk
+            d.mkdir()
+            (d / "artifact.py").write_text("x = 1\n")
+        # A nested Rust-crate target/ (the real argus shape).
+        nested = project / "crates" / "foo" / "target"
+        nested.mkdir(parents=True)
+        (nested / "junk.py").write_text("y = 1\n")
+
+        result = scan_project(project)
+        for junk in ("target/", ".hypothesis/", "dist/", "build/", ".ruff_cache/", "node_modules/"):
+            assert junk not in result.tree, f"{junk} leaked into tree"
+        # Real source survives.
+        assert "main.py" in result.tree
+        assert "crates/" in result.tree
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert not any("target" in p for p in paths)
+
+    def test_total_line_ceiling_stops_walk(self, tmp_path):
+        # Many directories, each UNDER the per-dir cap, must still be bounded by
+        # the absolute total-lines ceiling — the per-dir cap alone only bounds
+        # the tree at per_dir × num_dirs, so the total backstop is what holds on
+        # a repo with many directories. 200 dirs (== the default per-dir cap, so
+        # the root lists them all) × 30 files (< the cap) ≈ 6000 lines, over the
+        # default 200 × 25 = 5000 ceiling, and no per-dir cap fires.
+        from graphlm.scanner import _MAX_TREE_ENTRIES_PER_DIR, _TREE_TOTAL_LINE_MULTIPLIER
+
+        ceiling = _MAX_TREE_ENTRIES_PER_DIR * _TREE_TOTAL_LINE_MULTIPLIER
+        project = tmp_path / "proj"
+        project.mkdir()
+        for d in range(_MAX_TREE_ENTRIES_PER_DIR):
+            sub = project / f"d{d:03d}"
+            sub.mkdir()
+            for i in range(30):
+                (sub / f"f{i:02d}.py").write_text("x = 1\n")
+
+        result = scan_project(project)
+        lines = result.tree.split("\n")
+        assert any(f"tree truncated at {ceiling} total lines" in ln for ln in lines)
+        # Bounded: the ceiling of tree_lines plus the single final marker.
+        assert len(lines) <= ceiling + 1
+        # No per-directory marker fired (every dir is under the cap).
+        assert not any("more entries not shown" in ln for ln in lines)
 
 
 class TestIsSensitiveFile:
