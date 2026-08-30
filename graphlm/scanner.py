@@ -18,6 +18,8 @@ _ALWAYS_EXCLUDE = {
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
+    ".ruff_cache",
+    ".hypothesis",  # Hypothesis example DB — thousands of cache files
     ".tox",
     ".eggs",
     "*.egg-info",
@@ -28,7 +30,39 @@ _ALWAYS_EXCLUDE = {
     ".env",
     ".gitignore",
     ".gitkeep",
+    # Build / dist / cache output. These match on any path component, so a
+    # legitimately-named source dir called "build"/"dist"/"target" anywhere in
+    # the tree is also excluded — an accepted trade-off (precedent: bare "env"
+    # above already excludes any component named env). They only remove files
+    # from analysis; no security invariant depends on them. Together with the
+    # per-directory tree cap, this keeps huge polyglot repos (Rust target/,
+    # JS build/, hypothesis caches) from overflowing the LLM context (#17).
+    "target",  # Rust/Java build output (crates/*/target/... is thousands of files)
+    "build",
+    "dist",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".terraform",
+    ".gradle",
+    "coverage",
+    "htmlcov",
+    ".idea",
+    ".vscode",
 }
+
+# Hard cap on how many listed children any one directory contributes to the
+# pass-1 tree. Bounds tree size independently of the exclude list so a huge or
+# junk-heavy directory (e.g. thousands of generated files the excludes missed)
+# cannot blow the LLM context window (#17). See scan_project for the rationale
+# on capping per-directory rather than globally.
+_MAX_TREE_ENTRIES_PER_DIR = 200
+# The total tree-line ceiling is this multiple of the per-directory cap. The
+# per-directory cap alone bounds the tree at per_dir × (number of directories);
+# this multiplier turns that into an absolute ceiling (default 200 × 25 = 5000
+# lines ≈ well under the context budget) that holds no matter how many
+# directories a repo has.
+_TREE_TOTAL_LINE_MULTIPLIER = 25
 
 # Binary extensions that should never be read as text
 _BINARY_EXTS = {
@@ -151,8 +185,18 @@ class ScanResult:
 
 
 def estimate_tokens(text: str) -> int:
-    """Fast heuristic token count. ~4 bytes UTF-8 ≈ 1 token."""
-    return len(text.encode("utf-8")) // 4
+    """Fast heuristic token count, calibrated conservatively.
+
+    Real measurement against the served model on graphlm's own content (dense
+    directory trees + source code) put the ratio at ~2.83–2.87 bytes/token, so
+    the old ~4-bytes/token assumption *under*-counted by ~28% — enough to pack a
+    prompt the model then rejected or timed out on (issue #17). We deliberately
+    assume 2.5 bytes/token (``* 2 // 5``) so the estimate sits ~13% *above* the
+    real count: over-estimating trims a few extra files but keeps the budget a
+    real guarantee, whereas under-estimating overflows the context. This is the
+    single source of truth for the heuristic — ``context.py`` imports it.
+    """
+    return len(text.encode("utf-8")) * 2 // 5
 
 
 def _should_exclude(rel_path: str, exclude_patterns: tuple[str, ...]) -> bool:
@@ -307,6 +351,7 @@ def scan_project(
     include_tests: bool = True,
     exclude_patterns: tuple[str, ...] = (),
     redact_secrets: bool = True,
+    max_tree_entries_per_dir: int = _MAX_TREE_ENTRIES_PER_DIR,
 ) -> ScanResult:
     """Walk project directory, build annotated tree, read file contents.
 
@@ -317,6 +362,18 @@ def scan_project(
         include_tests: Whether to include test files.
         exclude_patterns: Additional glob patterns to exclude.
         redact_secrets: If True, redact secret-like patterns from file content.
+        max_tree_entries_per_dir: Cap on how many *listed* children (after
+            excludes) any single directory contributes to the pass-1 tree.
+            Beyond it, a "… N more entries not shown" marker is emitted and the
+            rest of that directory's children are omitted from the tree. This
+            is a hard bound on tree size that does not depend on the exclude
+            list catching every junk dir — the tree (the whole pass-1 prompt)
+            would otherwise grow unbounded with repo size and overflow the LLM
+            context on large/polyglot repos (#17). Capping per-directory rather
+            than globally keeps the budget spread across the tree so deeply
+            nested source dirs stay visible instead of being crowded out by an
+            early alphabetical cache directory. It bounds only the tree text,
+            not which files are read (that is ``max_files``).
 
     Returns:
         ScanResult with tree string and file fragments.
@@ -331,18 +388,32 @@ def scan_project(
     # Phase 1: Build the directory tree
     tree_lines = [str(project_dir.name) + "/"]
     skipped_count = 0
+    # Absolute ceiling on total tree lines — the per-directory cap alone only
+    # bounds the tree at max_tree_entries_per_dir × (number of directories), so
+    # a repo with thousands of directories could still overflow. This total
+    # backstop makes "the pass-1 tree is bounded" a real guarantee regardless of
+    # directory count (#17). Once hit, the walk stops and a final marker is
+    # appended after the loop.
+    max_tree_lines = max_tree_entries_per_dir * _TREE_TOTAL_LINE_MULTIPLIER
+    tree_stopped = False
 
     def _walk_dir(dir_path: Path, indent: str = "  ") -> None:
-        nonlocal skipped_count
+        nonlocal skipped_count, tree_stopped
+        if tree_stopped:
+            return
         try:
             entries = sorted(dir_path.iterdir(), key=lambda p: (not p.is_dir(), p.name))
         except PermissionError:
             skipped_count += 1
             return
 
+        # Phase A — keep only the entries that are actually listable in the
+        # tree (everything the skip filters below would have dropped is counted
+        # into skipped_count now, so the per-directory cap below counts real
+        # listed entries, not raw children, and the "N more" figure is exact).
+        listable: list[Path] = []
         for entry in entries:
-            rel = entry.relative_to(project_dir)
-            rel_str = str(rel)
+            rel_str = str(entry.relative_to(project_dir))
 
             if _should_exclude(rel_str, all_exclude):
                 skipped_count += 1
@@ -352,15 +423,11 @@ def scan_project(
             # project — otherwise an external symlinked file is listed in the
             # tree and consumes a max_files slot, even though its content is
             # blocked later by the _path_is_inside check before reading.
-            if entry.is_symlink():
-                if not _path_is_inside(project_dir, entry):
-                    skipped_count += 1
-                    continue
+            if entry.is_symlink() and not _path_is_inside(project_dir, entry):
+                skipped_count += 1
+                continue
 
-            if entry.is_dir():
-                tree_lines.append(f"{indent}{rel_str}/")
-                _walk_dir(entry, indent + "  ")
-            else:
+            if not entry.is_dir():
                 if _is_binary(entry):
                     skipped_count += 1
                     continue
@@ -379,9 +446,39 @@ def scan_project(
                     if parts[0] == "tests" or parts[0].startswith("test_"):
                         skipped_count += 1
                         continue
+
+            listable.append(entry)
+
+        # Phase B — emit up to max_tree_entries_per_dir listed entries, then a
+        # single "… N more entries not shown" marker. This is the hard tree-size
+        # bound: it is independent of whether the exclude list caught this dir.
+        shown = listable[:max_tree_entries_per_dir]
+        omitted = len(listable) - len(shown)
+        for entry in shown:
+            # Total-lines backstop: stop the whole walk once the tree reaches
+            # its absolute ceiling, regardless of directory count.
+            if len(tree_lines) >= max_tree_lines:
+                tree_stopped = True
+                return
+            rel_str = str(entry.relative_to(project_dir))
+            if entry.is_dir():
+                tree_lines.append(f"{indent}{rel_str}/")
+                _walk_dir(entry, indent + "  ")
+            else:
                 tree_lines.append(f"{indent}{rel_str}")
+        if omitted:
+            tree_lines.append(
+                f"{indent}… {omitted} more entries not shown "
+                f"(tree capped at {max_tree_entries_per_dir} per directory)"
+            )
+            skipped_count += omitted
 
     _walk_dir(project_dir)
+    if tree_stopped:
+        tree_lines.append(
+            f"… tree truncated at {max_tree_lines} total lines "
+            "(too many directories to list in full)"
+        )
     tree = "\n".join(tree_lines)
 
     # Phase 2: Select and read files for context

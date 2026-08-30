@@ -13,8 +13,13 @@ from graphlm.scanner import FileFragment, scan_project
 
 class TestEstimateTokens:
     def test_consistent_with_scanner(self):
+        # context.estimate_tokens is now the single scanner implementation,
+        # re-exported — so they are the same object, not just equal (#17).
+        from graphlm.scanner import estimate_tokens as scanner_estimate
+
+        assert estimate_tokens is scanner_estimate
         text = "hello world"
-        assert estimate_tokens(text) == len(text.encode("utf-8")) // 4
+        assert estimate_tokens(text) == len(text.encode("utf-8")) * 2 // 5
 
     def test_empty(self):
         assert estimate_tokens("") == 0
@@ -186,14 +191,15 @@ class TestMaxContext:
         from graphlm.scanner import scan_project
 
         scan = scan_project(large_project)
-        # 7000 tokens fits the high-priority files but forces truncation of the
+        # 20000 tokens fits the high-priority files but forces truncation of the
         # lower-priority ones (once the fixed output/tree/instruction reserves
-        # are accounted for). NB: this threshold is coupled to the size of the
-        # instruction block in _build_instruction_block() — if that block grows
-        # (e.g. a new CodebaseGraph field is documented), the budget that just
-        # forces partial truncation shifts and this number may need raising.
+        # are accounted for). NB: this threshold is coupled to the estimate_tokens
+        # calibration (#17), the ~17.5k output reserve (DEFAULT_OUTPUT_BUDGET,
+        # now the client's real max_tokens), and the size of the instruction
+        # block in _build_instruction_block() — if any grows, the budget that
+        # just forces partial truncation shifts and this number may need raising.
         prompt, tokens, truncated = assemble_pass2_prompt(
-            scan.tree, scan.file_fragments, max_context=7000
+            scan.tree, scan.file_fragments, max_context=20000
         )
         # High-priority files (config, __init__, main) should fit first
         # Lower-priority files (routes, services, migrations) get truncated
@@ -220,7 +226,7 @@ class TestMaxContext:
     def test_assembled_prompt_respects_budget_with_huge_edge_table(self):
         """A very large AST-edge table must not push the assembled prompt past
         max_context. Contract: estimate_tokens(prompt) + output_reserve
-        (~5500, reserved for the response and never emitted) <= max_context.
+        (~17.5k, reserved for the response and never emitted) <= max_context.
         Regression for #12 — before the edge cap, 6000 rows produced a ~62k
         prompt regardless of the budget.
         """
@@ -241,8 +247,8 @@ class TestMaxContext:
         ]
         tree = "proj/\n" + "\n".join(f"  src/mod{i}.py" for i in range(40))
 
-        # Budgets at or above the ~6100-token instruction/output floor.
-        for max_context in (8000, 20000, 60000, 120000):
+        # Budgets at or above the ~18.4k-token instruction/output floor.
+        for max_context in (20000, 60000, 120000):
             prompt, reported, truncated = assemble_pass2_prompt(
                 tree, frags, max_context=max_context, deterministic_edges=edges
             )
@@ -293,8 +299,10 @@ class TestMaxContext:
             for j in range(20)
         ]
         tree = "proj/\n" + "\n".join(f"  m{i}" for i in range(40))
-        # Dense sweep across the rounding-sensitive region.
-        for max_context in range(6200, 40000, 311):
+        # Dense sweep across the rounding-sensitive region, starting above the
+        # ~18.4k-token instruction/output floor (below it, the floor wins and no
+        # budget guarantee is claimed — see assemble_pass2_prompt docstring).
+        for max_context in range(19000, 52000, 311):
             prompt, reported, _truncated = assemble_pass2_prompt(
                 tree, frags, max_context=max_context, deterministic_edges=edges
             )
