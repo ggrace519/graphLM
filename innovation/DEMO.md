@@ -58,5 +58,5 @@ Working — all 32 tests pass, 163 total tests pass.
 ## Next increments
 
 - Add JavaScript/TypeScript parsing support (currently returns empty results)
-- Wire `--ast` flag into `generate_graph()` CLI to automatically attach deterministic edges
+- AST parsing is on by default (`--no-ast` to skip)
 - Add caller/callee edge analysis (beyond just imports)

@@ -15,7 +15,7 @@ Given a project directory, graphLM produces a structured analysis as **Markdown*
 - **Architecture notes** — key decisions and patterns
 - **Quick reference** — "where do I find X?" lookups
 - **Import cycles** — strongly-connected components with SLOC-based risk scores
-- **Interactive HTML** — D3 force graph (`graph.html`) with zoom/pan, search, and theme toggle
+- **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, and theme toggle
 
 ## Installation
 
@@ -47,10 +47,10 @@ graphlm /path/to/project -b https://api.example.com/v1 -k sk-xxx -m my-model
 # Exclude test files and custom patterns
 graphlm /path/to/project --no-tests --exclude __pycache__ --exclude .git
 
-# Deterministic AST import edges (Tree-sitter) alongside the LLM
-graphlm /path/to/project -o ./output --ast
+# Skip Tree-sitter AST import edges
+graphlm /path/to/project -o ./output --no-ast
 
-# Skip writing graph.html
+# Skip writing GRAPH.html
 graphlm /path/to/project -o ./output --no-html
 ```
 
@@ -74,8 +74,8 @@ result = generate_graph(
     api_key="sk-xxx",
     model="Qwen3.6-35B",
     output_dir="./output",
-    ast=True,              # Tree-sitter import edges + SLOC cycle scores
-    include_html=True,     # skip graph.html when False (default: write it)
+    ast=True,              # Tree-sitter import edges + SLOC cycle scores (default)
+    include_html=True,     # skip GRAPH.html when False (default: write it)
     show_cycles=True,      # skip the cycle section when False
     cycle_threshold=0.0,   # min cycle risk score
 )
@@ -83,7 +83,7 @@ result = generate_graph(
 print(len(result.graph.modules), "modules found")
 ```
 
-With `ast=True`, graphLM runs Tree-sitter, attaches `graph.deterministic_edges`, passes those edges into the pass-2 prompt as ground truth, and runs cycle detection on the AST edges with SLOC-based risk scores. `include_html=False` skips writing `graph.html` when `output_dir` is set (HTML is on by default).
+AST parsing is on by default: graphLM runs Tree-sitter, attaches `graph.deterministic_edges`, passes those edges into the pass-2 prompt as ground truth, and runs cycle detection on the AST edges with SLOC-based risk scores. Pass `ast=False` or `--no-ast` to skip. `include_html=False` skips writing `GRAPH.html` when `output_dir` is set (HTML is on by default).
 
 ## How it works
 
@@ -94,7 +94,7 @@ graphLM uses a **two-pass LLM strategy** to stay within context windows while st
 
 This keeps the first pass lightweight (~tree tokens) and ensures the second pass only includes files that matter.
 
-`--ast` is an optional deterministic pass (Tree-sitter Python imports). It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection.
+A Tree-sitter pass (Python imports) runs by default. It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip.
 
 ## Configuration
 
@@ -116,7 +116,7 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 
 | Flag | Description | Default |
 |---|---|---|
-| `-o, --output-dir` | Output directory for `.md`, `.json`, and `graph.html` | Current directory |
+| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | Current directory |
 | `-b, --base-url` | LLM API base URL | `GRAPHLM_BASE_URL` env var |
 | `-k, --api-key` | LLM API key | `GRAPHLM_API_KEY` env var |
 | `-m, --model` | Model name | `GRAPHLM_MODEL` env var |
@@ -128,8 +128,8 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `--exclude` | Exclude pattern (repeatable) | — |
 | `--no-redact` | Skip secret redaction | Redaction on |
 | `--dry-run` | Show stats without calling LLM | Disabled |
-| `--ast` | AST deterministic import edges (Tree-sitter) | Off |
-| `--no-html` | Do not write `graph.html` | HTML on |
+| `--no-ast` | Skip Tree-sitter AST import edges | AST on |
+| `--no-html` | Do not write `GRAPH.html` | HTML on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |
 | `--cycle-threshold` | Minimum cycle risk score | 0.0 |
 

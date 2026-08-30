@@ -154,10 +154,10 @@ def write_outputs(
     graph: CodebaseGraph,
     output_dir: Path,
     *,
-    md_suffix: str = "graphs",
-    json_suffix: str = "graphs",
+    md_suffix: str = "GRAPH",
+    json_suffix: str = "GRAPH",
     html: bool = True,
-    html_suffix: str = "graph",
+    html_suffix: str = "GRAPH",
 ) -> tuple[Path, Path, Path | None]:
     """Write Markdown, JSON, and optionally HTML outputs to output_dir.
 

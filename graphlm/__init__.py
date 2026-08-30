@@ -76,7 +76,7 @@ def generate_graph(
     exclude_patterns: tuple[str, ...] = (),
     dry_run: bool = False,
     redact_secrets: bool = True,
-    ast: bool = False,
+    ast: bool = True,
     show_cycles: bool = True,
     cycle_threshold: float = 0.0,
     include_html: bool = True,
@@ -101,9 +101,10 @@ def generate_graph(
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
         redact_secrets: If True, redact secret-like patterns from file content.
-        ast: If True, run AST-based deterministic import detection, attach
-            those edges to the graph, and pass them to the LLM as ground truth.
-        include_html: If output_dir is set, whether to also write graph.html.
+        ast: If True (default), run AST-based deterministic import detection,
+            attach those edges to the graph, and pass them to the LLM as
+            ground truth. Pass False / --no-ast to skip.
+        include_html: If output_dir is set, whether to also write GRAPH.html.
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -145,7 +146,7 @@ def generate_graph(
         redact_secrets=redact_secrets,
     )
 
-    # If --ast is enabled, build deterministic import edges from AST parsing
+    # Deterministic import edges from AST parsing (on by default)
     deterministic_edges: list[ImportEdge] | None = None
     if ast:
         try:

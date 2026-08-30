@@ -1,5 +1,6 @@
 """Tests for the CLI."""
 
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -7,6 +8,13 @@ from typer.testing import CliRunner
 from graphlm.cli import app
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI color codes so flag names are searchable in Rich help."""
+    return _ANSI.sub("", text)
 
 
 class TestCLI:
@@ -68,12 +76,25 @@ class TestCLI:
         )
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
-        assert not (tmp_path / "graph.html").exists()
-        assert not (tmp_path / "graphs.md").exists()
-        assert not (tmp_path / "graphs.json").exists()
+        assert not (tmp_path / "GRAPH.html").exists()
+        assert not (tmp_path / "GRAPH.md").exists()
+        assert not (tmp_path / "GRAPH.json").exists()
 
     def test_dry_run_ast_cyclic_project(self):
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
-        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--ast"])
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run"])
+        assert result.exit_code == 0
+        assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
+
+    def test_help_lists_no_ast(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        help_text = _plain(result.stdout)
+        assert "--no-ast" in help_text
+        assert "--ast" not in help_text.replace("--no-ast", "")
+
+    def test_dry_run_no_ast(self):
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--no-ast"])
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr

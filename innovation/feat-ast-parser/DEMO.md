@@ -30,22 +30,22 @@ cycles = detect_import_cycles(edges)
 ### From the CLI
 
 ```bash
-# Dry run with AST detection
-graphlm /path/to/project --dry-run --ast
+# Dry run (AST is on by default)
+graphlm /path/to/project --dry-run
 
-# Full run with AST detection
-graphlm /path/to/project -o ./output --ast
+# Skip AST parsing
+graphlm /path/to/project -o ./output --no-ast
 ```
 
 ### Integration with graphLM
 
-When `--ast` (or `ast=True`) is enabled, the parser runs after scanning and:
+AST parsing is on by default. After scanning, the parser:
 
 1. Extracts deterministic import edges from all scanned files
 2. Passes those edges to the LLM as ground truth in the pass-2 prompt
 3. Attaches `deterministic_edges` to the output `CodebaseGraph`
 
-`--ast` does not replace the two-pass LLM analysis.
+It does not replace the two-pass LLM analysis. Pass `--no-ast` or `ast=False` to skip.
 
 ## Supported languages
 
