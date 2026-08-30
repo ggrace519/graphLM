@@ -159,6 +159,11 @@ help still says "else 32000" — the default is 128000 since #26. Correct it.
   choice — decide it in the fast-follow ADR, not here.
 - Its own issue + DECISIONS.md ADR before building.
 
+**Scoped (2026-08-30):** tracking issue **#28**; design decisions settled in
+`DECISIONS.md` **ADR-002** (where the diff runs, added/removed-only, the three
+baseline states, `deterministic_edges` None-vs-empty, artifact shape,
+on-by-default). Building is still gated — no code yet.
+
 ## Non-goals / explicit traps to avoid
 
 - No git hook. No `--if-stale` / `--skip-if-fresh` flag. No mtime-based staleness.

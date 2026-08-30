@@ -4,6 +4,123 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-002 — `GRAPH_DIFF.*`: graph-vs-graph diff artifact
+
+**Date:** 2026-08-30
+**Status:** Accepted (design only — building is gated on this ADR; tracked by #28)
+**Context / plan:** `docs/plans/self-refreshing-graph.md` (Fast-follow section)
+**Depends on:** ADR-001 (the versioned `meta` stamp is the input contract this reads)
+
+### Context
+
+With the graph now self-stamped and regenerated as code moves (ADR-001), the
+next question is "what changed in the *map* since last time?" `GRAPH_DIFF.*`
+answers it with a **structural graph-vs-graph diff** — modules, edges, cycles,
+data-flows, entry-points, and file-summaries added and removed between the prior
+`GRAPH.json` and the new one. It is deliberately **not** a code diff (git does
+that better); it reads graphlm's *own* prior output, which is why ADR-001 made
+`meta.schema_version` a versioned input contract.
+
+This ADR settles the decisions the plan left open. Building (a `diff.py`, tests,
+`write_outputs` changes) is gated on it — nothing is implemented yet.
+
+### Decisions
+
+1. **The diff runs in `write_outputs` (`render.py`), not `generate_graph`.**
+   Grounded in the merged code: the CLI calls `generate_graph(output_dir=None)`
+   and writes via `result.write(output_destination(...))` (the #8 split, which
+   CLAUDE.md says not to simplify), so `generate_graph` never learns the
+   destination. `write_outputs` is the *only* place holding both the graph and
+   the output dir. Therefore:
+   - **Ordering:** the baseline `GRAPH.json` is read (and parsed) *before*
+     `json_path.write_bytes(...)` overwrites it — after `mkdir`, before the write.
+   - **`--dry-run` writes no diff, by design.** The CLI exits before
+     `result.write` (`cli.py`), so dry-run never reaches the diff path. This is
+     intended (dry-run makes no LLM call and produces no authoritative graph);
+     nobody should "fix" it later.
+
+2. **Added/removed only — no "changed" bucket in cut one.** Identity keys are
+   *structural* (`path`, edge tuples, node sets), so a run where only prose
+   changed — a module `description`, a `file_summary` summary, a `data_flow`
+   description, a cycle `risk_score` — reports *no change* for that entity. This
+   is deliberate: those fields are LLM-regenerated every run, so a "changed"
+   bucket over them would be dominated by nondeterministic prose churn and drown
+   the structural signal the diff exists to surface. The cost (a pure
+   description rewrite is invisible) is accepted for cut one and named here so it
+   is a decision, not a silent consequence of the key choice. A future "changed"
+   bucket, if added, must be scoped to structural sub-fields, not free text.
+
+3. **Identity keys are the diff's contract** (verified against the merged
+   models):
+   - `modules` → `path`
+   - `import_edges`, `deterministic_edges` → `(from_path, to_path, kind)`
+   - `import_cycles` → frozenset of `nodes` (order-independent)
+   - `data_flow` → `(source, destination)`
+   - `entry_points` → `(path, name)`
+   - `file_summaries` → `path`
+   Renames are **remove + add** (no rename-matching heuristics — locked in the
+   plan). Changing a key later changes what counts as "the same entity", so key
+   choices are as load-bearing as a wire format.
+
+4. **Three baseline states, not two.** An agent must distinguish them, so each is
+   an explicit, labeled state in the diff — never silently collapsed:
+   - **first run** — no prior `GRAPH.json` ("initial graph — no prior version").
+   - **uncomparable baseline** — the prior file exists but can't be parsed
+     (corrupt JSON) or carries an *unrecognized* `meta.schema_version`. This must
+     NOT masquerade as a first run; it is its own state ("prior graph could not
+     be read — not compared"). A newer graphlm reading an older, *known* version
+     still compares; only an unknown/future version is uncomparable.
+   - **normal** — both parsed; emit added/removed.
+   The `-o <new dir>` case (no baseline at the destination) falls under "first
+   run" for that destination, correctly.
+
+5. **`deterministic_edges` `None` vs `[]` is meaningful.** `None` means AST was
+   off (`--no-ast`) — "not compared"; `[]` means AST ran and found none. If
+   either side is `None`, the `deterministic_edges` dimension is reported "not
+   compared", never "all N removed" — so toggling `--no-ast` between runs does
+   not fabricate a mass deletion.
+
+6. **Artifact shape** — `GRAPH_DIFF.md` + `GRAPH_DIFF.json`, **no HTML** in cut
+   one (fewer moving parts; the ADR-001 directive already skips HTML). The JSON
+   carries its **own** `diff_schema_version` (independent of the graph's), the
+   added/removed lists per dimension, the baseline-state label, and a header with
+   the **SHA range** (`old meta.commit_sha` → `new meta.commit_sha`). When either
+   side's `commit_sha` is `null` (non-git, or an old graph), the header says so
+   ("unknown → `<sha8>`") rather than omitting the range. It follows the existing
+   `*_suffix` convention (default suffix `GRAPH` → `GRAPH_DIFF`; a custom
+   `--json-suffix graph` yields `graph_DIFF`).
+
+7. **On by default, opt-out via flag.** The plan's "still WRITE it" phrasing is
+   honored: a real run always writes `GRAPH_DIFF.*` (including the first-run
+   marker), with a `--no-diff` / `include_diff=False` escape hatch mirroring
+   `--no-html`. On-by-default is the point — the diff is only useful if it is
+   always there to read.
+
+### Consequences
+
+- **`write_outputs` signature churns.** It returns a 3-tuple
+  (`md, json, html`) unpacked positionally at ~10 call sites (CLI + tests). Diff
+  paths are surfaced **without breaking that tuple** — e.g. appended as a 4th/5th
+  element only when diff is enabled would still break positional unpackers, so
+  instead the diff paths are returned via a small result object or a separate
+  accessor. The exact mechanism is an implementation choice for the build PR; the
+  constraint recorded here is: **do not silently change the arity the existing
+  callers unpack.** Prefer an additive, non-breaking surface.
+- graphlm now *reads* its own prior output on every run — the ADR-001 versioned
+  contract is load-bearing from here on. A future `CodebaseGraph` field change
+  must keep old graphs readable (already guaranteed by optional/defaulted fields)
+  **and** bump `meta.schema_version` if the *meaning* changes, so the
+  uncomparable-baseline path (decision 4) can trigger deliberately.
+- No new network, no new LLM call — the diff is pure local computation over two
+  already-materialized graphs.
+
+### Non-goals (locked — do not reopen when building)
+
+- Not a code diff. No rename-matching. No dirty-working-tree handling. graphlm
+  never declines to run. No "changed" bucket over free-text fields in cut one.
+
+---
+
 ## ADR-001 — Self-refreshing graph: provenance stamp + agent-scheduled refresh
 
 **Date:** 2026-08-30
@@ -91,10 +208,7 @@ and a directive that prompts regeneration when the code has changed.
   and does not write files (unchanged contract); the stamp is exercised on any
   real run and via the library `write()` path.
 
-### Fast-follow (separate ADR before building)
+### Fast-follow
 
-`GRAPH_DIFF.*` — a graph-vs-graph diff (not a code diff): read the prior
-`GRAPH.json` via the versioned model before overwriting, then report
-modules/edges/cycles/data-flows/entry-points added and removed. Identity keys
-per dimension *are* the diff's contract and must be chosen deliberately. Renames
-are remove + add for the first cut. Its artifact shape is its own design choice.
+`GRAPH_DIFF.*` — a graph-vs-graph diff (not a code diff). **Scoped in ADR-002
+(above) and tracked by #28**; design settled, building still gated.
