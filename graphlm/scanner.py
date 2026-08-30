@@ -523,7 +523,14 @@ def scan_project(
             return 2
         if "test" in name.split("/")[-1].lower().split(".")[0]:
             return 10
-        return 5
+        # Source code outranks non-source text (docs, data, configs not already
+        # prioritized above). Under a tight max_files cap, a doc-heavy repo (e.g.
+        # argus: 91 .md vs 135 .py) would otherwise let markdown crowd out the
+        # actual modules — starving the AST import graph, since edges only
+        # resolve between *scanned* files (#19). Source gets 5, everything else 8.
+        if Path(name).suffix in _SOURCE_EXTS:
+            return 5
+        return 8
 
     # Collect all text files, ranked
     all_files: list[tuple[int, Path]] = []
