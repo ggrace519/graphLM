@@ -30,6 +30,8 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Output files are `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` (were `graphs.md` / `graphs.json` / `graph.html`)
+- AST import parsing is on by default; pass `--no-ast` or `ast=False` to skip. The `--ast` flag is removed
 - `GraphResult.write()` now returns `tuple[Path, Path, Path | None]` (md, json, html_or_none) instead of `tuple[Path, Path]`
 - `write_outputs()` now optionally writes HTML alongside Markdown and JSON
 

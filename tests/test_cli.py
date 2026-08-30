@@ -68,12 +68,24 @@ class TestCLI:
         )
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
-        assert not (tmp_path / "graph.html").exists()
-        assert not (tmp_path / "graphs.md").exists()
-        assert not (tmp_path / "graphs.json").exists()
+        assert not (tmp_path / "GRAPH.html").exists()
+        assert not (tmp_path / "GRAPH.md").exists()
+        assert not (tmp_path / "GRAPH.json").exists()
 
     def test_dry_run_ast_cyclic_project(self):
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
-        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--ast"])
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run"])
+        assert result.exit_code == 0
+        assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
+
+    def test_help_lists_no_ast(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--no-ast" in result.stdout
+        assert "--ast" not in result.stdout.replace("--no-ast", "")
+
+    def test_dry_run_no_ast(self):
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--no-ast"])
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr

@@ -11,10 +11,10 @@ The visualization initializes on page load: zoom/pan, node search, and theme tog
 
 ```bash
 graphlm /path/to/project -o ./output
-# Open output/graph.html in a browser
+# Open output/GRAPH.html in a browser
 ```
 
-Pass `--no-html` to skip writing `graph.html`.
+Pass `--no-html` to skip writing `GRAPH.html`.
 
 ## Status
 

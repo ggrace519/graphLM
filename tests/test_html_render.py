@@ -439,7 +439,7 @@ class TestWriteOutputsWithHtml:
             assert json_path.exists()
             assert html_path is not None
             assert html_path.exists()
-            assert html_path.name == "graph.html"
+            assert html_path.name == "GRAPH.html"
             assert html_path.read_text(encoding="utf-8").startswith("<!DOCTYPE")
 
     def test_no_html_when_disabled(self):

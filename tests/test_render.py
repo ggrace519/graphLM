@@ -162,8 +162,9 @@ class TestWriteOutputs:
             assert json_path.exists()
             assert html_path is not None
             assert html_path.exists()
-            assert md_path.name.endswith(".md")
-            assert json_path.name.endswith(".json")
+            assert md_path.name == "GRAPH.md"
+            assert json_path.name == "GRAPH.json"
+            assert html_path.name == "GRAPH.html"
 
     def test_no_html_when_disabled(self):
         graph = CodebaseGraph(directory_tree="root/\n")

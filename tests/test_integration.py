@@ -263,7 +263,7 @@ class TestFullPipeline:
     def test_ast_dry_run_attaches_edges_and_cycles(self):
         """ast=True dry-run keeps parser edges and detects the fixture cycle."""
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
-        result = generate_graph(cyclic_project, dry_run=True, ast=True)
+        result = generate_graph(cyclic_project, dry_run=True)
 
         assert result.graph.deterministic_edges is not None
         assert len(result.graph.deterministic_edges) > 0
@@ -277,7 +277,7 @@ class TestFullPipeline:
             assert rel in cycle_nodes or any(n.endswith(rel) for n in cycle_nodes)
 
     def test_include_html_false_skips_html(self, httpx_mock, small_project, tmp_path):
-        """generate_graph with include_html=False must not write graph.html."""
+        """generate_graph with include_html=False must not write GRAPH.html."""
         _mock_pass1_response(httpx_mock, ["main.py", "mylib/helpers.py"])
         _mock_pass2_response(httpx_mock, _make_graph())
 
@@ -290,9 +290,9 @@ class TestFullPipeline:
             include_html=False,
         )
 
-        assert (tmp_path / "graphs.md").exists()
-        assert (tmp_path / "graphs.json").exists()
-        assert not (tmp_path / "graph.html").exists()
+        assert (tmp_path / "GRAPH.md").exists()
+        assert (tmp_path / "GRAPH.json").exists()
+        assert not (tmp_path / "GRAPH.html").exists()
 
     def test_ast_full_pipeline_attaches_deterministic_edges(self, httpx_mock):
         """Mocked pipeline with ast=True attaches parser edges to the graph."""
@@ -307,10 +307,13 @@ class TestFullPipeline:
             base_url="http://test.local/v1",
             api_key="test-key",
             model="test-model",
-            ast=True,
         )
 
         assert result.graph.deterministic_edges is not None
+
+    def test_ast_false_skips_deterministic_edges(self, small_project):
+        result = generate_graph(small_project, dry_run=True, ast=False)
+        assert result.graph.deterministic_edges is None
 
     def test_write_accepts_str_and_returns_three_paths(self, small_project, tmp_path):
         """GraphResult.write accepts str paths and unpacks to md, json, html."""
@@ -322,7 +325,10 @@ class TestFullPipeline:
         assert html_path.exists()
         _, _, no_html = result.write(str(tmp_path / "plain"), include_html=False)
         assert no_html is None
-        assert not (tmp_path / "plain" / "graph.html").exists()
+        assert md_path.name == "GRAPH.md"
+        assert json_path.name == "GRAPH.json"
+        assert html_path.name == "GRAPH.html"
+        assert not (tmp_path / "plain" / "GRAPH.html").exists()
 
     def test_show_cycles_false_leaves_cycles_empty(self):
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
