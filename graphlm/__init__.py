@@ -76,6 +76,7 @@ def generate_graph(
     exclude_patterns: tuple[str, ...] = (),
     dry_run: bool = False,
     redact_secrets: bool = True,
+    ast: bool = False,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
