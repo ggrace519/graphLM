@@ -10,8 +10,8 @@ The visualization initializes on page load: zoom/pan, node search, and theme tog
 ## How to try
 
 ```bash
-graphlm /path/to/project -o ./output
-# Open output/GRAPH.html in a browser
+graphlm /path/to/project
+# Open /path/to/project/GRAPH.html in a browser
 ```
 
 Pass `--no-html` to skip writing `GRAPH.html`.

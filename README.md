@@ -35,7 +35,10 @@ uv pip install -e .
 ### CLI
 
 ```bash
-# Analyze a project and write output files
+# Analyze a project; writes GRAPH.md, GRAPH.json, GRAPH.html into that project
+graphlm /path/to/project
+
+# Write to a different directory
 graphlm /path/to/project -o ./output
 
 # Dry run — see context stats without calling the LLM
@@ -116,7 +119,7 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 
 | Flag | Description | Default |
 |---|---|---|
-| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | Current directory |
+| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | The scanned project |
 | `-b, --base-url` | LLM API base URL | `GRAPHLM_BASE_URL` env var |
 | `-k, --api-key` | LLM API key | `GRAPHLM_API_KEY` env var |
 | `-m, --model` | Model name | `GRAPHLM_MODEL` env var |

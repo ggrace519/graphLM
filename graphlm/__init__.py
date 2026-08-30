@@ -92,7 +92,8 @@ def generate_graph(
         base_url: LLM API base URL (falls back to GRAPHLM_BASE_URL env var).
         api_key: LLM API key (falls back to GRAPHLM_API_KEY env var).
         model: Model name (falls back to GRAPHLM_MODEL env var).
-        output_dir: Where to write .md and .json outputs (default: current dir).
+        output_dir: Where to write GRAPH.md/json/html. None means do not write
+            (the CLI defaults to the scanned project directory).
         max_file_chars: Maximum characters to read per file.
         max_files: Maximum files to scan initially.
         max_pass2_files: Maximum files to include in pass 2 context.

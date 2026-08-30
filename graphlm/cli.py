@@ -13,6 +13,13 @@ app = typer.Typer(
 )
 
 
+def output_destination(project_dir: Path, output_dir: str | None) -> Path:
+    """Directory for GRAPH.* files: -o if given, else the scanned project."""
+    if output_dir:
+        return Path(output_dir)
+    return Path(project_dir)
+
+
 @app.command()
 def main(
     project_dir: Path = typer.Argument(
@@ -23,7 +30,7 @@ def main(
         None,
         "-o",
         "--output-dir",
-        help="Output directory for generated files (default: current directory).",
+        help="Output directory for GRAPH.md/json/html (default: the scanned project).",
     ),
     base_url: str = typer.Option(
         None,
@@ -165,7 +172,7 @@ def main(
         )
         raise typer.Exit(0)
 
-    dest = Path(output_dir) if output_dir else Path.cwd()
+    dest = output_destination(project_dir, output_dir)
     md_path, json_path, html_path = result.write(dest, include_html=not no_html)
     typer.echo(f"Markdown:  {md_path}", err=True)
     typer.echo(f"JSON:      {json_path}", err=True)
