@@ -3,11 +3,48 @@
 from __future__ import annotations
 
 import json
-import textwrap
 from pathlib import Path
-from typing import Any
 
-from graphlm.models import CodebaseGraph
+from graphlm.models import CodebaseGraph, GraphMeta
+
+
+def _render_directive(meta: GraphMeta) -> str:
+    """Render the top-of-file refresh directive from a provenance stamp.
+
+    Two forms, chosen by whether a commit SHA was captured:
+
+    * *Git form* — names the commit and date and tells a reading agent to
+      compare the repo's current ``HEAD`` to it and regenerate if they differ.
+    * *Non-git form* — no SHA to compare, so it falls back to the agent's own
+      judgment of whether the code has changed.
+
+    Wording note: "generated against commit X", never "reflects X". The graph
+    is built from files on disk, which may include uncommitted changes, so a
+    graph can be SHA-fresh yet not match the working tree; the honest phrasing
+    avoids overclaiming. The command is ``graphlm .`` (run from the project
+    root) — deliberately relative, so a committed GRAPH.md carries no absolute
+    path and the line is copy-pasteable anywhere.
+    """
+    date = meta.created_at
+    if meta.commit_sha:
+        sha8 = meta.commit_sha[:8]
+        return (
+            "> **Provenance & refresh directive.** This codebase map was "
+            f"generated against commit `{sha8}` on {date}.\n"
+            "> Before relying on it, check whether the repo has moved on: "
+            "compare the current `git rev-parse HEAD` to that commit. If they "
+            "differ, the map may be out of date — regenerate it by running "
+            "`graphlm .` from the project root. This is advisory; the map is "
+            "best-effort, not guaranteed current."
+        )
+    return (
+        "> **Provenance & refresh directive.** This codebase map was generated "
+        f"on {date}. No git commit tracking was available, so staleness can't "
+        "be checked automatically.\n"
+        "> Regenerate it by running `graphlm .` from the project root whenever "
+        "you believe the code has changed. This is advisory; the map is "
+        "best-effort, not guaranteed current."
+    )
 
 
 def _render_html(graph: CodebaseGraph) -> str:
@@ -19,6 +56,13 @@ def _render_html(graph: CodebaseGraph) -> str:
 def render_markdown(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a Markdown document."""
     lines: list[str] = []
+
+    # Refresh directive (rendered from the provenance stamp, when present). Sits
+    # above the heading so a reading agent meets it first. Omitted entirely when
+    # there is no stamp (older format or a library caller that never set meta).
+    if graph.meta is not None:
+        lines.append(_render_directive(graph.meta))
+        lines.append("")
 
     # Header
     lines.append("# Codebase Graph\n")
@@ -142,9 +186,20 @@ def render_markdown(graph: CodebaseGraph) -> str:
 
 
 def render_json(graph: CodebaseGraph) -> bytes:
-    """Serialize a CodebaseGraph to JSON bytes."""
+    """Serialize a CodebaseGraph to JSON bytes.
+
+    ``exclude_none=True`` keeps the LLM-facing fields tidy (e.g. a null
+    ``database_schema`` stays out), but it would also silently drop
+    ``meta.commit_sha`` when null — making a non-git graph indistinguishable
+    from an old, meta-less one in the artifact we treat as authoritative. So
+    ``meta`` is re-serialized *with* its nulls and spliced back in, keeping
+    ``commit_sha: null`` explicit while the rest of the graph stays pruned.
+    """
+    data = graph.model_dump(exclude_none=True, by_alias=True)
+    if graph.meta is not None:
+        data["meta"] = graph.meta.model_dump(by_alias=True)
     return json.dumps(
-        graph.model_dump(exclude_none=True, by_alias=True),
+        data,
         indent=2,
         ensure_ascii=False,
     ).encode("utf-8")

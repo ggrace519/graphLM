@@ -143,3 +143,30 @@ class TestCodebaseGraph:
         parsed = CodebaseGraph.model_validate_json(json_str)
         assert len(parsed.import_edges) == 1
         assert parsed.import_edges[0].from_path == "a.py"
+
+
+class TestGraphMeta:
+    def test_defaults_and_optional_sha(self):
+        from graphlm.models import GRAPH_META_SCHEMA_VERSION, GraphMeta
+
+        m = GraphMeta(created_at="2026-08-30T00:00:00Z")
+        assert m.commit_sha is None
+        assert m.graphlm_version is None
+        assert m.schema_version == GRAPH_META_SCHEMA_VERSION
+
+    def test_codebasegraph_meta_defaults_none(self):
+        graph = CodebaseGraph(directory_tree="root/")
+        assert graph.meta is None
+
+    def test_meta_round_trips(self):
+        from graphlm.models import GraphMeta
+
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            meta=GraphMeta(
+                created_at="2026-08-30T00:00:00Z", commit_sha="a" * 40
+            ),
+        )
+        parsed = CodebaseGraph.model_validate_json(graph.model_dump_json())
+        assert parsed.meta is not None
+        assert parsed.meta.commit_sha == "a" * 40

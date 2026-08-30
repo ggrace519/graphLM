@@ -82,9 +82,11 @@ def main(
         None,
         "--max-output-tokens",
         help="Max tokens the model may emit for the graph "
-        "(default: GRAPHLM_MAX_OUTPUT_TOKENS env var, else 32000). Raise it if a "
-        "large project's graph is truncated; it also reserves that much of the "
-        "pass-2 context for the response.",
+        "(default: GRAPHLM_MAX_OUTPUT_TOKENS env var, else 128000). A ceiling, "
+        "not a reservation — it is NOT taken out of the input budget "
+        "(--max-context), since input and output ceilings are independent on "
+        "the target endpoint (#25/#26). Lower it only on an endpoint that "
+        "bounds prompt+generation together (e.g. vLLM max_model_len).",
     ),
     no_tests: bool = typer.Option(
         False,

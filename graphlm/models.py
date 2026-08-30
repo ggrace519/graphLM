@@ -121,6 +121,44 @@ class Cycle:
     risk_score: float
 
 
+# Bump when the persisted metadata shape changes. graphlm reads its own prior
+# GRAPH.json (for the fast-follow GRAPH_DIFF), so the stamp is a versioned
+# *input* contract, not just output — this integer lets a future format change
+# be detected instead of silently misparsed. See DECISIONS.md ADR on the
+# self-refreshing stamp.
+GRAPH_META_SCHEMA_VERSION = 1
+
+
+class GraphMeta(BaseModel):
+    """Provenance stamp: when the graph was generated and against which commit.
+
+    Filled locally by ``generate_graph`` after pass 2 (never emitted by the
+    LLM, like ``directory_tree`` and ``deterministic_edges``). The
+    ``GRAPH.md`` refresh directive is *rendered from* this, so the two cannot
+    drift. ``commit_sha`` is ``None`` for a non-git project — that is a normal
+    state, not an error, and is preserved (not dropped) in ``GRAPH.json`` so a
+    reader can tell "no git tracking" from "old format, field absent".
+    """
+
+    schema_version: int = Field(
+        default=GRAPH_META_SCHEMA_VERSION,
+        description="Metadata format version (for reading prior graphs).",
+    )
+    created_at: str = Field(
+        description="ISO 8601 UTC timestamp when the graph was generated. "
+        "Human context only — never the staleness trigger."
+    )
+    commit_sha: Optional[str] = Field(
+        default=None,
+        description="Git HEAD commit SHA the graph was generated against, or "
+        "null if the project is not a git repo (or has no commits). Staleness "
+        "= this differs from the repo's current HEAD.",
+    )
+    graphlm_version: Optional[str] = Field(
+        default=None, description="graphlm package version that generated the graph."
+    )
+
+
 class CodebaseGraph(BaseModel):
     """The complete codebase graph as produced by the LLM."""
 
@@ -161,4 +199,11 @@ class CodebaseGraph(BaseModel):
     import_cycles: list[Cycle] = Field(
         default_factory=list,
         description="Import cycles (strongly connected components) with risk scores",
+    )
+    meta: Optional[GraphMeta] = Field(
+        default=None,
+        description="Provenance stamp (generation time, commit SHA, version). "
+        "Filled locally, not by the LLM. Null on graphs built without it "
+        "(older format or library callers) — the renderer omits the refresh "
+        "directive in that case.",
     )
