@@ -1,9 +1,10 @@
 """Tests for the render module."""
 
+import copy
+import json
+import pickle
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-import json
 
 from graphlm.models import (
     ArchitectureNote,
@@ -17,7 +18,7 @@ from graphlm.models import (
     QuickReference,
     TestMapping,
 )
-from graphlm.render import render_json, render_markdown, write_outputs
+from graphlm.render import WriteResult, render_json, render_markdown, write_outputs
 
 
 class TestRenderMarkdown:
@@ -190,11 +191,56 @@ class TestWriteOutputs:
     def test_custom_suffixes(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
-            md_path, json_path, html_path = write_outputs(
+            result = write_outputs(
                 graph, Path(tmpdir), md_suffix="graph", json_suffix="graph"
             )
+            md_path, json_path, html_path = result
             assert md_path.name == "graph.md"
             assert json_path.name == "graph.json"
+            assert result.diff_md is not None
+            assert result.diff_md.name == "graph_DIFF.md"
+            assert result.diff_md.exists()
+            assert result.diff_json is not None
+            assert result.diff_json.name == "graph_DIFF.json"
+            assert result.diff_json.exists()
+
+    def test_custom_diff_suffix_overrides_json_suffix(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            result = write_outputs(
+                graph,
+                Path(tmpdir),
+                json_suffix="graph",
+                diff_suffix="custom",
+            )
+            assert result.diff_md is not None
+            assert result.diff_md.name == "custom_DIFF.md"
+            assert result.diff_md.exists()
+            assert result.diff_json is not None
+            assert result.diff_json.name == "custom_DIFF.json"
+            assert result.diff_json.exists()
+
+    def test_write_result_preserves_diff_paths_across_round_trips(self):
+        result = WriteResult(
+            Path("GRAPH.md"),
+            Path("GRAPH.json"),
+            Path("GRAPH.html"),
+            diff_md=Path("GRAPH_DIFF.md"),
+            diff_json=Path("GRAPH_DIFF.json"),
+        )
+
+        round_trips = (
+            copy.copy(result),
+            copy.deepcopy(result),
+            pickle.loads(pickle.dumps(result)),
+        )
+        for round_trip in round_trips:
+            assert tuple(round_trip) == tuple(result)
+            assert round_trip.diff_md == result.diff_md
+            assert round_trip.diff_json == result.diff_json
+            assert len(round_trip) == 3
+            md_path, json_path, html_path = round_trip
+            assert (md_path, json_path, html_path) == tuple(result)
 
     def test_meta_bearing_graph_renders_html_default_path(self):
         # The CLI default is html=True, so the real path renders a meta-bearing

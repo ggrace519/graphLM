@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from graphlm import GraphResult
 from graphlm.cli import app, output_destination
 from graphlm.models import CodebaseGraph
+from graphlm.render import WriteResult
 
 runner = CliRunner()
 
@@ -96,6 +97,11 @@ class TestCLI:
         assert "--no-ast" in help_text
         assert "--ast" not in help_text.replace("--no-ast", "")
 
+    def test_help_lists_no_diff(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--no-diff" in _plain(result.stdout)
+
     def test_dry_run_no_ast(self):
         cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
         result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--no-ast"])
@@ -116,13 +122,13 @@ class TestCLI:
         monkeypatch.chdir(cwd)
         recorded: dict[str, Path] = {}
 
-        def fake_write(self, output_dir, *, include_html=True):
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
             dest = Path(output_dir).resolve()
             recorded["dest"] = dest
             md = dest / "GRAPH.md"
             js = dest / "GRAPH.json"
             html = dest / "GRAPH.html" if include_html else None
-            return md, js, html
+            return WriteResult(md, js, html)
 
         def fake_generate_graph(**_kwargs):
             return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
@@ -146,12 +152,12 @@ class TestCLI:
         monkeypatch.chdir(cwd)
         recorded: dict[str, Path] = {}
 
-        def fake_write(self, output_dir, *, include_html=True):
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
             dest = Path(output_dir).resolve()
             recorded["dest"] = dest
             md = dest / "GRAPH.md"
             js = dest / "GRAPH.json"
-            return md, js, None
+            return WriteResult(md, js, None)
 
         def fake_generate_graph(**_kwargs):
             return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
@@ -164,3 +170,63 @@ class TestCLI:
 
         assert result.exit_code == 0, result.stdout + result.stderr
         assert recorded["dest"] == out.resolve()
+
+    def test_cli_reports_diff_outputs(self, small_project, tmp_path):
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+            dest = Path(output_dir)
+            return WriteResult(
+                dest / "GRAPH.md",
+                dest / "GRAPH.json",
+                dest / "GRAPH.html",
+                diff_md=dest / "GRAPH_DIFF.md",
+                diff_json=dest / "GRAPH_DIFF.json",
+            )
+
+        def fake_generate_graph(**_kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(
+                app, [str(small_project), "-o", str(tmp_path / "out")]
+            )
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert "Diff (md):" in result.stderr
+        assert "Diff (json):" in result.stderr
+        # Labels alone would let hard-coded or incorrect output paths pass.
+        assert str(tmp_path / "out" / "GRAPH_DIFF.md") in result.stderr
+        assert str(tmp_path / "out" / "GRAPH_DIFF.json") in result.stderr
+
+    def test_cli_no_diff_disables_diff_and_omits_output_lines(
+        self, small_project, tmp_path
+    ):
+        recorded: dict[str, bool] = {}
+
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+            recorded["write_include_diff"] = include_diff
+            dest = Path(output_dir)
+            return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
+
+        def fake_generate_graph(**kwargs):
+            recorded["generate_include_diff"] = kwargs["include_diff"]
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(
+                app,
+                [str(small_project), "--no-diff", "-o", str(tmp_path / "out")],
+            )
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert recorded == {
+            "generate_include_diff": False,
+            "write_include_diff": False,
+        }
+        assert "Diff (md):" not in result.stderr
+        assert "Diff (json):" not in result.stderr

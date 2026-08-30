@@ -36,7 +36,7 @@ from graphlm.models import ArchitectureNote, GraphMeta, ImportEdge
 from graphlm.parser import build_dependency_graph
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.provenance import git_commit_sha, graphlm_version, now_utc_iso
-from graphlm.render import write_outputs
+from graphlm.render import WriteResult, write_outputs
 from graphlm.scanner import ScanResult, scan_project
 
 
@@ -69,10 +69,22 @@ class GraphResult:
         self.files_analyzed = files_analyzed
 
     def write(
-        self, output_dir: str | Path, *, include_html: bool = True
-    ) -> tuple[Path, Path, Path | None]:
-        """Write .md, .json (and optionally .html) to output_dir. Return all paths."""
-        return write_outputs(self.graph, Path(output_dir), html=include_html)
+        self,
+        output_dir: str | Path,
+        *,
+        include_html: bool = True,
+        include_diff: bool = True,
+    ) -> WriteResult:
+        """Write .md, .json (and optionally .html + the diff) to output_dir.
+
+        Returns a ``WriteResult`` — the ``(md, json, html)`` path tuple, with
+        ``.diff_md`` / ``.diff_json`` attributes (``None`` when
+        ``include_diff=False``). The diff (``GRAPH_DIFF.*``) reads the prior
+        ``GRAPH.json`` in ``output_dir`` before overwriting it; see ADR-002.
+        """
+        return write_outputs(
+            self.graph, Path(output_dir), html=include_html, diff=include_diff
+        )
 
 
 def generate_graph(
@@ -96,6 +108,7 @@ def generate_graph(
     show_cycles: bool = True,
     cycle_threshold: float = 0.0,
     include_html: bool = True,
+    include_diff: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -135,6 +148,10 @@ def generate_graph(
             attach those edges to the graph, and pass them to the LLM as
             ground truth. Pass False / --no-ast to skip.
         include_html: If output_dir is set, whether to also write GRAPH.html.
+        include_diff: If output_dir is set, whether to also write the
+            graph-vs-graph diff (GRAPH_DIFF.md/json) against the prior
+            GRAPH.json in that directory. On by default; see ADR-002. Never
+            reached on a --dry-run (the dry-run branch returns before any write).
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -332,7 +349,7 @@ def generate_graph(
 
     # Write outputs if output_dir specified
     if output_dir is not None:
-        write_outputs(graph, Path(output_dir), html=include_html)
+        write_outputs(graph, Path(output_dir), html=include_html, diff=include_diff)
 
     return GraphResult(
         graph=graph,

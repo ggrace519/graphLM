@@ -205,6 +205,55 @@ def render_json(graph: CodebaseGraph) -> bytes:
     ).encode("utf-8")
 
 
+class WriteResult(tuple):
+    """The (md, json, html) path tuple, with diff paths as extra attributes.
+
+    Returned by ``write_outputs``. It *is* the 3-tuple existing callers unpack —
+    ``md, json_, html = write_outputs(...)`` still works — so the diff feature
+    did not churn the arity every call site depends on (ADR-002 consequence:
+    "do not silently change the arity the existing callers unpack"). The diff
+    paths are read off the attributes instead:
+
+        result = write_outputs(...)
+        result.diff_md    # Path | None
+        result.diff_json  # Path | None
+    """
+
+    diff_md: Path | None
+    diff_json: Path | None
+
+    def __new__(
+        cls,
+        md: Path | tuple,
+        json_: Path | None = None,
+        html: Path | None = None,
+        *,
+        diff_md: Path | None = None,
+        diff_json: Path | None = None,
+    ) -> "WriteResult":
+        # Accept EITHER three positional path args (the normal construction) OR a
+        # single 3-sequence. copy/deepcopy/pickle reconstruct a tuple subclass by
+        # calling cls(<the 3-tuple>) — one iterable arg — so without this branch
+        # every copy/pickle of a WriteResult would raise "missing 2 required
+        # positional arguments". __getnewargs_ex__ below carries the diff attrs
+        # through that round-trip.
+        if json_ is None and html is None and isinstance(md, (tuple, list)):
+            md, json_, html = md  # type: ignore[misc]
+        self = super().__new__(cls, (md, json_, html))
+        self.diff_md = diff_md
+        self.diff_json = diff_json
+        return self
+
+    def __getnewargs_ex__(self) -> tuple[tuple, dict]:
+        """Preserve the diff attributes across copy / deepcopy / pickle.
+
+        The default ``tuple.__getnewargs__`` returns only the three elements, so
+        a reconstructed ``WriteResult`` would lose ``diff_md`` / ``diff_json``.
+        This returns them as keyword args to ``__new__``.
+        """
+        return (tuple(self), {"diff_md": self.diff_md, "diff_json": self.diff_json})
+
+
 def write_outputs(
     graph: CodebaseGraph,
     output_dir: Path,
@@ -213,17 +262,46 @@ def write_outputs(
     json_suffix: str = "GRAPH",
     html: bool = True,
     html_suffix: str = "GRAPH",
-) -> tuple[Path, Path, Path | None]:
-    """Write Markdown, JSON, and optionally HTML outputs to output_dir.
+    diff: bool = True,
+    diff_suffix: str | None = None,
+) -> WriteResult:
+    """Write Markdown, JSON, optionally HTML, and (by default) the diff to output_dir.
+
+    The graph-vs-graph diff (``GRAPH_DIFF.md`` + ``.json``) reads the *prior*
+    ``{json_suffix}.json`` in ``output_dir`` — before it is overwritten — and
+    reports what changed in the map (ADR-002). ``diff=False`` skips it.
+
+    ``diff_suffix`` defaults to **following ``json_suffix``** (ADR-002 decision
+    6: the diff tracks the graph's suffix, so ``json_suffix="map"`` yields
+    ``map_DIFF.*`` — the same base the baseline was read from). Pass an explicit
+    ``diff_suffix`` to override.
 
     Returns:
-        Tuple of (md_path, json_path, html_path_or_None).
+        A ``WriteResult`` — the ``(md_path, json_path, html_path_or_None)``
+        tuple, with ``.diff_md`` / ``.diff_json`` attributes (``None`` when
+        ``diff=False``).
     """
+    if diff_suffix is None:
+        diff_suffix = json_suffix
+    from graphlm.diff import (
+        compute_diff,
+        load_baseline,
+        render_diff_json,
+        render_diff_markdown,
+    )
+
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = output_dir / f"{md_suffix}.md"
     json_path = output_dir / f"{json_suffix}.json"
+
+    # Read the prior graph BEFORE overwriting GRAPH.json (ADR-002 decision 1 —
+    # ordering: baseline read must precede the write).
+    old_graph = None
+    baseline_state = None
+    if diff:
+        old_graph, baseline_state = load_baseline(json_path)
 
     md_path.write_text(render_markdown(graph), encoding="utf-8")
     json_path.write_bytes(render_json(graph))
@@ -233,4 +311,20 @@ def write_outputs(
         html_path = output_dir / f"{html_suffix}.html"
         html_path.write_text(_render_html(graph), encoding="utf-8")
 
-    return md_path, json_path, html_path
+    diff_md_path: Path | None = None
+    diff_json_path: Path | None = None
+    if diff:
+        assert baseline_state is not None
+        graph_diff = compute_diff(old_graph, graph, baseline_state)
+        diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
+        diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
+        diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
+        diff_json_path.write_bytes(render_diff_json(graph_diff))
+
+    return WriteResult(
+        md_path,
+        json_path,
+        html_path,
+        diff_md=diff_md_path,
+        diff_json=diff_json_path,
+    )

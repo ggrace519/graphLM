@@ -7,7 +7,7 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 ## ADR-002 — `GRAPH_DIFF.*`: graph-vs-graph diff artifact
 
 **Date:** 2026-08-30
-**Status:** Accepted (design only — building is gated on this ADR; tracked by #28)
+**Status:** Accepted — implemented (`graphlm/diff.py`, `write_outputs`, `--no-diff`; #28)
 **Context / plan:** `docs/plans/self-refreshing-graph.md` (Fast-follow section)
 **Depends on:** ADR-001 (the versioned `meta` stamp is the input contract this reads)
 
@@ -124,7 +124,7 @@ This ADR settles the decisions the plan left open. Building (a `diff.py`, tests,
 ## ADR-001 — Self-refreshing graph: provenance stamp + agent-scheduled refresh
 
 **Date:** 2026-08-30
-**Status:** Accepted (Release one implemented; `GRAPH_DIFF.*` is a fast-follow)
+**Status:** Accepted (Release one implemented; the `GRAPH_DIFF.*` fast-follow is now implemented — ADR-002, #28)
 **Context / plan:** `docs/plans/self-refreshing-graph.md`
 
 ### Context
@@ -211,4 +211,5 @@ and a directive that prompts regeneration when the code has changed.
 ### Fast-follow
 
 `GRAPH_DIFF.*` — a graph-vs-graph diff (not a code diff). **Scoped in ADR-002
-(above) and tracked by #28**; design settled, building still gated.
+(above) and tracked by #28**; design settled and now implemented
+(`graphlm/diff.py`).
