@@ -72,6 +72,8 @@ def generate_graph(
     max_files: int = 200,
     max_pass2_files: int = 80,
     max_context: int | None = None,
+    timeout: float | None = None,
+    max_output_tokens: int | None = None,
     include_tests: bool = True,
     exclude_patterns: tuple[str, ...] = (),
     dry_run: bool = False,
@@ -100,6 +102,15 @@ def generate_graph(
         max_context: Maximum context window in tokens. If None, falls back to
             the GRAPHLM_MAX_CONTEXT env var, then to 120000. An explicit value
             (e.g. from the CLI --max-context flag) takes precedence over both.
+        timeout: LLM request timeout in seconds. If None, falls back to the
+            GRAPHLM_TIMEOUT env var, then to 300. An explicit value (the CLI
+            --timeout flag) takes precedence. Pass 2 is streamed, so a large
+            project's generation can legitimately take minutes (#18).
+        max_output_tokens: Max tokens the model may emit for the graph. If None,
+            falls back to GRAPHLM_MAX_OUTPUT_TOKENS env, then LLM_MAX_OUTPUT_TOKENS
+            (32000). This is BOTH the max_tokens requested and the pass-2 output
+            reserve, kept in lock-step (#17/#18). Raise it if a large project's
+            graph truncates (surfaced as a clear GraphLLErrorTruncated).
         include_tests: Whether to include test files in the analysis.
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
@@ -131,6 +142,20 @@ def generate_graph(
 
         max_context = int(os.environ.get("GRAPHLM_MAX_CONTEXT", "120000"))
 
+    # Resolve the output-token reserve: explicit arg > GRAPHLM_MAX_OUTPUT_TOKENS
+    # env > LLM_MAX_OUTPUT_TOKENS default. Needed even in dry-run so the pass-2
+    # estimate reserves the same budget the real call would request. This value
+    # is passed to BOTH assemble_pass2_prompt (the input reserve) and call_llm
+    # (the max_tokens requested), keeping the two in lock-step (#17/#18).
+    if max_output_tokens is None:
+        import os
+
+        from graphlm.llm import LLM_MAX_OUTPUT_TOKENS
+
+        max_output_tokens = int(
+            os.environ.get("GRAPHLM_MAX_OUTPUT_TOKENS", str(LLM_MAX_OUTPUT_TOKENS))
+        )
+
     # Resolve configuration (not needed for dry run)
     if dry_run:
         settings = None
@@ -146,6 +171,14 @@ def generate_graph(
             settings = Settings.from_env()
         except ValueError as e:
             raise ValueError(str(e)) from None
+
+    # Resolve the request timeout: explicit arg > (settings, which already
+    # carries GRAPHLM_TIMEOUT env > default when built via from_env). When
+    # settings is built from explicit base_url/api_key/model it uses the default
+    # timeout; an explicit `timeout` arg (the CLI --timeout flag) overrides.
+    resolved_timeout = timeout if timeout is not None else (
+        settings.timeout if settings is not None else None
+    )
 
     # Phase 1: Scan the project
     scan = scan_project(
@@ -178,6 +211,7 @@ def generate_graph(
             pass2_files,
             max_context=max_context,
             deterministic_edges=deterministic_edges,
+            max_output_tokens=max_output_tokens,
         )
         graph = CodebaseGraph(
             directory_tree=scan.tree,
@@ -215,6 +249,7 @@ def generate_graph(
         model=settings.model,
         system_prompt=SYSTEM_PROMPT,
         user_prompt=pass1_prompt,
+        timeout=resolved_timeout,
     )
     pass1_result_json = cast(str, pass1_result_json)
 
@@ -237,6 +272,7 @@ def generate_graph(
         pass2_files,
         max_context=max_context,
         deterministic_edges=deterministic_edges,
+        max_output_tokens=max_output_tokens,
     )
 
     # Phase 2: LLM produces the final graph
@@ -248,8 +284,15 @@ def generate_graph(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=pass2_prompt,
         response_format=CodebaseGraph,
+        timeout=resolved_timeout,
+        max_output_tokens=max_output_tokens,
     )
     graph = cast(CodebaseGraph, graph_result)
+    # Fill the tree locally rather than making the model echo it back — the echo
+    # alone can exceed the output-token ceiling on a large repo (argus's tree is
+    # ~20k output tokens), truncating the graph before any module is described
+    # (#18). The pass-2 prompt now asks the model for an empty directory_tree.
+    graph.directory_tree = scan.tree
     graph.deterministic_edges = deterministic_edges
     if show_cycles:
         cycle_edges = (

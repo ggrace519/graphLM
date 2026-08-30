@@ -71,6 +71,21 @@ def main(
         help="Maximum context window in tokens "
         "(default: GRAPHLM_MAX_CONTEXT env var, else 120000).",
     ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help="LLM request timeout in seconds "
+        "(default: GRAPHLM_TIMEOUT env var, else 300). Pass 2 is streamed, so "
+        "a large project's generation can take minutes.",
+    ),
+    max_output_tokens: int | None = typer.Option(
+        None,
+        "--max-output-tokens",
+        help="Max tokens the model may emit for the graph "
+        "(default: GRAPHLM_MAX_OUTPUT_TOKENS env var, else 32000). Raise it if a "
+        "large project's graph is truncated; it also reserves that much of the "
+        "pass-2 context for the response.",
+    ),
     no_tests: bool = typer.Option(
         False,
         "--no-tests",
@@ -133,6 +148,8 @@ def main(
             max_files=max_files,
             max_pass2_files=max_pass2_files,
             max_context=max_context,
+            timeout=timeout,
+            max_output_tokens=max_output_tokens,
             include_tests=not no_tests,
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
