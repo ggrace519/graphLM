@@ -128,6 +128,54 @@ class TestScanProject:
         with pytest.raises(FileNotFoundError):
             scan_project(Path("/nonexistent/path/xyz"))
 
+    def test_external_symlinked_file_absent_from_tree(self, tmp_path):
+        # A symlinked FILE pointing outside the project must not appear in the
+        # directory tree (previously only symlinked dirs were guarded).
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "leak.py"
+        secret.write_text("SECRET = 'do-not-scan'\n")
+
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "main.py").write_text("print('hi')\n")
+        link = project / "linked.py"
+        try:
+            link.symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+
+        result = scan_project(project)
+        assert "linked.py" not in result.tree
+        paths = [f.rel_path for f in result.file_fragments]
+        assert "linked.py" not in paths
+        assert "main.py" in paths
+
+    def test_external_symlink_does_not_consume_max_files_slot(self, tmp_path):
+        # An escaping symlink must be dropped BEFORE the max_files slice, or it
+        # evicts a real file. Name it so it sorts first (aaa_) to prove the slot
+        # isn't consumed even in the worst-case ordering.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "leak.py").write_text("SECRET = 1\n")
+
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "zzz_a.py").write_text("a = 1\n")
+        (project / "zzz_b.py").write_text("b = 1\n")
+        try:
+            (project / "aaa_linked.py").symlink_to(outside / "leak.py")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+
+        # With only 2 slots and the symlink sorting first, both real files must
+        # still be scanned — the symlink must not take a slot.
+        result = scan_project(project, max_files=2)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "zzz_a.py" in paths
+        assert "zzz_b.py" in paths
+        assert "aaa_linked.py" not in paths
+
 
 class TestIsSensitiveFile:
     def test_pem_files_are_sensitive(self):
@@ -159,6 +207,16 @@ class TestIsSensitiveFile:
 
     def test_env_example_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".env.example")) is False
+
+    def test_arbitrary_env_variant_is_sensitive(self):
+        # The old fixed allowlist missed unlisted variants like .env.qa / .env.test.
+        for name in (".env", ".env.qa", ".env.test", ".env.production", ".env.foo"):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_env_template_variants_are_not_sensitive(self):
+        # Non-secret templates must stay scannable.
+        for name in (".env.example", ".env.sample", ".env.template", ".env.dist"):
+            assert _is_sensitive_file(Path(name)) is False, name
 
     def test_gitignore_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".gitignore")) is False

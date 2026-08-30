@@ -38,7 +38,14 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
-- HTML visualization rendered a blank page: D3 `forceLink` threw on import/data-flow endpoints that had no node, and the simulation never ticked positions onto the SVG
+- Sensitive-file read gap: arbitrary `.env.<name>` files (e.g. `.env.qa`, `.env.test`) were scanned into LLM context because the sensitive-file check used a fixed allowlist. Any dotenv file is now treated as secret-bearing, except the non-secret templates `.env.example` / `.env.sample` / `.env.template` / `.env.dist` (#10)
+- `GRAPHLM_MAX_CONTEXT` had no effect: it was parsed into `Settings` but never read, so the pass-2 context budget was always 120000. The budget now resolves as `--max-context` flag > `GRAPHLM_MAX_CONTEXT` env var > 120000 (#11)
+- Pass-2 prompt could exceed `max_context`: only per-file admission respected the budget, while the AST-edge table was appended uncapped and the instruction block was never counted. Both fixed sections are now reserved up front, so the assembled prompt stays within the budget (#12). This also removes spurious truncation of files that would have fit
+- External symlinked *files* pointing outside the project were listed in the directory tree and consumed a `max_files` slot (only symlinked directories were guarded). Any symlink escaping the project is now skipped in the tree walk; file content was already blocked before reading
+
+### Changed
+
+- `--max-context` CLI flag now defaults to unset (falls back to `GRAPHLM_MAX_CONTEXT`, then 120000) instead of a hardcoded 120000, so the env var is honored
 - HTML threw `TypeError: e is not iterable` on load: D3 v7 `scaleOrdinal(null, palette)` iterates a null domain; use `scaleOrdinal(palette)` as the range
 - HTML visualization did not initialize: `initGraph` was never called on page load, and a recursive self-call could hang the page
 - `--ast` computed import edges then discarded them; cycle detection ran on LLM edges without SLOC-based risk scores

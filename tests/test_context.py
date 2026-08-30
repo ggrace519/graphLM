@@ -186,8 +186,14 @@ class TestMaxContext:
         from graphlm.scanner import scan_project
 
         scan = scan_project(large_project)
+        # 7000 tokens fits the high-priority files but forces truncation of the
+        # lower-priority ones (once the fixed output/tree/instruction reserves
+        # are accounted for). NB: this threshold is coupled to the size of the
+        # instruction block in _build_instruction_block() — if that block grows
+        # (e.g. a new CodebaseGraph field is documented), the budget that just
+        # forces partial truncation shifts and this number may need raising.
         prompt, tokens, truncated = assemble_pass2_prompt(
-            scan.tree, scan.file_fragments, max_context=12000
+            scan.tree, scan.file_fragments, max_context=7000
         )
         # High-priority files (config, __init__, main) should fit first
         # Lower-priority files (routes, services, migrations) get truncated
@@ -210,6 +216,33 @@ class TestMaxContext:
         )
         for path in truncated:
             assert f"File: {path}" not in prompt
+
+    def test_assembled_prompt_respects_budget_with_many_edges(self):
+        """The edge table and instruction block must not push the assembled
+        prompt past max_context (regression for the file-admission-only budget).
+        """
+        frags = [
+            FileFragment(f"src/mod{i}.py", "x" * 4000, estimate_tokens("x" * 4000))
+            for i in range(50)
+        ]
+        # A large AST-edge table — the block that used to be appended unbudgeted.
+        edges = [
+            ImportEdge(
+                from_path=f"src/mod{i}.py", to_path=f"src/mod{j}.py", kind="import"
+            )
+            for i in range(30)
+            for j in range(3)
+        ]
+        tree = "proj/\n" + "\n".join(f"  src/mod{i}.py" for i in range(50))
+
+        for max_context in (8000, 20000, 60000):
+            prompt, reported, truncated = assemble_pass2_prompt(
+                tree, frags, max_context=max_context, deterministic_edges=edges
+            )
+            # The whole assembled prompt (files + edges + instructions) must fit.
+            assert estimate_tokens(prompt) <= max_context, (
+                f"prompt overflowed at max_context={max_context}"
+            )
 
     def test_config_max_context_in_settings(self, monkeypatch):
         monkeypatch.setenv("GRAPHLM_BASE_URL", "http://test.local/v1")

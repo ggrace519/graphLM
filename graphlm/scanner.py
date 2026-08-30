@@ -111,6 +111,11 @@ _SECRET_NAME_PATTERNS = {
     "*auth*key*",
 }
 
+# Any dotenv-style file (.env, .env.<anything>) is treated as secret-bearing,
+# EXCEPT these deliberately-committed, non-secret template variants which are
+# scanned normally (they document required vars without holding real values).
+_ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
+
 # Source-code extensions that should NOT be excluded by name patterns
 # to avoid false positives (e.g. token.py, credentials.py).
 _SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp"}
@@ -182,6 +187,15 @@ def _is_sensitive_file(path: Path) -> bool:
     # Check full filename for non-dot-prefixed patterns like "env.production"
     if path.name.lower() in _SECRET_EXTS:
         return True
+
+    # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
+    # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
+    # arbitrary variants like .env.qa / .env.test; this catches them all.
+    name = path.name.lower()
+    if name == ".env" or name.startswith(".env."):
+        env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
+        if env_suffix not in _ENV_SAFE_SUFFIXES:
+            return True
 
     stem = path.stem.lower()
     # Only apply name-based patterns to non-source files
@@ -334,8 +348,11 @@ def scan_project(
                 skipped_count += 1
                 continue
 
-            # Skip symlink directories that point outside the project
-            if entry.is_symlink() and entry.is_dir():
+            # Skip any symlink (file or directory) that points outside the
+            # project — otherwise an external symlinked file is listed in the
+            # tree and consumes a max_files slot, even though its content is
+            # blocked later by the _path_is_inside check before reading.
+            if entry.is_symlink():
                 if not _path_is_inside(project_dir, entry):
                     skipped_count += 1
                     continue
@@ -431,6 +448,12 @@ def scan_project(
             rel = str(fpath.relative_to(project_dir))
 
             if _should_exclude(rel, all_exclude):
+                continue
+            # Drop symlinked files that point outside the project BEFORE ranking,
+            # so an escaping symlink never occupies a max_files candidate slot
+            # (it was previously only rejected at read time, after the slice).
+            if fpath.is_symlink() and not _path_is_inside(project_dir, fpath):
+                skipped_count += 1
                 continue
             if _is_binary(fpath):
                 continue

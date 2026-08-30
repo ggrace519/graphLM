@@ -126,7 +126,7 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `--max-files` | Maximum files to scan initially | 200 |
 | `--max-file-chars` | Maximum characters per file | 4000 |
 | `--max-pass2-files` | Max files in pass 2 context | 80 |
-| `--max-context` | Token budget for pass-2 context | 120000 |
+| `--max-context` | Token budget for pass-2 context | `GRAPHLM_MAX_CONTEXT` env var, else 120000 |
 | `--no-tests` | Exclude test files | Tests included by default |
 | `--exclude` | Exclude pattern (repeatable) | — |
 | `--no-redact` | Skip secret redaction | Redaction on |
