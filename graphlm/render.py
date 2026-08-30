@@ -1,4 +1,4 @@
-"""Output rendering — convert CodebaseGraph to Markdown and JSON."""
+"""Output rendering — convert CodebaseGraph to Markdown, JSON, and optionally HTML."""
 
 from __future__ import annotations
 
@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from graphlm.models import CodebaseGraph
+
+
+def _render_html(graph: CodebaseGraph) -> str:
+    """Render a CodebaseGraph as a self-contained HTML visualization."""
+    from graphlm.html_render import render_html as _render_html_impl
+    return _render_html_impl(graph)
 
 
 def render_markdown(graph: CodebaseGraph) -> str:
@@ -150,11 +156,13 @@ def write_outputs(
     *,
     md_suffix: str = "graphs",
     json_suffix: str = "graphs",
-) -> tuple[Path, Path]:
-    """Write Markdown and JSON outputs to output_dir.
+    html: bool = True,
+    html_suffix: str = "graph",
+) -> tuple[Path, Path, Path | None]:
+    """Write Markdown, JSON, and optionally HTML outputs to output_dir.
 
     Returns:
-        Tuple of (md_path, json_path).
+        Tuple of (md_path, json_path, html_path_or_None).
     """
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -165,4 +173,9 @@ def write_outputs(
     md_path.write_text(render_markdown(graph), encoding="utf-8")
     json_path.write_bytes(render_json(graph))
 
-    return md_path, json_path
+    html_path: Path | None = None
+    if html:
+        html_path = output_dir / f"{html_suffix}.html"
+        html_path.write_text(_render_html(graph), encoding="utf-8")
+
+    return md_path, json_path, html_path

@@ -83,6 +83,11 @@ def main(
         "--dry-run",
         help="Analyze and show context stats without calling the LLM.",
     ),
+    ast: bool = typer.Option(
+        False,
+        "--ast",
+        help="Use Tree-sitter AST parsing for deterministic import edges.",
+    ),
     no_html: bool = typer.Option(
         False,
         "--no-html",
@@ -124,6 +129,7 @@ def main(
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
             redact_secrets=not no_redact,
+            ast=ast,
             show_cycles=not no_show_cycles,
             cycle_threshold=cycle_threshold,
         )
