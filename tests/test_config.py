@@ -52,3 +52,35 @@ class TestSettings:
         s = Settings(base_url="a", api_key="b", model="c")
         with pytest.raises(AttributeError):
             s.__dict__["extra"] = "fail"  # slots don't allow __dict__
+
+    def test_timeout_defaults_to_300(self, monkeypatch):
+        monkeypatch.setenv("GRAPHLM_BASE_URL", "http://x")
+        monkeypatch.setenv("GRAPHLM_API_KEY", "k")
+        monkeypatch.setenv("GRAPHLM_MODEL", "m")
+        monkeypatch.delenv("GRAPHLM_TIMEOUT", raising=False)
+        assert Settings.from_env().timeout == 300.0
+
+    def test_timeout_from_env(self, monkeypatch):
+        monkeypatch.setenv("GRAPHLM_BASE_URL", "http://x")
+        monkeypatch.setenv("GRAPHLM_API_KEY", "k")
+        monkeypatch.setenv("GRAPHLM_MODEL", "m")
+        monkeypatch.setenv("GRAPHLM_TIMEOUT", "600")
+        assert Settings.from_env().timeout == 600.0
+
+    def test_max_output_tokens_default_matches_llm(self, monkeypatch):
+        from graphlm.llm import LLM_MAX_OUTPUT_TOKENS
+
+        monkeypatch.setenv("GRAPHLM_BASE_URL", "http://x")
+        monkeypatch.setenv("GRAPHLM_API_KEY", "k")
+        monkeypatch.setenv("GRAPHLM_MODEL", "m")
+        monkeypatch.delenv("GRAPHLM_MAX_OUTPUT_TOKENS", raising=False)
+        # The config default must equal the client's default so the reserve and
+        # the requested max_tokens can never drift (#17/#18).
+        assert Settings.from_env().max_output_tokens == LLM_MAX_OUTPUT_TOKENS
+
+    def test_max_output_tokens_from_env(self, monkeypatch):
+        monkeypatch.setenv("GRAPHLM_BASE_URL", "http://x")
+        monkeypatch.setenv("GRAPHLM_API_KEY", "k")
+        monkeypatch.setenv("GRAPHLM_MODEL", "m")
+        monkeypatch.setenv("GRAPHLM_MAX_OUTPUT_TOKENS", "48000")
+        assert Settings.from_env().max_output_tokens == 48000
