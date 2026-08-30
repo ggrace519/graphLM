@@ -353,6 +353,13 @@ class TestRenderHtml:
         assert "simulation.on('tick'" in html
         assert "translate(" in html
 
+    def test_scale_ordinal_does_not_pass_null_domain(self):
+        """D3 v7 iterates the domain; scaleOrdinal(null, range) throws 'e is not iterable'."""
+        graph = CodebaseGraph(directory_tree="test/")
+        html = render_html(graph)
+        assert "scaleOrdinal(null" not in html
+        assert "scaleOrdinal(_PALETTE)" in html
+
     def test_rendered_links_all_resolve_to_nodes(self):
         graph = CodebaseGraph(
             directory_tree="root/",

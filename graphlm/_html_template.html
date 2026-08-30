@@ -87,9 +87,10 @@
 <script>
 const graphData = {EMBEDDED_JSON};
 const _PALETTE = {_PALETTE};
-const colorScale = d3.scaleOrdinal(null, _PALETTE);
+const colorScale = d3.scaleOrdinal(_PALETTE);
 function nodeColor(d) {
-  const parts = d.path.split('/');
+  const raw = d.path || d.name || '';
+  const parts = raw.split('/');
   const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : parts[0];
   return colorScale(dir);
 }

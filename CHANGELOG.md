@@ -36,6 +36,7 @@ and this project adheres to Semantic Versioning.
 ### Fixed
 
 - HTML visualization rendered a blank page: D3 `forceLink` threw on import/data-flow endpoints that had no node, and the simulation never ticked positions onto the SVG
+- HTML threw `TypeError: e is not iterable` on load: D3 v7 `scaleOrdinal(null, palette)` iterates a null domain; use `scaleOrdinal(palette)` as the range
 - HTML visualization did not initialize: `initGraph` was never called on page load, and a recursive self-call could hang the page
 - `--ast` computed import edges then discarded them; cycle detection ran on LLM edges without SLOC-based risk scores
 - `--no-html` still wrote `graph.html` when `-o` was set (HTML was written twice)
