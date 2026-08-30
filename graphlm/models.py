@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -110,6 +111,16 @@ class QuickReference(BaseModel):
     location: str = Field(description="Where to find it (file path or section)")
 
 
+@dataclass(frozen=True, slots=True)
+class Cycle:
+    """A single import cycle (strongly connected component) with risk score."""
+
+    nodes: list[str]
+    edges: list[ImportEdge]
+    length: int
+    risk_score: float
+
+
 class CodebaseGraph(BaseModel):
     """The complete codebase graph as produced by the LLM."""
 
@@ -146,4 +157,8 @@ class CodebaseGraph(BaseModel):
     deterministic_edges: list[ImportEdge] | None = Field(
         default=None,
         description="Import edges derived from AST parsing (deterministic, not LLM-generated)",
+    )
+    import_cycles: list[Cycle] = Field(
+        default_factory=list,
+        description="Import cycles (strongly connected components) with risk scores",
     )

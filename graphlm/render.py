@@ -115,6 +115,23 @@ def render_markdown(graph: CodebaseGraph) -> str:
             lines.append(f"| {ref.query} | `{ref.location}` |")
         lines.append("")
 
+    # Import cycles
+    if graph.import_cycles:
+        lines.append("## Import Cycles\n")
+        for i, cycle in enumerate(
+            sorted(graph.import_cycles, key=lambda c: c.risk_score, reverse=True)
+        ):
+            label = (
+                f"*{cycle.length} nodes — mutual dependency*"
+                if cycle.length == 2
+                else f"*{cycle.length} nodes*"
+            )
+            lines.append(f"### Cycle {i+1} (risk score: {cycle.risk_score:.1f})")
+            lines.append(label)
+            for node in cycle.nodes:
+                lines.append(f"- `{node}`")
+            lines.append("")
+
     return "\n".join(lines) + "\n"
 
 

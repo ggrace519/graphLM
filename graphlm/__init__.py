@@ -26,6 +26,7 @@ from graphlm.context import (
     assemble_pass2_prompt,
     filter_requested_files,
 )
+from graphlm.cycles import detect_cycles
 from graphlm.llm import (
     CodebaseGraph,
     GraphLLError,
@@ -74,7 +75,8 @@ def generate_graph(
     dry_run: bool = False,
     redact_secrets: bool = True,
     ast: bool = False,
-    html: bool = True,
+    show_cycles: bool = True,
+    cycle_threshold: float = 0.0,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -213,6 +215,11 @@ def generate_graph(
         response_format=CodebaseGraph,
     )
     graph = cast(CodebaseGraph, graph_result)
+    if show_cycles:
+        graph.import_cycles = [
+            c for c in detect_cycles(graph.import_edges)
+            if c.risk_score >= cycle_threshold
+        ]
 
     # Write outputs if output_dir specified
     if output_dir is not None:
