@@ -106,11 +106,13 @@ def generate_graph(
             GRAPHLM_TIMEOUT env var, then to 300. An explicit value (the CLI
             --timeout flag) takes precedence. Pass 2 is streamed, so a large
             project's generation can legitimately take minutes (#18).
-        max_output_tokens: Max tokens the model may emit for the graph. If None,
+        max_output_tokens: Max tokens the model may emit for the graph — the
+            `max_tokens` the client requests. A ceiling, not a reservation: it is
+            NOT taken out of the input budget (max_context), because input and
+            output ceilings are independent on the target endpoint (#25). If None,
             falls back to GRAPHLM_MAX_OUTPUT_TOKENS env, then LLM_MAX_OUTPUT_TOKENS
-            (32000). This is BOTH the max_tokens requested and the pass-2 output
-            reserve, kept in lock-step (#17/#18). Raise it if a large project's
-            graph truncates (surfaced as a clear GraphLLErrorTruncated).
+            (the model's practical max). Truncation past even this raises a clear
+            GraphLLErrorTruncated.
         include_tests: Whether to include test files in the analysis.
         exclude_patterns: Additional glob patterns to exclude.
         dry_run: If True, return the scan context without calling the LLM.
@@ -211,7 +213,6 @@ def generate_graph(
             pass2_files,
             max_context=max_context,
             deterministic_edges=deterministic_edges,
-            max_output_tokens=max_output_tokens,
         )
         graph = CodebaseGraph(
             directory_tree=scan.tree,
@@ -272,7 +273,6 @@ def generate_graph(
         pass2_files,
         max_context=max_context,
         deterministic_edges=deterministic_edges,
-        max_output_tokens=max_output_tokens,
     )
 
     # Phase 2: LLM produces the final graph

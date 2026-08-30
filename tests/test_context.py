@@ -1,7 +1,7 @@
 """Tests for context packing and prompt assembly."""
 
 from graphlm.context import (
-    PASS1_ESTIMATED_TREE_TOKENS,
+    MESSAGE_OVERHEAD_TOKENS,
     assemble_pass1_prompt,
     assemble_pass2_prompt,
     estimate_tokens,
@@ -189,7 +189,7 @@ class TestMaxContext:
 
     def test_truncated_are_lower_priority_files(self, large_project):
         from graphlm.scanner import scan_project
-        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
 
         scan = scan_project(large_project)
         # Budget = the fixed output/instruction floor + a small file allowance,
@@ -198,7 +198,7 @@ class TestMaxContext:
         # allowance is added to the reserve so this test self-tracks changes to
         # the output reserve or estimate_tokens calibration (#17/#18) instead of
         # hard-coding a magic number that churns each time the reserve moves.
-        reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+        reserve = MESSAGE_OVERHEAD_TOKENS
         prompt, tokens, truncated = assemble_pass2_prompt(
             scan.tree, scan.file_fragments, max_context=reserve + 2500
         )
@@ -231,9 +231,9 @@ class TestMaxContext:
         Regression for #12 — before the edge cap, 6000 rows produced a ~62k
         prompt regardless of the budget.
         """
-        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
 
-        output_reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+        output_reserve = MESSAGE_OVERHEAD_TOKENS
         frags = [
             FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
             for i in range(40)
@@ -264,7 +264,7 @@ class TestMaxContext:
         list is NOT exhaustive (so it still infers the dropped edges), and only
         a subset of rows is emitted.
         """
-        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
 
         edges = [
             ImportEdge(
@@ -274,7 +274,7 @@ class TestMaxContext:
             for j in range(20)
         ]
         # Enough room above the reserve floor for a capped-but-present edge table.
-        max_context = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS + 2000
+        max_context = MESSAGE_OVERHEAD_TOKENS + 2000
         prompt, _tokens, _truncated = assemble_pass2_prompt(
             "proj/", [], max_context=max_context, deterministic_edges=edges
         )
@@ -289,9 +289,9 @@ class TestMaxContext:
         estimate_tokens(prompt) + output_reserve <= max_context at every budget,
         including ones where the section-sum estimate would have overshot.
         """
-        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
 
-        output_reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
+        output_reserve = MESSAGE_OVERHEAD_TOKENS
         frags = [
             FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
             for i in range(40)
@@ -323,23 +323,24 @@ class TestMaxContext:
             # Reported total is the authoritative measured value.
             assert reported == estimate_tokens(prompt) + output_reserve
 
-    def test_max_output_tokens_grows_the_reserve(self):
-        """A larger max_output_tokens reserves more of the budget for the
-        response, so fewer input files fit — the reserve must track it (#17/#18).
+    def test_input_admission_reserves_only_message_overhead(self):
+        """Input admission depends only on max_context and the small message
+        overhead — NOT on the output budget, which is a separate ceiling (#25).
+        The reported total is the measured prompt plus exactly the overhead
+        reserve, not the (potentially huge) max_tokens.
         """
         frags = [
             FileFragment(f"src/mod{i}.py", "x" * 3000, estimate_tokens("x" * 3000))
             for i in range(40)
         ]
         tree = "proj/"
-        _, tokens_small, trunc_small = assemble_pass2_prompt(
-            tree, frags, max_context=80000, max_output_tokens=16000
+        prompt, reported, _trunc = assemble_pass2_prompt(
+            tree, frags, max_context=80000
         )
-        _, tokens_big, trunc_big = assemble_pass2_prompt(
-            tree, frags, max_context=80000, max_output_tokens=48000
-        )
-        # Bigger reserve => fewer input files admitted => more truncated.
-        assert len(trunc_big) > len(trunc_small)
+        # The reported total is the measured prompt + the overhead reserve only.
+        assert reported == estimate_tokens(prompt) + MESSAGE_OVERHEAD_TOKENS
+        # Sanity: a large budget admits every file (nothing reserved for output).
+        assert _trunc == []
 
     def test_small_edge_table_keeps_exhaustive_framing(self):
         """A small edge table that fits must keep the strong 'do not omit'

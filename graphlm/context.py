@@ -9,22 +9,20 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from graphlm.llm import LLM_MAX_OUTPUT_TOKENS
 from graphlm.models import ImportEdge
 from graphlm.scanner import FileFragment, ScanResult, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
-# Conservative context budgets (tokens) for each pass.
-# Default reserve for the LLM's response: the max_tokens the client requests
-# when the caller doesn't override it (assemble_pass2_prompt takes the effective
-# value as max_output_tokens). Input admission reserves exactly this so it never
-# assumes a smaller response than the model may emit (#17). Sourced from llm.py.
-DEFAULT_OUTPUT_BUDGET = LLM_MAX_OUTPUT_TOKENS  # reserve tokens for LLM response
-# Extra pad on top of the output reserve for the system prompt + message framing
-# overhead not counted in the assembled user prompt (SYSTEM_PROMPT is ~370 tok).
-PASS1_ESTIMATED_TREE_TOKENS = 1500
-# Default maximum context window (tokens) — ~128k with room for output
+# Reserve on top of the assembled user prompt for input the pass-2 request
+# carries but assemble_pass2_prompt does not itself measure: the SYSTEM_PROMPT
+# (~370 est tokens) plus JSON/message framing. This is the ONLY thing reserved
+# out of max_context — the output budget (max_tokens) is NOT, because on the
+# target endpoint the input and output ceilings are independent (measured; see
+# llm.LLM_MAX_OUTPUT_TOKENS). Reserving max_tokens here was a false assumption in
+# #17/#18, now unwound (#25).
+MESSAGE_OVERHEAD_TOKENS = 1500
+# Default maximum context window (tokens) — the model's input limit.
 _DEFAULT_MAX_CONTEXT = 120000
 # Max fraction of the post-reserve (files + edges) budget the AST-edge table
 # may consume. A very large edge table is truncated to this share so it can
@@ -142,41 +140,34 @@ def assemble_pass2_prompt(
     *,
     max_context: int = _DEFAULT_MAX_CONTEXT,
     deterministic_edges: list[ImportEdge] | None = None,
-    max_output_tokens: int = LLM_MAX_OUTPUT_TOKENS,
 ) -> tuple[str, int, list[str]]:
     """Assemble the user prompt for pass 2 (full analysis).
 
     Args:
         tree: The directory tree string.
         file_fragments: File fragments to include.
-        max_context: Maximum context window in tokens (reserves space for
-            output). The assembled prompt is kept within this budget: the
-            AST-edge table is capped first at EDGE_SHARE of the room left after
-            the fixed reserves, then files are admitted from the remainder in
-            rank order. A final whole-prompt check trims trailing files if the
-            summed section estimates under-counted the joined prompt, so the
-            budget is an exact guarantee, and the returned token count is the
-            measured prompt plus output reserve. NOTE: the output reserve
-            (~17.5k — the client's real max_tokens plus a small overhead pad)
-            plus the fixed instruction block (~920) form a floor of ~18.4k
-            tokens; a max_context below that cannot fit even an empty prompt and
-            the floor wins (no error is raised). Setting --max-context below the
-            reserve makes no sense — nothing would be left for the response.
+        max_context: Maximum *input* context budget in tokens (the model's input
+            limit). The assembled prompt is kept within this budget: the AST-edge
+            table is capped first at EDGE_SHARE of the room left after the fixed
+            reserves, then files are admitted from the remainder in rank order. A
+            final whole-prompt check trims trailing files if the summed section
+            estimates under-counted the joined prompt, so the budget is an exact
+            guarantee. The only thing reserved out of max_context is
+            MESSAGE_OVERHEAD_TOKENS (system prompt + framing) — NOT the output
+            budget, because input and output ceilings are independent on the
+            target endpoint (#25). NOTE: that overhead (~1.5k) plus the fixed
+            instruction block (~1k) form a small floor (~2.5k); a max_context
+            below it can't fit even an empty prompt and the floor wins (no error).
         deterministic_edges: Optional AST-extracted import edges to treat as
             ground truth for import_edges. Only the *prompt* copy is budget-capped;
             callers keep the full list for the graph and cycle detection.
-        max_output_tokens: Tokens reserved for the LLM response — MUST equal the
-            max_tokens the client requests, or a prompt sized here can overflow
-            once the model emits its full response (#17). Defaults to
-            LLM_MAX_OUTPUT_TOKENS; the caller passes the configured value.
 
     Returns:
         Tuple of (prompt text, estimated total tokens, list of truncated file paths).
     """
-    # Reserve tokens for LLM output and system prompt overhead. The output slice
-    # is the exact max_tokens the client will request, so the assembled input can
-    # never crowd out the response.
-    output_reserve = max_output_tokens + PASS1_ESTIMATED_TREE_TOKENS
+    # Reserve only the uncounted input overhead (system prompt + message framing)
+    # — the output budget is a separate ceiling and is NOT reserved here (#25).
+    overhead_reserve = MESSAGE_OVERHEAD_TOKENS
 
     # Build the fixed-cost sections (edge table + instruction block) FIRST and
     # reserve their token cost, so file admission runs against a budget that
@@ -193,7 +184,7 @@ def assemble_pass2_prompt(
     # still attached to the graph and used for cycle detection upstream — only
     # the *prompt* copy is capped.
     room_for_files_and_edges = max(
-        0, max_context - output_reserve - tree_tokens - instruction_tokens
+        0, max_context - overhead_reserve - tree_tokens - instruction_tokens
     )
     edge_budget = int(room_for_files_and_edges * EDGE_SHARE)
     edge_block = _build_edge_block(deterministic_edges, max_tokens=edge_budget)
@@ -203,7 +194,7 @@ def assemble_pass2_prompt(
     # edge table, instruction block), so a file is admitted only while the
     # running total stays within max_context — which reserves the remaining
     # room for the fixed sections without a separate budget variable.
-    base_tokens = tree_tokens + output_reserve + edge_tokens + instruction_tokens
+    base_tokens = tree_tokens + overhead_reserve + edge_tokens + instruction_tokens
 
     # Build file sections, respecting the context budget
     file_sections_parts: list[str] = []
@@ -251,7 +242,7 @@ def assemble_pass2_prompt(
     # exact guarantee rather than an estimate. Files are already ranked, so the
     # last-admitted (lowest-priority) ones go first.
     while file_sections_parts and (
-        estimate_tokens(prompt) + output_reserve > max_context
+        estimate_tokens(prompt) + overhead_reserve > max_context
     ):
         dropped_body = file_sections_parts.pop()
         dropped_header = file_sections_parts.pop() if file_sections_parts else ""
@@ -260,7 +251,7 @@ def assemble_pass2_prompt(
             truncated_paths.append(rel)
         prompt = _assemble(file_sections_parts)
 
-    total_tokens = estimate_tokens(prompt) + output_reserve
+    total_tokens = estimate_tokens(prompt) + overhead_reserve
     return prompt, total_tokens, truncated_paths
 
 

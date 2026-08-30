@@ -115,6 +115,43 @@ class TestFullPipeline:
         # Both passes' clients were built with the explicit timeout.
         assert seen and all(t == 42.0 for t in seen)
 
+    def test_max_output_tokens_independent_of_input_admission(
+        self, large_project, monkeypatch
+    ):
+        """max_output_tokens is a request ceiling, NOT taken out of the input
+        budget — so changing it must not change how many files are admitted into
+        pass 2 (input and output ceilings are independent — #25)."""
+        # A binding input budget so admission is observable, held constant.
+        monkeypatch.setenv("GRAPHLM_MAX_CONTEXT", "4000")
+        small_out = generate_graph(
+            large_project, dry_run=True, max_output_tokens=8000
+        )
+        big_out = generate_graph(
+            large_project, dry_run=True, max_output_tokens=128000
+        )
+        # Same input admission regardless of the output ceiling.
+        assert small_out.files_analyzed == big_out.files_analyzed
+        assert small_out.pass2_context_tokens == big_out.pass2_context_tokens
+
+    def test_max_output_tokens_reaches_request_as_max_tokens(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        """An explicit max_output_tokens must be sent as the pass-2 request's
+        max_tokens (#25)."""
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            max_output_tokens=99000,
+        )
+        # The last request is pass 2; its max_tokens is the configured value.
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        assert body["max_tokens"] == 99000
+
     def test_small_project_dry_run(self, httpx_mock, small_project, tmp_path):
         """Dry run should NOT call the LLM."""
         result = generate_graph(
@@ -353,11 +390,11 @@ class TestFullPipeline:
         smaller fixtures fit entirely at every budget and can't show precedence
         (#17/#18).
         """
-        from graphlm.context import DEFAULT_OUTPUT_BUDGET, PASS1_ESTIMATED_TREE_TOKENS
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
 
-        reserve = DEFAULT_OUTPUT_BUDGET + PASS1_ESTIMATED_TREE_TOKENS
-        # Above the true floor (reserve + ~1.1k instruction block) but below what
-        # large_project's content needs, so it binds.
+        # Above the true floor (overhead + ~1k instruction block ≈ 2.5k) but
+        # below what large_project's content needs, so it binds.
+        reserve = MESSAGE_OVERHEAD_TOKENS
         env_budget = reserve + 2000
 
         # env only: the env var is honored (was previously ignored).
