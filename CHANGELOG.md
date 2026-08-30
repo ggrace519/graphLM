@@ -33,11 +33,20 @@ and this project adheres to Semantic Versioning.
 - `GraphResult.write()` now returns `tuple[Path, Path, Path | None]` (md, json, html_or_none) instead of `tuple[Path, Path]`
 - `write_outputs()` now optionally writes HTML alongside Markdown and JSON
 
+### Fixed
+
+- HTML visualization did not initialize: `initGraph` was never called on page load, and a recursive self-call could hang the page
+- `--ast` computed import edges then discarded them; cycle detection ran on LLM edges without SLOC-based risk scores
+- `--no-html` still wrote `graph.html` when `-o` was set (HTML was written twice)
+- `result.write()` returned three paths but the README unpacked two; string output paths failed
+- AST import resolver mapped packages to non-existent `pkg.py` files and stdlib modules to `os.py`
+- LLM copied test-fixture database schemas into the host project graph
+
 ### Infrastructure
 
 - Python 3.11+ with hatchling build, uv dependency management
 - pytest-httpx for mock HTTP integration testing
-- 105 tests across 9 module test files, 90% code coverage
+- pytest + coverage in CI
 - `.env.example` for LLM endpoint configuration
 - GitHub Actions CI testing on Python 3.11, 3.12, 3.13 with coverage upload to Codecov
 - mypy type checking in CI

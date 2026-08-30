@@ -7,6 +7,7 @@ from graphlm.context import (
     estimate_tokens,
     filter_requested_files,
 )
+from graphlm.models import ImportEdge
 from graphlm.scanner import FileFragment, scan_project
 
 
@@ -53,6 +54,41 @@ class TestPass2Prompt:
         assert "data_flow" in prompt
         assert "architecture_notes" in prompt
         assert "quick_reference" in prompt
+
+    def test_prompt_includes_deterministic_edges(self):
+        edges = [
+            ImportEdge(
+                from_path="app/main.py", to_path="app/routes.py", kind="from"
+            ),
+            ImportEdge(
+                from_path="app/routes.py",
+                to_path="app/services.py",
+                kind="from",
+            ),
+        ]
+        prompt, _tokens, _truncated = assemble_pass2_prompt(
+            "root/", [], deterministic_edges=edges
+        )
+        assert "## Deterministic import edges (AST ground truth)" in prompt
+        assert "app/main.py" in prompt
+        assert "app/routes.py" in prompt
+        assert "app/services.py" in prompt
+        assert "ground truth" in prompt.lower()
+
+    def test_prompt_omits_deterministic_edges_when_absent(self):
+        prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])
+        assert "Deterministic import edges" not in prompt
+        prompt_empty, _, _ = assemble_pass2_prompt(
+            "root/", [], deterministic_edges=[]
+        )
+        assert "Deterministic import edges" not in prompt_empty
+
+    def test_prompt_database_schema_application_only(self):
+        prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])
+        lower = prompt.lower()
+        assert "application under analysis" in lower
+        assert "test fixtures" in lower
+        assert "null" in lower
 
     def test_token_estimate_increases_with_files(self, small_project):
         from graphlm.scanner import scan_project

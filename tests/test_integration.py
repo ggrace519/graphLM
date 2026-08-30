@@ -259,3 +259,87 @@ class TestFullPipeline:
                 # model is missing
             )
         assert "all three must be provided" in str(exc_info.value)
+
+    def test_ast_dry_run_attaches_edges_and_cycles(self):
+        """ast=True dry-run keeps parser edges and detects the fixture cycle."""
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = generate_graph(cyclic_project, dry_run=True, ast=True)
+
+        assert result.graph.deterministic_edges is not None
+        assert len(result.graph.deterministic_edges) > 0
+        assert result.graph.import_cycles
+        cycle_nodes = {
+            n.replace("\\", "/")
+            for cycle in result.graph.import_cycles
+            for n in cycle.nodes
+        }
+        for rel in ("app/main.py", "app/routes.py", "app/services.py"):
+            assert rel in cycle_nodes or any(n.endswith(rel) for n in cycle_nodes)
+
+    def test_include_html_false_skips_html(self, httpx_mock, small_project, tmp_path):
+        """generate_graph with include_html=False must not write graph.html."""
+        _mock_pass1_response(httpx_mock, ["main.py", "mylib/helpers.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+
+        generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            include_html=False,
+        )
+
+        assert (tmp_path / "graphs.md").exists()
+        assert (tmp_path / "graphs.json").exists()
+        assert not (tmp_path / "graph.html").exists()
+
+    def test_ast_full_pipeline_attaches_deterministic_edges(self, httpx_mock):
+        """Mocked pipeline with ast=True attaches parser edges to the graph."""
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        _mock_pass1_response(
+            httpx_mock, ["app/main.py", "app/routes.py", "app/services.py"]
+        )
+        _mock_pass2_response(httpx_mock, _make_graph())
+
+        result = generate_graph(
+            cyclic_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            ast=True,
+        )
+
+        assert result.graph.deterministic_edges is not None
+
+    def test_write_accepts_str_and_returns_three_paths(self, small_project, tmp_path):
+        """GraphResult.write accepts str paths and unpacks to md, json, html."""
+        result = generate_graph(small_project, dry_run=True)
+        md_path, json_path, html_path = result.write(str(tmp_path))
+        assert md_path.exists()
+        assert json_path.exists()
+        assert html_path is not None
+        assert html_path.exists()
+        _, _, no_html = result.write(str(tmp_path / "plain"), include_html=False)
+        assert no_html is None
+        assert not (tmp_path / "plain" / "graph.html").exists()
+
+    def test_show_cycles_false_leaves_cycles_empty(self):
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = generate_graph(
+            cyclic_project, dry_run=True, ast=True, show_cycles=False
+        )
+        assert result.graph.deterministic_edges
+        assert result.graph.import_cycles == []
+
+    def test_show_cycles_false_after_llm(self, httpx_mock, small_project):
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            show_cycles=False,
+        )
+        assert result.graph.import_cycles == []

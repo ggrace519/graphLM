@@ -265,11 +265,11 @@ function initGraph() {
     document.body.classList.toggle('light');
   });
   buildLegend();
-  initGraph();
 }
 window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('stats').textContent =
     graphData.nodes.length + ' nodes, ' + graphData.links.length + ' edges';
+  initGraph();
 });
 </script>
 </body>

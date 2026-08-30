@@ -5,14 +5,17 @@
 - `graphlm/html_render.py` — D3.js force-directed graph visualization
 - `graphlm/_html_template.html` — Self-contained HTML template with zoom/pan, search, dark mode
 
+The visualization initializes on page load: zoom/pan, node search, and theme toggle are ready without extra setup.
+
 ## How to try
 
 ```bash
 graphlm /path/to/project -o ./output
-# Open output/graph.graph.html in a browser
+# Open output/graph.html in a browser
 ```
+
+Pass `--no-html` to skip writing `graph.html`.
 
 ## Status
 
-Working — all 202 tests pass.
-
+Working. Tests live under `tests/` — run `uv run pytest`.
