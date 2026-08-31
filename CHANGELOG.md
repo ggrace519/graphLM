@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Infrastructure
+
+- Release automation via [bump-my-version](https://github.com/callowayproject/bump-my-version) (`[tool.bumpversion]` in `pyproject.toml`). `uvx bump-my-version bump patch|minor|major` now bumps the version, promotes the `[Unreleased]` changelog section to a dated release header, updates the compare links, and makes a GPG-signed commit + signed tag — the mechanical release steps that were done by hand. `uv lock` and `git push --follow-tags` remain manual. See the "Releasing" section in `CONTRIBUTING.md`
+
 ## [0.1.2] - 2026-08-31
 
 Maintenance release: `--install-skill` guide refinements from testing it across
