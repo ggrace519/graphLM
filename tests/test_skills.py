@@ -30,6 +30,21 @@ class TestInstallSkill:
         # Tells the agent to regenerate when missing/stale (graceful no-op).
         assert "graphlm ." in content
 
+    def test_body_distinguishes_explicit_vs_self_invocation(self, tmp_path):
+        # The skill must give opposite defaults for the two invocation modes:
+        # explicit invocation → generate the map without asking; self-reached
+        # mid-task → do NOT generate (it would stall the user's real task).
+        # This is the behavior that made Claude stall into a menu before.
+        content = install_skill("claude", home=tmp_path).path.read_text()
+        lower = content.lower()
+        # Explicit case: generate without asking.
+        assert "explicit" in lower
+        assert "without asking" in lower
+        # Self-reached case: do not generate mid-task.
+        assert "mid-task" in lower or "another task" in lower
+        # The reason the two differ (latency of a streamed generation) is stated.
+        assert "stall" in lower
+
     def test_codex_global_writes_guide_and_note(self, tmp_path):
         result = install_skill("codex", home=tmp_path)
         expected = tmp_path / ".codex" / "graphlm.md"

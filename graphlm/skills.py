@@ -40,9 +40,12 @@ class SkillInstallResult:
 def _skill_markdown_body() -> str:
     """The guide's Markdown body — shared by every harness.
 
-    Written to no-op gracefully in a repo that has no map yet (it tells the
-    agent to generate one), so a user-global install doesn't misfire in
-    unmapped repos.
+    Distinguishes two invocation modes, which want opposite defaults when no map
+    exists: an *explicit* invocation generates one (`graphlm .`) without asking;
+    a *self-reached* invocation mid-task does not (generating streams for a minute
+    or two and would stall the user's real task). This is what keeps a
+    user-global install from either freezing on explicit use or misfiring on
+    auto-use in an unmapped repo.
     """
     return """\
 ## Use graphlm's codebase map
@@ -50,28 +53,53 @@ def _skill_markdown_body() -> str:
 [graphlm](https://github.com/ggrace519/graphLM) generates a **map of a
 codebase** — modules, import/dependency edges, data flow, entry points, import
 cycles, and "where do I find X?" answers — as Markdown, JSON, and interactive
-HTML.
+HTML. It lives at `.graphlm/GRAPH.md` (machine-readable `.graphlm/GRAPH.json`;
+clickable `.graphlm/GRAPH.html`).
 
-**When you start working in a repository, look for a graphlm map before
-exploring the code by hand:**
+**First, know which situation you're in — the right action differs.**
 
-1. **Check for `.graphlm/GRAPH.md`** in the project root. If it exists, read it
-   first — it orients you far faster than opening files one at a time. The
-   machine-readable form is `.graphlm/GRAPH.json`; the clickable graph is
-   `.graphlm/GRAPH.html`.
-2. **Follow the map's refresh directive.** `GRAPH.md` opens with a provenance
-   stamp naming the git commit it was generated against. Compare it to the
-   repo's current `git rev-parse HEAD`; if they differ, the map may be stale —
-   regenerate it with `graphlm .` from the project root.
-3. **If there is no `.graphlm/GRAPH.md`,** and graphlm is installed and the
-   project is nontrivial, generate one: `graphlm .` (writes into `.graphlm/`).
-   If graphlm isn't installed or you can't reach its LLM endpoint, just skip
-   this — it's an optional aid, not a requirement.
-4. **What changed since last time?** `.graphlm/GRAPH_DIFF.md` lists the modules,
-   edges, and cycles added/removed since the previous run — a fast way to see
-   structural drift without re-reading the whole map.
+### A. You were invoked *explicitly* to work with the map
 
-Notes:
+(The user ran the graphlm command/skill directly, with no other task — they want
+the map.)
+
+- **If `.graphlm/GRAPH.md` exists:** read it, then briefly tell the user what the
+  codebase looks like (its main modules, entry points, any notable import
+  cycles). Check the refresh directive (below) and offer to regenerate if stale.
+- **If it does NOT exist:** **generate it — run `graphlm .` — without asking.**
+  This is the expected outcome of an explicit invocation, and it's a safe,
+  local, idempotent action (no network side effects beyond one call to the LLM
+  endpoint graphlm is already configured for; it only writes into `.graphlm/`).
+  Do **not** stall with a menu or ask permission for this specific command. Then
+  read the map you just generated and summarize it. Generation streams and can
+  take a minute or two on a large repo — that's normal; let it run.
+- Only stop to ask if graphlm is **not installed** or its **LLM endpoint isn't
+  configured/reachable** (`graphlm .` will say so) — then tell the user what's
+  missing instead of guessing.
+
+### B. You reached for this yourself while doing *another* task
+
+(The user asked for a feature/bug/exploration; you're orienting.)
+
+- **If `.graphlm/GRAPH.md` exists:** read it first — it orients you faster than
+  opening files one by one. Follow the refresh directive; a quick
+  `git rev-parse HEAD` mismatch means it may be stale.
+- **If it does NOT exist:** do **not** generate one mid-task — a fresh generation
+  can take minutes and would stall the work the user actually asked for. Just
+  note in one line that no map exists (and that `graphlm .` would create one),
+  then proceed with the real task normally. Suggest generating it only if the
+  user seems to be starting a longer effort in an unfamiliar codebase.
+
+### The refresh directive
+
+`.graphlm/GRAPH.md` opens with a provenance stamp naming the git commit it was
+generated against. Compare it to the repo's current `git rev-parse HEAD`; if they
+differ, the map may be stale — regenerate with `graphlm .` from the project root.
+`.graphlm/GRAPH_DIFF.md` lists what changed (modules, edges, cycles added/removed)
+since the previous run.
+
+### Notes
+
 - The map is **advisory** and best-effort. Trust the code over the map when they
   disagree; a stale map is possible (regenerate to be sure).
 - graphlm needs an OpenAI-compatible LLM endpoint (`GRAPHLM_BASE_URL` /

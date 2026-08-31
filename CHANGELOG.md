@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- `--install-skill` guide now distinguishes the two invocation modes so an agent doesn't stall or misfire. When it's invoked **explicitly** (the user ran the skill/command directly) and no map exists, the guide says to generate one with `graphlm .` **without asking** — a safe, local, idempotent action — then read and summarize it. When the skill is **reached for mid-task**, it says *not* to generate (a fresh generation streams for a minute or two and would stall the user's real request) — just read an existing map, or note in one line that none exists. Fixes an agent freezing into a "what do you want to do?" menu when the skill was run in a repo with no map. Reinstall the updated guide with `graphlm --install-skill claude --skill-force`
 - Package author contact is now a role address (`graphlm@519lab.com`) instead of a personal one, and the Code of Conduct routes to `conduct@519lab.com`. (v0.1.0's PyPI metadata carried the old address; a published version's metadata can't be edited, so this takes effect from the next release.)
 
 ### Added
