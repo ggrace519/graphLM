@@ -30,6 +30,16 @@ class TestInstallSkill:
         # Tells the agent to regenerate when missing/stale (graceful no-op).
         assert "graphlm ." in content
 
+    def test_description_triggers_at_start_of_codebase_work(self, tmp_path):
+        # The description drives WHETHER the agent invokes the skill. It must
+        # trigger at the start of working in a repo, before reading files —
+        # otherwise the map is only used when explicitly asked for.
+        content = install_skill("claude", home=tmp_path).path.read_text()
+        # The description line lives in the frontmatter (before the body).
+        desc = content.split("---")[1].lower()
+        assert "start" in desc
+        assert "before reading" in desc or "before exploring" in desc or "before searching" in desc
+
     def test_body_distinguishes_explicit_vs_self_invocation(self, tmp_path):
         # The skill must give opposite defaults for the two invocation modes:
         # explicit invocation → generate the map without asking; self-reached
@@ -44,6 +54,17 @@ class TestInstallSkill:
         assert "mid-task" in lower or "another task" in lower
         # The reason the two differ (latency of a streamed generation) is stated.
         assert "stall" in lower
+
+    def test_body_warns_about_code_egress(self, tmp_path):
+        # Generating a map sends repo code to the configured endpoint; the guide
+        # must surface that so an agent with a third-party endpoint doesn't
+        # export a private codebase silently (a Codex safety layer caught this).
+        content = install_skill("claude", home=tmp_path).path.read_text()
+        lower = content.lower()
+        assert "GRAPHLM_BASE_URL" in content
+        assert "third-party" in lower
+        # Ties the egress to the configured endpoint / sending code.
+        assert "send" in lower or "transmit" in lower or "export" in lower
 
     def test_codex_global_writes_guide_and_note(self, tmp_path):
         result = install_skill("codex", home=tmp_path)

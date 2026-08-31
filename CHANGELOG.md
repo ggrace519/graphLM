@@ -7,6 +7,13 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- `--install-skill` guide improvements, from testing it across Claude, Codex, and Grok:
+  - **Stronger trigger.** The skill `description` now tells the agent to reach for the map at the **start** of working in a codebase — before reading or searching through files — rather than only when explicitly asked. This is safe now that the guide handles an unmapped repo gracefully (it no longer risks a mid-task stall).
+  - **Data-egress heads-up.** The guide now notes that `graphlm .` **sends selected repository code to the configured LLM endpoint** (`GRAPHLM_BASE_URL`). It still generates without stalling for a local/trusted endpoint, but says to surface the destination and get a quick OK when the endpoint is a third-party API — so a private codebase isn't exported silently. (A Codex safety layer flagged exactly this.)
+  - Reinstall the updated guide with `graphlm --install-skill claude --skill-force`.
+
 ## [0.1.1] - 2026-08-31
 
 Maintenance release: a fix to the `--install-skill` agent guide, plus the
