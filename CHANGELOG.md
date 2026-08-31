@@ -11,6 +11,10 @@ and this project adheres to Semantic Versioning.
 
 - `--dry-run` mislabeled its file count. The line read `Files scanned: N`, but `N` was the number of files **selected for pass-2 analysis** (capped at `--max-pass2-files`, default 80), not the number of files scanned (bounded by `--max-files`, default 200). On any project with more than 80 source files the two differ, so the label under-reported the scan and read as a smaller repo than was actually walked. The line now reads `Files selected for pass-2 analysis: N`.
 
+### Docs
+
+- Design docs for multi-language AST support (#42): `docs/plans/multi-language-support.md` (research + the two-tier core/pack recommendation) and `docs/plans/multi-language-implementation.md` (phased build plan). No code change yet — this is the approved design for adding deterministic import-edge extraction beyond Python (core 4: Python/JS/TS/Java; other languages as opt-in pip extras with bundled resolvers).
+
 ### Infrastructure
 
 - Release automation via [bump-my-version](https://github.com/callowayproject/bump-my-version) (`[tool.bumpversion]` in `pyproject.toml`). `uvx bump-my-version bump patch|minor|major` now bumps the version, promotes the `[Unreleased]` changelog section to a dated release header, updates the compare links, and makes a GPG-signed commit + signed tag — the mechanical release steps that were done by hand. `uv lock` and `git push --follow-tags` remain manual. See the "Releasing" section in `CONTRIBUTING.md`
