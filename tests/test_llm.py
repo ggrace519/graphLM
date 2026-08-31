@@ -212,6 +212,77 @@ class TestCallLlm:
         assert body["messages"][0]["role"] == "system"
         assert body["messages"][1]["role"] == "user"
 
+    def test_response_format_sent_when_schema_requested(self, httpx_mock):
+        """Pass 2 must send response_format so the model emits the full graph (#31).
+
+        Prompt-only instruction is not enough for every served model; without
+        the constraint Qwen3.6-35B returned a near-empty object and the run
+        produced no graph.
+        """
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        rf = body["response_format"]
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["name"] == "CodebaseGraph"
+        assert "properties" in rf["json_schema"]["schema"]
+
+    def test_response_format_absent_without_schema(self, httpx_mock):
+        """Pass 1 (response_format=None) must NOT send the constraint — it wants
+        a free-form {"requested_files": [...]} object, not a CodebaseGraph."""
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+        )
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        assert "response_format" not in body
+
+    def test_400_falls_back_to_prompt_only(self, httpx_mock):
+        """An endpoint that rejects response_format (HTTP 400) is retried once
+        without the constraint, so a prompt-only endpoint still works (#31)."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        assert isinstance(result, CodebaseGraph)
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 2
+        assert "response_format" in json.loads(requests[0].content)  # first tried
+        assert "response_format" not in json.loads(requests[1].content)  # then dropped
+
+    def test_404_does_not_fall_back(self, httpx_mock):
+        """A 404 (missing endpoint/model) is NOT a schema rejection — it must
+        surface as an error, not be masked by a constraint-less retry."""
+        httpx_mock.add_response(status_code=404, json=MOCK_ERROR_BODY)
+        with pytest.raises(GraphLLErrorResponse):
+            call_llm(
+                base_url="http://test.local/v1",
+                api_key="k",
+                model="m",
+                system_prompt="s",
+                user_prompt="u",
+                response_format=CodebaseGraph,
+            )
+        # Only the single 404 request — no constraint-less retry was attempted.
+        assert len(httpx_mock.get_requests()) == 1
+
     def test_retry_on_connection_error(self, httpx_mock):
         """Should retry once on connection error."""
         httpx_mock.add_exception(ConnectionRefusedError("refused"))
