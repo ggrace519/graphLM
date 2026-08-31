@@ -113,6 +113,33 @@ and edge resolution against the scanned file set — plus a fixture project unde
 `tests/fixtures/` and tests. This is a great, well-scoped contribution; open an
 issue first so we can talk through the approach.
 
+## Releasing (maintainers)
+
+Releases publish to PyPI and a GitHub Release from a single `v*` tag (Trusted
+Publishing — see `.github/workflows/release.yml` and ADR-003). The mechanical
+steps are automated with [bump-my-version](https://github.com/callowayproject/bump-my-version)
+(config in `[tool.bumpversion]` in `pyproject.toml`):
+
+1. Make sure `## [Unreleased]` in `CHANGELOG.md` describes what's shipping and
+   `main` is clean.
+2. Bump — this updates `version` in `pyproject.toml`, promotes `[Unreleased]` to
+   a dated `## [X.Y.Z]` section, updates the compare links, and makes a
+   **GPG-signed** commit + signed tag `vX.Y.Z`:
+
+   ```bash
+   uvx bump-my-version bump patch   # or: minor / major
+   ```
+
+   Dry-run first to see the exact changes without touching anything:
+   `uvx bump-my-version bump patch --dry-run --verbose`.
+3. `uv lock` (the version change dirties the lockfile; bump-my-version doesn't
+   run this) and amend it into the release commit, or commit it separately.
+4. `git push --follow-tags`. The tag fires the release workflow.
+
+Publishing is irreversible (a PyPI version can't be reused); rehearse risky
+changes against TestPyPI first via the workflow's `workflow_dispatch` →
+`testpypi`.
+
 ## Reporting security issues
 
 **Do not** open a public issue for a security vulnerability. See
