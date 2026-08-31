@@ -330,6 +330,14 @@ tests/
 - An OpenAI-compatible LLM endpoint (base URL + API key + model name)
 - [uv](https://github.com/astral-sh/uv) — recommended for installing (`uv tool install`) and required for development
 
+## Contributing
+
+Contributions are welcome — bug reports, fixes, docs, and new language support especially. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test/mypy commands, and the security invariants to preserve. Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Found a vulnerability? **Please don't open a public issue.** Report it privately via GitHub's [Report a vulnerability](https://github.com/ggrace519/graphLM/security/advisories/new) button — see [SECURITY.md](SECURITY.md) for scope and details. graphLM reads code it didn't write, so its sensitive-file, redaction, symlink, and prompt-injection guards are the surface that matters most.
+
 ## License
 
 GPLv3 — see [LICENSE](LICENSE).

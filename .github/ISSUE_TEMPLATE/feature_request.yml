@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an idea or improvement for graphLM
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: The use case or pain point behind the request.
+      placeholder: When I map a <kind of> project, I can't ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like graphLM to do. A flag, an output field, a new language, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why this one.
+  - type: markdown
+    attributes:
+      value: |
+        **Adding language support?** The Tree-sitter parser fully implements
+        Python today; JS/TS are stubs. That's a well-scoped contribution — see
+        the "Adding language support" section in
+        [CONTRIBUTING.md](https://github.com/ggrace519/graphLM/blob/main/CONTRIBUTING.md).

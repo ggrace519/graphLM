@@ -7,6 +7,14 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Package author contact is now a role address (`graphlm@519lab.com`) instead of a personal one, and the Code of Conduct routes to `conduct@519lab.com`. (v0.1.0's PyPI metadata carried the old address; a published version's metadata can't be edited, so this takes effect from the next release.)
+
+### Added
+
+- Community-health docs for the now-public repo: `CONTRIBUTING.md` (dev setup, the real test/mypy commands, branch/PR/commit conventions, and the security invariants contributors must not weaken), `SECURITY.md` (private vulnerability reporting via GitHub's advisory flow, with an in/out-of-scope threat model given graphlm reads untrusted code), `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), a PR template with a verification checklist matching this repo's conventions, and issue forms (bug / feature) that route security reports away from public issues. README gained Contributing and Security sections
+
 ## [0.1.0] - 2026-08-30
 
 First public release. graphlm is installable from PyPI (`uv tool install graphlm`
