@@ -105,7 +105,10 @@ class TestCLI:
         result = runner.invoke(app, [str(small_project), "--dry-run"])
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
-        assert "Files scanned:" in result.stdout or "Files scanned:" in result.stderr
+        assert (
+            "Files selected for pass-2 analysis:" in result.stdout
+            or "Files selected for pass-2 analysis:" in result.stderr
+        )
 
     def test_dry_run_medium_project(self, medium_project):
         result = runner.invoke(app, [str(medium_project), "--dry-run"])
