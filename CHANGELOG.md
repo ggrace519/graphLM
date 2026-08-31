@@ -7,6 +7,11 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-31
+
+Maintenance release: a fix to the `--install-skill` agent guide, plus the
+community-health docs and role-address contact change made after 0.1.0 shipped.
+
 ### Changed
 
 - `--install-skill` guide now distinguishes the two invocation modes so an agent doesn't stall or misfire. When it's invoked **explicitly** (the user ran the skill/command directly) and no map exists, the guide says to generate one with `graphlm .` **without asking** — a safe, local, idempotent action — then read and summarize it. When the skill is **reached for mid-task**, it says *not* to generate (a fresh generation streams for a minute or two and would stall the user's real request) — just read an existing map, or note in one line that none exists. Fixes an agent freezing into a "what do you want to do?" menu when the skill was run in a repo with no map. Reinstall the updated guide with `graphlm --install-skill claude --skill-force`
@@ -110,5 +115,6 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ggrace519/graphLM/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ggrace519/graphLM/releases/tag/v0.1.0
