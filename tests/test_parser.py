@@ -348,6 +348,91 @@ class TestBuildDependencyGraph:
         assert ("app/services.py", "app/main.py") in edge_set
 
 
+class TestMissingGrammarDegrades:
+    """A registered language whose grammar pack is not installed must degrade to
+    zero edges for that language, never poison the run (Phase 0 never-escapes
+    invariant). ``build_dependency_graph`` must keep returning a list (not None,
+    which __init__.py reads as "AST off") and keep every other language's edges.
+    """
+
+    def test_missing_grammar_yields_zero_edges_and_does_not_poison_run(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        import logging
+
+        from graphlm.parsers import base as parser_base
+        from graphlm.scanner import FileFragment
+
+        # A fake language must clear the SAME gates a real one does before its
+        # grammar is ever loaded: detect_language reads EXT_TO_LANGUAGE, and the
+        # dispatch skips any language with no registered resolver. Register it in
+        # all three registries so a ".fake" fragment actually reaches
+        # _get_language("fake"), whose grammar module is not importable.
+        fake_lang = "fake"
+        monkeypatch.setitem(parser_base.EXT_TO_LANGUAGE, ".fake", fake_lang)
+        monkeypatch.setitem(
+            parser_base._GRAMMARS,
+            fake_lang,
+            parser_base._GrammarSpec("tree_sitter_nonexistent_xyz", "language"),
+        )
+
+        # Resolver whose extraction really invokes the backend for "fake", so the
+        # missing-grammar ImportError -> _GrammarUnavailable path is exercised
+        # (not skipped by an early return).
+        def _fake_imports_from_source(code, path):
+            parser_base._backend.parse_source(code, fake_lang)  # -> _GrammarUnavailable
+            return []  # pragma: no cover - never reached
+
+        fake_resolver = parser_base._Resolver(
+            parse_file=lambda code, path: parser_base.ParsedFile(),
+            imports_from_source=_fake_imports_from_source,
+            source_roots=lambda known: ("",),
+            resolve=lambda imp, from_path, known, roots: [],
+            edge_kind=lambda imp: "import",
+        )
+        monkeypatch.setitem(parser_base._RESOLVERS, fake_lang, fake_resolver)
+        # The warn-once dedupe is module-level; keep the test isolated.
+        monkeypatch.setattr(parser_base, "_WARNED_GRAMMARS", set())
+
+        # A mixed-language tree: a real Python edge chain + a .fake file. The
+        # .fake file must contribute nothing while the Python edges survive.
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "a.py").write_text("x = 1\n")
+        (tmp_path / "main.py").write_text("from pkg.a import x\n")
+        (tmp_path / "widget.fake").write_text("import whatever from './other'\n")
+
+        frags = [
+            FileFragment("pkg/__init__.py", "", 1),
+            FileFragment("pkg/a.py", "x = 1\n", 1),
+            FileFragment("main.py", "from pkg.a import x\n", 1),
+            FileFragment("widget.fake", "import whatever from './other'\n", 1),
+        ]
+
+        # Python-only baseline (no .fake fragment).
+        python_only = build_dependency_graph(frags[:3], project_dir=tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger=parser_base.logger.name):
+            edges = build_dependency_graph(frags, project_dir=tmp_path)
+
+        # Never None with ast on — a missing grammar is not "AST off".
+        assert edges is not None
+        # The .fake file contributed zero edges; the Python edges are intact.
+        assert edges == python_only
+        edge_set = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.py", "pkg/a.py") in edge_set
+        assert not any(e.from_path == "widget.fake" for e in edges)
+
+        # Exactly one warning line for the missing grammar (dedupe held).
+        grammar_warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and fake_lang in r.getMessage()
+        ]
+        assert len(grammar_warnings) == 1
+
+
 class TestImportCycles:
     def test_detect_no_cycles(self):
         edges = [
