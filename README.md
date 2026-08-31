@@ -1,8 +1,18 @@
 # graphLM
 
-Generate codebase graphs from any project directory using an OpenAI-compatible LLM.
+**Point it at a codebase. Get back a map.**
 
-Given a project directory, graphLM produces a structured analysis as **Markdown**, **JSON**, and an interactive **HTML** graph — a map of the codebase you can use to understand unfamiliar projects without reading every file.
+You've cloned an unfamiliar repo and you're staring at 400 files wondering where anything *is*. graphLM reads the project the way you would — but faster — and hands you a map: what the modules are, how they depend on each other, where data flows, which imports form nasty little cycles, and "where do I find X?" answers. It comes out as **Markdown** to read, **JSON** to script against, and an **interactive HTML graph** to click around in.
+
+It's built for the age of coding agents, too: the map stamps itself with the git commit it was generated against, so an agent (or you) can tell at a glance when it's gone stale and regenerate. Under the hood it pairs an OpenAI-compatible LLM with deterministic Tree-sitter parsing — the AST is ground truth the model isn't allowed to contradict, so the dependency edges are real, not hallucinated.
+
+```console
+$ graphlm ~/code/some-project
+Scanning ~/code/some-project...
+Wrote .graphlm/GRAPH.md, .graphlm/GRAPH.json, .graphlm/GRAPH.html
+```
+
+By default the map is written into a `.graphlm/` folder inside the project (so it stays out of your way); point it elsewhere with `-o`.
 
 ## What it produces
 
@@ -19,25 +29,52 @@ Given a project directory, graphLM produces a structured analysis as **Markdown*
 - **Provenance stamp** — `GRAPH.json` records when and against which git commit the map was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
 - **Graph-vs-graph diff** — every run also writes `GRAPH_DIFF.md` / `GRAPH_DIFF.json`: what changed in the *map* (modules, edges, cycles, data flows, entry points, file summaries added and removed) since the prior run, so you see a new entry point or a broken import cycle at a glance without re-reading the whole graph (see [Graph diff](#graph-diff))
 
-## Installation
+## Install
+
+graphLM is a Python 3.11+ CLI. The friendliest way to get it on your PATH is a tool installer that keeps it in its own isolated environment:
 
 ```bash
-cd /path/to/graphLM
-uv sync
+uv tool install graphlm      # via uv (https://github.com/astral-sh/uv)
+# or
+pipx install graphlm         # via pipx
 ```
 
-Or install the CLI globally:
+Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs.
+
+**No PyPI, no problem.** Every release also ships the wheel and sdist on its [GitHub Release](https://github.com/ggrace519/graphLM/releases). Install straight from a release asset:
 
 ```bash
-uv pip install -e .
+pipx install https://github.com/ggrace519/graphLM/releases/download/v0.1.0/graphlm-0.1.0-py3-none-any.whl
 ```
+
+**Hacking on graphLM itself?** Clone it and let `uv` sync the dev deps:
+
+```bash
+git clone https://github.com/ggrace519/graphLM && cd graphLM
+uv sync --group dev
+uv run graphlm --version
+```
+
+## Quick start
+
+graphLM needs an OpenAI-compatible LLM endpoint to do its thing. Point it at one with three environment variables (or the matching `-b` / `-k` / `-m` flags):
+
+```bash
+export GRAPHLM_BASE_URL="https://your-endpoint/v1"
+export GRAPHLM_API_KEY="sk-..."
+export GRAPHLM_MODEL="your-model-name"
+
+graphlm ~/code/some-project        # writes the map into ~/code/some-project/.graphlm/
+```
+
+Want to see what it *would* send the model without spending a token? Add `--dry-run` — it scans, parses the AST, and prints the context stats, no network call. See [Configuration](#configuration) for the full list of settings and a `.env` you can drop in a project.
 
 ## Usage
 
 ### CLI
 
 ```bash
-# Analyze a project; writes GRAPH.md, GRAPH.json, GRAPH.html into that project
+# Analyze a project; writes GRAPH.md, GRAPH.json, GRAPH.html into <project>/.graphlm/
 graphlm /path/to/project
 
 # Write to a different directory
@@ -108,6 +145,19 @@ This keeps the first pass lightweight (~tree tokens) and ensures the second pass
 
 A Tree-sitter pass (Python imports) runs by default. It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip.
 
+## Teach your coding agent to use it
+
+The map is most useful when your coding agent reads it *automatically* before it starts spelunking through a codebase. One command sets that up:
+
+```bash
+graphlm --install-skill claude    # writes ~/.claude/skills/graphlm/SKILL.md
+graphlm --install-skill codex     # writes ~/.codex/graphlm.md + a snippet to paste into AGENTS.md
+```
+
+It drops a short guide telling the agent to look for `.graphlm/GRAPH.md` when it opens a repo, follow the map's refresh directive, and regenerate with `graphlm .` when the map is missing or stale. Installs **user-global** by default (so every repo benefits); add `--skill-local` to write into the current project instead, and `--skill-force` to overwrite an existing guide.
+
+graphLM only ever creates its *own* files — it will **never** edit your existing `CLAUDE.md` or `AGENTS.md`. For Codex (whose config is a user-owned `AGENTS.md`), it writes a standalone guide and prints the one line for you to paste in yourself.
+
 ## Self-refreshing graph
 
 A generated graph goes stale the moment the code moves on. graphLM makes the
@@ -131,11 +181,11 @@ and rides the refresh nudge along in the loop an agent already uses to read
   uncommitted changes, so a graph can be SHA-fresh yet not match the working
   tree.
 
-**Adoption — one line for an `AGENTS.md` / rules file:**
+**Adoption — one line for an `AGENTS.md` / rules file** (or just run `graphlm --install-skill claude` / `--install-skill codex`, below):
 
-> A codebase map lives at `GRAPH.md` — read it before exploring the code, and
-> follow its refresh directive (regenerate with `graphlm .` when the stamped
-> commit differs from the current `HEAD`).
+> A codebase map lives at `.graphlm/GRAPH.md` — read it before exploring the
+> code, and follow its refresh directive (regenerate with `graphlm .` when the
+> stamped commit differs from the current `HEAD`, or when the map is missing).
 
 ## Graph diff
 
@@ -179,8 +229,9 @@ HEAD`, so **if you commit `GRAPH.*`, the stamp is invalidated by the very commit
 that ships it** — `HEAD` moves to that commit, so the map immediately reads as
 one commit stale, and stays perpetually one commit behind. Two sane options:
 
-- **Gitignore `GRAPH.md` / `GRAPH.json` / `GRAPH.html`** (this repo's own choice)
-  and regenerate on demand. The stamp then always reflects a real, current SHA.
+- **Gitignore `.graphlm/`** (this repo's own choice) and regenerate on demand.
+  The stamp then always reflects a real, current SHA. (One line —
+  `echo '.graphlm/' >> .gitignore` — covers the whole output folder.)
 - **Commit it and regenerate as the final step of the same commit** so the map
   ships fresh — but expect it to show one-commit staleness until the next regen,
   and treat that as normal.
@@ -189,10 +240,11 @@ Committing a graph that goes stale on every push (with no regeneration step) is
 the one workflow to avoid — it reintroduces exactly the per-session refresh tax
 this design set out to remove.
 
-**Note on `-o`:** if you write output somewhere other than the scanned repo
-(`-o <elsewhere>`), an agent reading that `GRAPH.md` and running `git rev-parse
-HEAD` in its own directory will compare against the wrong repo. Keep the graph
-in the project it describes for the staleness check to work.
+**Note on `-o`:** the default (`.graphlm/` inside the scanned project) keeps the
+map in the repo it describes, so the staleness check works. If you redirect
+output elsewhere (`-o <elsewhere>`), an agent reading that `GRAPH.md` and running
+`git rev-parse HEAD` in its own directory will compare against the wrong repo —
+keep the graph in the project it describes for the staleness check to work.
 
 ## Configuration
 
@@ -214,7 +266,7 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 
 | Flag | Description | Default |
 |---|---|---|
-| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | The scanned project |
+| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | `<project>/.graphlm/` |
 | `-b, --base-url` | LLM API base URL | `GRAPHLM_BASE_URL` env var |
 | `-k, --api-key` | LLM API key | `GRAPHLM_API_KEY` env var |
 | `-m, --model` | Model name | `GRAPHLM_MODEL` env var |
@@ -230,6 +282,10 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `--no-html` | Do not write `GRAPH.html` | HTML on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |
 | `--cycle-threshold` | Minimum cycle risk score | 0.0 |
+| `--install-skill <harness>` | Install an agent guide (`claude` / `codex`) and exit | — |
+| `--skill-local` | With `--install-skill`: write into the project, not user-global | User-global |
+| `--skill-force` | With `--install-skill`: overwrite an existing guide | Skip if exists |
+| `-V, --version` | Print the version and exit | — |
 
 ## Project structure
 
@@ -248,7 +304,8 @@ graphlm/
 ├── prompts.py            # System prompt (injection guard)
 ├── provenance.py         # Git SHA / timestamp / version capture for the stamp
 ├── render.py             # Markdown + JSON + HTML output rendering
-└── scanner.py            # Project directory scanner
+├── scanner.py            # Project directory scanner
+└── skills.py             # --install-skill: agent-guide installer
 tests/
 ├── conftest.py
 ├── test_cli.py
@@ -269,5 +326,10 @@ tests/
 
 ## Requirements
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) for dependency management (recommended)
+- Python 3.11, 3.12, or 3.13
+- An OpenAI-compatible LLM endpoint (base URL + API key + model name)
+- [uv](https://github.com/astral-sh/uv) — recommended for installing (`uv tool install`) and required for development
+
+## License
+
+GPLv3 — see [LICENSE](LICENSE).

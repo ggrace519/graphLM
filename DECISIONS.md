@@ -4,6 +4,130 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-003 — Distribution: PyPI + GitHub Releases from one tag, no distro packages
+
+**Date:** 2026-08-30
+**Status:** Accepted — implemented (`pyproject.toml` metadata, `.github/workflows/release.yml`; v0.1.0)
+
+### Context
+
+graphlm's first release needs to land on a user's PATH on Linux. The options
+considered: a Python package on PyPI, GitHub-Release artifacts, native distro
+packages (`.deb`/`.rpm`), or a single frozen binary (PyInstaller).
+
+The PATH requirement was *already* satisfied by the existing packaging — the
+`[project.scripts]` entry point (`graphlm = "graphlm.cli:app"`) makes any wheel
+install drop a `graphlm` launcher on PATH. So the real question was only the
+*channel*, not how to get a command onto PATH.
+
+### Decisions
+
+1. **Publish to PyPI, installable via `uv tool install` / `pipx`.** graphlm is
+   pure Python with a hatchling build already configured; a wheel is the native
+   artifact. Verified before committing: the name `graphlm` is free on PyPI
+   (HTTP 404), and the built wheel/sdist both include the `_html_template.html`
+   data file (hatchling picks it up automatically) — the one thing the test
+   suite can't catch, since tests run from the source tree where the file is
+   always present.
+
+2. **Also publish a GitHub Release from the same tag, with the same artifacts.**
+   These are not competing channels — one `v*` tag builds once, then attaches
+   the wheel + sdist to a GitHub Release *and* publishes them to PyPI. GitHub
+   gives a versioned, downloadable source of truth (and an install path for
+   anyone who can't/won't use PyPI); PyPI gives `uv tool install graphlm`. Same
+   bytes in both places.
+
+3. **PyPI publish uses Trusted Publishing (OIDC), not a stored API token.**
+   GitHub Actions authenticates to PyPI via OIDC (`id-token: write` +
+   `pypa/gh-action-pypi-publish`), so there is no long-lived credential to
+   store, leak, or rotate. Requires a one-time Trusted-Publisher config on PyPI
+   and TestPyPI (done in the browser).
+
+4. **The release gates on a clean-venv smoke test.** Between build and publish,
+   the workflow installs the built wheel into a fresh venv (never `.venv`) and
+   runs `graphlm --version` + `graphlm <fixture> --dry-run`. That single check
+   catches a missing entry point, a missing data file, or a missing dependency —
+   with no network. A broken artifact fails the release instead of reaching
+   users.
+
+5. **No native distro packages (`.deb`/`.rpm`) for v0.1.0 — rejected, not
+   deferred silently.** Verified: Debian 13 does not ship the tree-sitter Python
+   bindings as system packages (`python3-tree-sitter` /
+   `python3-tree-sitter-python` are not in the archive), so a `.deb` would have
+   to vendor a whole virtualenv into `/opt` — which is really the frozen-binary
+   path (PyInstaller) with extra steps, and a heavier maintenance burden. A
+   zero-Python-install artifact (single binary) is a legitimate **fast-follow**
+   if demand appears; it is out of scope for the first release.
+
+### Consequences
+
+- Publishing to PyPI is **irreversible** (the name is permanent, a version
+  number can never be reused). The release is therefore rehearsed against
+  **TestPyPI** first — same workflow, `workflow_dispatch` → TestPyPI — to
+  validate the Trusted-Publishing wiring without burning the real name/version,
+  and the real publish is a separate, explicitly-approved step.
+- The tree-sitter deps carry upper bounds (`tree-sitter<0.27`,
+  `tree-sitter-python<0.26`) so a future API-breaking release of those
+  C-extension bindings can't break installs of a shipped 0.1.0.
+
+### Output location: `.graphlm/` (bundled into the 0.1.0 shaping)
+
+Two user-observable defaults were changed in the same release, while it's still
+free to do so (no prior version shipped either default):
+
+1. **Default output moved to `<project>/.graphlm/`** (was the project root). One
+   tidy folder instead of five files scattered at the repo root. `-o` still
+   overrides and is honored **literally** (no `.graphlm` appended — the user
+   named the directory). CLI-only: the library API
+   (`generate_graph(output_dir=...)`, `result.write(dir)`) still writes to the
+   literal directory given.
+2. **Self-ingestion guard is now directory-level.** `.graphlm` is added to
+   `scanner._ALWAYS_EXCLUDE`; since `_should_exclude` matches on any path
+   component, the whole output directory (and its contents) is excluded from the
+   scan in one entry. The exact-filename `GRAPH.*` / `GRAPH_DIFF.*` entries are
+   **kept** for the `-o`-into-the-scanned-tree case. Verified with a real
+   two-run test (a fixture with a populated `.graphlm/` re-scanned → the map
+   files never appear in the scanned fragments or the pass-1 tree), because a
+   unit assertion alone wouldn't catch a walk-level regression (#28 must stay
+   closed).
+3. **Clean break on the diff baseline, no compat shim.** `diff.load_baseline`
+   reads the prior `GRAPH.json` from the output dir, which is now `.graphlm/`.
+   graphlm adds **no** fallback read of an old project-root `GRAPH.json`; a user
+   who mapped a project before this release simply gets one `FIRST_RUN` diff on
+   the next run, then normal diffs. (Consistent with the project's standing "do
+   migrations completely, no back-compat shims" rule.)
+4. **The diff needs no code change** — it reads whatever output dir
+   `write_outputs` is handed, so it follows `.graphlm/` for free.
+5. **Rendered-map paths stay project-root-relative.** File paths in
+   `GRAPH.md`'s body (e.g. `graphlm/cli.py`) are left relative to the repo root
+   — correct for a human or agent reasoning about the repo — rather than
+   rewritten with `../` to be click-through from inside `.graphlm/`.
+
+### Agent-skill install (`--install-skill`)
+
+`graphlm --install-skill <harness>` drops a guide teaching a coding agent to use
+graphlm and to look for `.graphlm/GRAPH.md` when loading a codebase.
+
+- **Eager flag, not a subcommand.** `graphlm` is a single-command Typer app with
+  a required `project_dir`; a second `@app.command()` would flip it into
+  subcommand mode and break the primary `graphlm <project>` interface. The flag
+  is `is_eager=True` (like `--version`), so `graphlm --install-skill claude`
+  works with no `project_dir`.
+- **Never edits a file graphlm didn't create.** For Claude it writes a fresh
+  `~/.claude/skills/graphlm/SKILL.md` (a dir graphlm owns). For Codex it writes
+  `~/.codex/graphlm.md` and **prints** a one-line snippet for the user to
+  include from their own `AGENTS.md` — graphlm does not append to the user's
+  existing `AGENTS.md` / `CLAUDE.md`. It also **refuses to write through a
+  symlink** at the target (checked before write, catches broken links too), so a
+  dotfiles-managed `~/.claude/skills/` can't be silently clobbered (#33).
+- **User-global by default**, `--skill-local` writes into the scanned project.
+  Idempotent (skip-if-exists unless `--force`). The guide is written to no-op
+  gracefully when a repo has no `.graphlm/GRAPH.md` (it tells the agent to
+  generate one with `graphlm .`), so global install doesn't misfire in unmapped
+  repos.
+
+---
+
 ## ADR-002 — `GRAPH_DIFF.*`: graph-vs-graph diff artifact
 
 **Date:** 2026-08-30

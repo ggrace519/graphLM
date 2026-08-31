@@ -7,8 +7,31 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-30
+
+First public release. graphlm is installable from PyPI (`uv tool install graphlm`
+/ `pipx install graphlm`) and from the attached GitHub Release artifacts; the
+`graphlm` command lands on your PATH. Everything below shipped in 0.1.0.
+
 ### Added
 
+- **Packaged for release**: published to PyPI and GitHub Releases from a single
+  git tag via a Trusted-Publishing workflow (`.github/workflows/release.yml`) —
+  no stored API token. The release build installs the wheel into a clean venv
+  and smoke-tests `graphlm --version` + a `--dry-run` before publishing, so a
+  missing entry point, data file, or dependency fails the release instead of
+  reaching users
+- `--version` / `-V` flag: prints the installed graphlm version and exits
+- `--install-skill <harness>` flag: drops a guide that teaches a coding agent how
+  to use graphlm and to look for its map (`.graphlm/GRAPH.md`) when loading a
+  codebase — regenerating it with `graphlm .` when absent or stale. Targets
+  `claude` (writes `~/.claude/skills/graphlm/SKILL.md`) and `codex` (writes
+  `~/.codex/graphlm.md` and prints a one-line snippet to include from your own
+  `AGENTS.md`). Installs user-global by default (`--skill-local` writes into the
+  scanned project instead); idempotent (skip-if-exists unless `--force`). It only
+  ever creates graphlm's own files — it never edits your existing `CLAUDE.md` /
+  `AGENTS.md`, and it refuses to write *through* a symlink at the target (so a
+  dotfiles-managed `~/.claude/skills/` can't be clobbered) (#33)
 - **Self-refreshing graph**: every generated `GRAPH.md` now carries a top-of-file *provenance & refresh directive*, and `GRAPH.json` a versioned `meta` block, recording when the map was generated and against which git commit. A coding agent reading `GRAPH.md` can compare the repo's current `HEAD` to the stamped commit and regenerate (`graphlm .`) when they differ — the agent is the scheduler; graphlm adds no hook, flag, or staleness logic of its own. Non-git projects degrade gracefully (no SHA; the directive falls back to the agent's judgment). The directive is advisory. Wording is deliberately "generated against commit X" (not "reflects X") because the map is built from files on disk, which may include uncommitted changes — a graph can be SHA-fresh yet not match the working tree
 - **Graph-vs-graph diff (`GRAPH_DIFF.md` / `GRAPH_DIFF.json`)**: every real run now also writes a structural diff of the map — modules, import edges (LLM and AST), import cycles, data flows, entry points, and file summaries **added and removed** since the prior `GRAPH.json`. This answers "what changed in the map since last time?" at a glance (a new entry point, a dropped module, a broken/added import cycle) without re-reading the whole graph. It reads graphlm's *own* prior output — which is why the `meta` block was made a versioned input contract. It is **not** a code diff (git does that better): added/removed only, so a pure prose rewrite (a description, a summary) is intentionally invisible; renames show as remove+add (no rename heuristics). Three baseline states are always distinguished so an agent can tell them apart: *first run* ("initial graph — no prior version"), *uncomparable* (a corrupt or unrecognized-`schema_version` prior file — never masqueraded as a first run), and *normal*. The diff header carries the old→new commit-SHA range. Toggling `--no-ast` between runs does not fabricate a mass edge deletion (the AST dimension reports "not compared" when either side skipped AST). On by default; `--no-diff` / `include_diff=False` opts out. `--dry-run` writes no diff (it produces no authoritative graph). No new network or LLM call — pure local computation over the two graphs (#28, ADR-002)
 - `--timeout` CLI flag / `GRAPHLM_TIMEOUT` env var to configure the LLM request timeout (default raised to 300s). Resolves `--timeout` > `GRAPHLM_TIMEOUT` > 300, mirroring `--max-context` (#18)
@@ -35,7 +58,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
-- CLI writes `GRAPH.md` / `GRAPH.json` / `GRAPH.html` into the scanned project directory by default (not the process working directory). `-o` still overrides
+- CLI writes its output into a **`.graphlm/` subdirectory of the scanned project** by default (not the process working directory, and no longer the project root) — so `GRAPH.md` / `GRAPH.json` / `GRAPH.html` / `GRAPH_DIFF.*` stay out of the way in one tidy folder. `-o <dir>` still overrides and is honored literally (no `.graphlm` appended). The whole `.graphlm/` directory is excluded from scanning, so a re-run never ingests its own map. Note the map now lives at `.graphlm/GRAPH.md`; agents/tooling looking for `GRAPH.md` at the project root should look in `.graphlm/`. The library API is unchanged — `generate_graph(output_dir=...)` / `result.write(dir)` still write to the literal directory given
 - Output files are `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` (were `graphs.md` / `graphs.json` / `graph.html`)
 - AST import parsing is on by default; pass `--no-ast` or `ast=False` to skip. The `--ast` flag is removed
 - `GraphResult.write()` / `write_outputs()` now return a `WriteResult` — the `(md, json, html_or_none)` 3-tuple you can still unpack three ways, now carrying `.diff_md` / `.diff_json` attributes for the graph diff (#28). (This supersedes the earlier `tuple[Path, Path, Path | None]` return added with HTML; the positional arity is unchanged, so `md, json, html = result.write(...)` keeps working)
@@ -77,3 +100,6 @@ and this project adheres to Semantic Versioning.
 - GitHub Actions CI testing on Python 3.11, 3.12, 3.13 with coverage upload to Codecov
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
+
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ggrace519/graphLM/releases/tag/v0.1.0

@@ -13,7 +13,9 @@ graphLM.db
 .coverage
 coverage.xml
 
-# graphLM output artifacts
+# graphLM output artifacts (default output dir, plus legacy root-level names
+# from before the .graphlm/ default in case any linger)
+.graphlm/
 GRAPH.md
 GRAPH.json
 GRAPH.html

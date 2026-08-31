@@ -13,18 +13,116 @@ app = typer.Typer(
 )
 
 
+def _resolve_version() -> str:
+    """graphlm's version for ``--version``.
+
+    ``provenance.graphlm_version()`` reads installed package metadata (which
+    tracks ``pyproject.toml``) and returns ``None`` in an un-installed source
+    checkout. There is no better source in that case — it already wraps the only
+    metadata API — so report the checkout state rather than printing ``None``.
+    """
+    from graphlm.provenance import graphlm_version
+
+    return graphlm_version() or "unknown (source checkout)"
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"graphlm {_resolve_version()}")
+        raise typer.Exit()
+
+
+#: Default output subdirectory inside the scanned project (when -o is absent).
+GRAPHLM_OUTPUT_DIRNAME = ".graphlm"
+
+
 def output_destination(project_dir: Path, output_dir: str | None) -> Path:
-    """Directory for GRAPH.* files: -o if given, else the scanned project."""
+    """Directory for GRAPH.* files.
+
+    ``-o`` is honored literally (the user named the directory). Otherwise the
+    output lands in a ``.graphlm/`` subdirectory of the scanned project — kept
+    out of the project root so it doesn't clutter the tree, and excluded from
+    scanning so a re-run never ingests its own map.
+    """
     if output_dir:
         return Path(output_dir)
-    return Path(project_dir)
+    return Path(project_dir) / GRAPHLM_OUTPUT_DIRNAME
+
+
+def _do_install_skill(
+    harness: str, project_dir: Path | None, local: bool, force: bool
+) -> None:
+    """Run --install-skill: install the agent guide and report the outcome."""
+    from graphlm.skills import SUPPORTED_HARNESSES, install_skill
+
+    harness = harness.lower()
+    if harness not in SUPPORTED_HARNESSES:
+        typer.echo(
+            f"Error: unknown harness {harness!r}. Supported: "
+            f"{', '.join(SUPPORTED_HARNESSES)}.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if local and project_dir is None:
+        typer.echo(
+            "Error: --skill-local needs a PROJECT_DIR. e.g. "
+            f"'graphlm . --install-skill {harness} --skill-local'.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        result = install_skill(
+            harness, project_dir=project_dir, local=local, force=force
+        )
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    if result.skipped:
+        typer.echo(
+            f"Skipped: {result.path} already exists (use --skill-force to "
+            f"overwrite)."
+        )
+    else:
+        typer.echo(f"Installed {harness} graphlm guide → {result.path}")
+    if result.note:
+        typer.echo("")
+        typer.echo(result.note)
 
 
 @app.command()
 def main(
-    project_dir: Path = typer.Argument(
-        ...,
+    project_dir: Path | None = typer.Argument(
+        None,
         help="Path to the project directory to analyze.",
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show the graphlm version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+    install_skill: str | None = typer.Option(
+        None,
+        "--install-skill",
+        help="Install an agent guide teaching a coding harness to use graphlm's "
+        "map, then exit. HARNESS is 'claude' or 'codex'. Installs user-global by "
+        "default; combine with --skill-local to write into the project.",
+        metavar="HARNESS",
+    ),
+    skill_local: bool = typer.Option(
+        False,
+        "--skill-local",
+        help="With --install-skill: write into the scanned project instead of "
+        "the user-global config dir.",
+    ),
+    skill_force: bool = typer.Option(
+        False,
+        "--skill-force",
+        help="With --install-skill: overwrite an existing guide instead of "
+        "skipping it.",
     ),
     output_dir: str = typer.Option(
         None,
@@ -142,6 +240,22 @@ def main(
     2. LLM produces the graph from tree + selected files
     """
     from graphlm import generate_graph, GraphLLError
+
+    # --install-skill short-circuits the analysis pipeline: drop the agent guide
+    # and exit. It does not need (or use) an LLM, so it runs before any config.
+    if install_skill is not None:
+        _do_install_skill(install_skill, project_dir, skill_local, skill_force)
+        raise typer.Exit(0)
+
+    # project_dir is optional in the signature so --install-skill can run without
+    # it; for the analysis path it's required.
+    if project_dir is None:
+        typer.echo(
+            "Error: missing PROJECT_DIR. Pass a directory to analyze, or use "
+            "--install-skill <harness>. See 'graphlm --help'.",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     typer.echo(f"Scanning {project_dir}...", err=True)
 
