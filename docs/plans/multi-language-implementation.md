@@ -6,10 +6,17 @@
 **Repo state at write time:** `main` @ `e5ebf92`.
 
 Owner decisions this plan implements:
-1. **Core 4** = Python ✅, JavaScript, TypeScript, Java — base install, always
-   resolved.
-2. **Pack tier** = pip extras with **bundled, in-tree** resolvers; no plugin
-   API, no third-party code execution. Missing grammar → zero edges, not a crash.
+1. **Python is the only core language** — the sole grammar in the base install,
+   the only language with a resolver today. Every other language is an **opt-in
+   pip extra** (`graphlm[js]`, `graphlm[java]`, … `graphlm[all]`) with a
+   **bundled, graphlm-authored, in-tree** resolver — no plugin API, no
+   third-party code. A missing grammar → zero edges for that language, not a
+   crash.
+2. **No non-Python resolver exists yet.** JS/TS are a facade returning an empty
+   `ParsedFile`. Every phase below *builds* a resolver from scratch; none flips
+   on something already there. There is no privileged non-Python language —
+   JS/TS is simply the first pack (for the reason in Phase 1), Java and the rest
+   follow by demand.
 
 Each phase below is an independent PR that keeps `uv run pytest -q` green and
 references #42. **Do not start a phase until the prior one is merged and green.**
@@ -154,8 +161,8 @@ def resolve(imp: _RawImport, from_path: str, known: set[str],
   payload). Python's existing `_ParsedImport` becomes Python's payload type.
 - `_RepoContext` is computed **once per run** in `build_dependency_graph` and
   passed down: `known` file set, per-language source roots, and any manifest data
-  a resolver needs (Java: nothing extra; Go: `go.mod` module path). Keeps
-  per-file resolution pure and cheap.
+  a resolver needs (Java: source-root names; Rust: nothing beyond the mod tree).
+  Keeps per-file resolution pure and cheap.
 - **`resolve` must never raise.** Return `[]` on anything unresolvable. A missing
   edge is always preferred to a false one (#19).
 
@@ -165,10 +172,21 @@ gone; unregistered/unavailable languages simply contribute nothing.
 
 ---
 
-## Phase 1 — JavaScript / TypeScript (one shared resolver)
+## Phase 1 — JavaScript / TypeScript pack (the first pack; proves the extras mechanism)
 
-Fixes the live facade defect (`SUPPORTED_LANGUAGES` claims JS/TS,
-`parse_file` returns empty) **and** delivers real edges.
+The **first opt-in pack** (`graphlm[js]`) and the phase that proves the whole
+Python-core / opt-in-extra machinery end to end — including the
+grammar-absent degradation path on a base install (see the mixed-language
+degradation test, moved here from what used to be a later phase). Chosen as the
+first pack for a concrete reason unrelated to any tier: it removes a **live**
+facade defect (`SUPPORTED_LANGUAGES` claims JS/TS, `parse_file` returns empty
+today) **and** delivers real edges for the most repos.
+
+**Packaging:** add `[project.optional-dependencies]` with
+`js = ["tree-sitter-javascript…", "tree-sitter-typescript…"]` and start the
+`all = ["graphlm[js]"]` aggregate. The grammars are **not** base deps — only
+`tree-sitter-python` is. On a base install (no `[js]`), a JS/TS repo must yield
+zero edges + one log line, never a crash.
 
 **Grammars — and the tsx-selection mechanism (name it, don't hand-wave).**
 `detect_language` maps **both** `.ts` and `.tsx` to `"typescript"`
@@ -228,16 +246,32 @@ cycle. Assert exact edge set + that the bare import produced no edge.
   (which prints the empty LLM `import_edges`). Record the number in the PR —
   baseline `emberfall-game` = 0.
 - `parse_file(Path("x.ts"))` no longer returns empty for a file with imports.
+- **Grammar-absent degradation on a base install** (this is the first pack, so
+  the extras path is proven here): with `[js]` **not** installed, a JS/TS repo
+  yields 0 edges + one log line, no crash.
+- **Mixed-language degradation (the invariant test, not the pure case).** A
+  **Python + TS** tree with the `[js]` grammars **absent** must yield the
+  *unchanged* Python edge count (equal to the Python-only baseline) **and**
+  `deterministic_edges is not None`. The pure "TS-only → 0 edges" case cannot
+  distinguish the poison-the-whole-run bug (see the never-escapes invariant in
+  Phase 0) from correct degradation; this one can.
+- CI: the **default** `uv sync --group dev` job runs *without* the extra and
+  covers the degradation path. Add a **new** job *with* `graphlm[js]` installed
+  to cover the enabled path. (Don't add a redundant no-extra job — that's the
+  default.) Later packs reuse this two-job pattern.
 - mypy clean; full suite green.
 
-**Commit:** `feat(parser): deterministic import edges for JavaScript/TypeScript (#42)`
+**Commit:** `feat(parser): JavaScript/TypeScript language pack via optional extra (#42)`
 
 ---
 
-## Phase 2 — Java (completes the core 4)
+## Phase 2 — Java pack
 
 Verified tractable: `import com.acme.User;` → `com/acme/User.java` — a
 FQN→file model, Python's analog, **no** directory-as-target problem.
+
+**Packaging:** `java = ["tree-sitter-java…"]` extra (not a base dep); extend
+`all`. Same two-CI-job pattern as Phase 1.
 
 **Grammar:** `java` → `(tree_sitter_java, language)`. Add `.java` to
 `EXT_TO_LANGUAGE`/`_SOURCE_EXTS` if not already (it's in `_SOURCE_EXTS`).
@@ -275,51 +309,44 @@ if kept, use `"import"`. Document.
 normal import, a static import, a wildcard, a cross-package edge, and a cycle.
 
 **Acceptance:** exact edge set on the fixture, incl. correct root-stripping;
-static/wildcard handled per decision; suite green; mypy clean. Add
-`tree-sitter-java` to base deps.
+static/wildcard handled per decision; grammar-absent degradation holds (base
+install → 0 Java edges, no crash, Python edges intact); suite green; mypy clean.
 
-**Commit:** `feat(parser): deterministic import edges for Java (#42)`
+**Commit:** `feat(parser): Java language pack via optional extra (#42)`
 
 ---
 
-## Phase 3 — First pack (Go **or** Rust) — proves the extras mechanism
+## Phase 3 — Rust pack
 
-Recommend **Go** first (higher demand; forces the directory-target decision the
-edge model must accommodate anyway).
+The third pack. By this point the extras mechanism is already proven (Phase 1),
+so this is "another resolver, same template" — no new machinery.
 
-**Packaging:** add `[project.optional-dependencies]` with `go = [...]`,
-`all = ["graphlm[go,...]"]`. Grammar is **not** a base dep — this phase proves
-the `_GrammarUnavailable` → zero-edges degradation on a clean base install.
+**Packaging:** add `rust = ["tree-sitter-rust…"]` and extend `all` to include it.
+Grammar is **not** a base dep.
 
-**Go specifics:**
-- Read `go.mod`'s `module <path>` line (in `_RepoContext`) to strip the module
-  prefix from import paths.
-- Imports resolve to a **package = directory**, not a file. Decision needed and
-  **must be made in this PR:** either (a) synthesize a representative `to_path`
-  (e.g. the dir + `/`), or (b) resolve to each `.go` file in that dir in `known`.
-  Recommend (b) for consistency with Java wildcard handling.
-- Self-check: Go forbids compile-time import cycles → **any** Go cycle graphlm
-  reports is a resolver bug. Add a fixture that asserts a valid Go tree produces
-  **zero** cycles.
+**Rust specifics:**
+- Two-step resolution: `mod foo;` declarations map to `foo.rs` / `foo/mod.rs`
+  (relative to the declaring file's directory), building the **module tree**;
+  then `use crate::/super::/self::…` paths resolve **against that module tree**,
+  not the raw filesystem. This is more involved than JS relative paths — budget
+  for it.
+- `crate::` = crate root (`src/lib.rs` or `src/main.rs`); `super::` = parent
+  module; `self::` = current module. External crates (`use serde::…`) → **drop**
+  (same rule as Python third-party / JS node_modules).
+- Under-resolve honestly: if the mod-tree walk is incomplete, trip the
+  non-exhaustive framing rather than emitting guesses.
 
 **Acceptance:**
-- On a base install (no `[go]`), a Go repo yields 0 edges + one log line, no
-  crash.
-- **Mixed-language degradation (the invariant test, not the pure case).** A
-  **Python + Go** tree with the Go grammar **absent** must yield the *unchanged*
-  Python edge count (equal to the Python-only baseline) **and**
-  `deterministic_edges is not None`. The pure "Go-only → 0 edges" case cannot
-  distinguish the poison-the-whole-run bug from correct degradation; this one can.
-- With `graphlm[go]` installed, the Go fixture yields the expected edge set and
-  **zero** cycles (Go forbids compile-time import cycles — any cycle is a bug).
-- CI: the **default** `uv sync --group dev` job already runs *without* the extra
-  and covers the degradation path. The **new** job is the one *with*
-  `graphlm[go]` installed, covering the enabled path. (Don't add a redundant
-  no-extra job — that's the default.)
+- With `graphlm[rust]` installed, the Rust fixture yields the expected edge set;
+  external-crate `use`s produce no edge.
+- On a base install (no `[rust]`), a Rust repo yields 0 edges + one log line, no
+  crash (the degradation path — already covered generically by the Phase 1
+  invariant test, re-asserted here for Rust).
 
-**Commit:** `feat(parser): Go language pack via optional extra (#42)`
+**Commit:** `feat(parser): Rust language pack via optional extra (#42)`
 
-Rust / C / others follow the same template on demand.
+Further packs (Go, C, Ruby, C#, …) follow the same template **only on demand** —
+none is planned here.
 
 ---
 
@@ -327,8 +354,8 @@ Rust / C / others follow the same template on demand.
 
 Reuse the mechanism `context.py` already has: when the edge table is capped, its
 framing flips to "not exhaustive — infer the rest." A resolver that drops
-bare/aliased specifiers (JS without tsconfig, Go without full module resolution)
-is *known-partial*. Surface a per-language "partial" signal from
+bare/aliased specifiers (JS without tsconfig aliases, Rust with an incomplete
+mod-tree walk) is *known-partial*. Surface a per-language "partial" signal from
 `build_dependency_graph` so the pass-2 edge block uses the non-exhaustive framing
 for those languages, even when the table isn't size-capped. This keeps a partial
 list from being presented to the model as complete ground truth (the #19 rule at
@@ -339,16 +366,17 @@ the prompt layer).
 ## Cross-cutting, do once (final phase or folded into Phase 1)
 
 - **`cycles.py` render note:** cycle *interpretation* is language-specific
-  (Go cycle = bug; Python = smell; JS/TS = often benign) though scoring isn't.
-  Add a one-line qualifier in the rendered cycle section keyed on the languages
+  (Python cycle = smell; JS/TS = often benign) though scoring isn't. Add a
+  one-line qualifier in the rendered cycle section keyed on the languages
   involved.
 - **`CLAUDE.md`:** replace "Only Python is fully implemented; JS/TS are
   recognized by extension but return empty `ParsedFile`" in **lock-step** with
-  the phase that makes it false. Document the core/pack tiers, the extras, and
-  the registry/degradation contract.
-- **`DECISIONS.md`:** ADR — two-tier core/pack, bundled resolvers (no plugin
-  API), registry + ImportError degradation, per-language `kind` values as diff
-  contract, under-resolve-honestly rule.
+  the phase that makes it false. Document the Python-core / opt-in-pack model,
+  the extras, and the registry/degradation contract.
+- **`DECISIONS.md`:** ADR — Python-core / opt-in-pack model (every non-Python
+  language is a pip extra with a bundled resolver, no plugin API), registry +
+  ImportError degradation, per-language `kind` values as diff contract,
+  under-resolve-honestly rule.
 - **`CHANGELOG.md`:** an `[Unreleased] / Added` entry per phase, stakeholder-led
   ("graphlm now extracts verified import edges for TypeScript projects…").
 - **`README` / `--help`:** document `graphlm[all]`, the extras, and (optional) a

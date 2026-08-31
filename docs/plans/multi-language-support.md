@@ -9,11 +9,21 @@
 docs. Commands are shown so a fresh agent can reproduce them.
 
 **Owner decisions (2026-08-30 session):**
-1. **Core 4 = Python, JavaScript, TypeScript, Java** — deterministic ground
-   truth, always installed, always resolved.
-2. **Non-core languages ship as pip extras with *bundled* resolvers.** graphlm
-   writes and tests every resolver in-tree; the extra only gates the grammar
-   *wheel* install. **No third-party plugin API, no arbitrary-code execution.**
+1. **Python is the only core language** — it is the one language with a
+   deterministic resolver today, and the only one in the base install. Every
+   other language is an **opt-in extra**. (Earlier in the session a "core 4"
+   was floated; on reflection the owner narrowed it to Python-only, since no
+   non-Python resolver exists yet — there is no basis for privileging any of
+   them as core.)
+2. **Every non-Python language ships as a pip extra with a *bundled,
+   graphlm-authored* resolver.** graphlm writes and tests every resolver
+   in-tree; the extra only gates the grammar *wheel* install. **No third-party
+   plugin API, no arbitrary-code execution** (a runtime extension API was
+   considered and rejected — locked-forever public contract, untrusted code).
+3. **None of these resolvers exist yet.** Only Python is real; JS/TS are a
+   facade that returns an empty `ParsedFile`. So "add a language" always means
+   "write and test a new in-tree resolver," never "flip on something already
+   built."
 
 ---
 
@@ -32,31 +42,40 @@ file that exists in the scan. That is where all the risk lives.
 
 ---
 
-## Two-tier architecture
+## Architecture: Python core + opt-in language packs
 
 ```
-CORE TIER (base install, always resolved)
+CORE (base install — the ONLY always-on language)
   graphlm/parsers/python.py      ✅ done — moved verbatim from parser.py
-  graphlm/parsers/javascript.py  ← JS + TS + TSX (one shared resolver)
-  graphlm/parsers/java.py        ← FQN → path, source roots
+                                    the only real resolver that exists today
 
-PACK TIER (pip extra, bundled resolver, opt-in grammar wheel)
-  graphlm/parsers/go.py          shipped in-tree; `graphlm[go]` pulls the wheel
-  graphlm/parsers/rust.py        shipped in-tree; `graphlm[rust]` pulls the wheel
-  graphlm/parsers/c.py           shipped in-tree; `graphlm[c]` pulls the wheel
-  ...
+PACKS (pip extra, bundled graphlm-authored resolver, opt-in grammar wheel)
+  graphlm/parsers/javascript.py  ← JS+TS+TSX; `graphlm[js]` pulls the wheels
+  graphlm/parsers/java.py        ← FQN→path; `graphlm[java]` pulls the wheel
+  graphlm/parsers/rust.py        ← mod tree; `graphlm[rust]` pulls the wheel
+  ...                              (none built yet; JS/TS is the first)
 ```
 
-The **only** difference between a core language and a pack language is whether its
-tree-sitter grammar wheel is a base dependency or gated behind an extra. The
-resolver code lives in-tree and is tested by graphlm's own suite either way. A
-pack whose grammar isn't installed **degrades to zero edges** for that language
-(one log line), never a crash — this is what makes the base install lean while
-keeping every language first-class-quality when enabled.
+Planned packs: **JS/TS, Java, Rust** (in build order). Others (Go, C, Ruby, C#)
+are possible later on demand but are **not planned** — nothing here commits to
+them.
+
+**One rule, not a tier list:** Python is core because it is the one language
+with a resolver and graphlm's own language. Everything else is a pack — JS/TS is
+not privileged over Go; it is simply the *first* pack on the build order (for a
+concrete, non-tiering reason: it removes a live facade bug — see build order).
+
+The **only** difference between core and a pack is whether the tree-sitter
+grammar wheel is a base dependency or gated behind an extra. Every pack
+resolver lives in-tree and is tested by graphlm's own suite (they are *not*
+third-party). A pack whose grammar isn't installed **degrades to zero edges**
+for that language (one log line), never a crash — that degradation path is now
+the *common* path (any repo whose languages the user didn't install extras for),
+so it is exercised constantly rather than being a rare edge case.
 
 This deliberately rejects a runtime plugin/entry-point API: no locked-forever
 public resolver contract, no running untrusted third-party resolver code. The
-cost is "only languages we wrote resolvers for" — accepted.
+cost is "only languages graphlm ships a resolver for" — accepted.
 
 ---
 
@@ -123,18 +142,18 @@ isolated venv (`tree-sitter==0.26.0` + each grammar): every one imported, built 
 `Language`, and parsed a trivial buffer **without error**. The tree-sitter
 language ABI is forward-compatible here; the version markers are conservative.
 
-| Grammar wheel            | Version | `Language()` + parse vs core 0.26 | Tier |
-|--------------------------|---------|-----------------------------------|------|
-| tree-sitter-python       | 0.25.0  | OK (`module`)                     | core |
-| tree-sitter-javascript   | 0.25.0  | OK (`program`)                    | core |
-| tree-sitter-typescript   | 0.23.2  | OK — accessor note below          | core |
-| tree-sitter-java         | 0.23.5  | OK (`program`)                    | core |
-| tree-sitter-go           | 0.25.0  | OK (`source_file`)                | pack |
-| tree-sitter-rust         | 0.24.2  | OK (`source_file`)                | pack |
-| tree-sitter-c            | 0.24.2  | OK (`translation_unit`)           | pack |
-| tree-sitter-cpp          | 0.23.4  | OK (`translation_unit`)           | pack |
-| tree-sitter-ruby         | 0.23.1  | OK (`program`)                    | pack |
-| tree-sitter-c-sharp      | 0.23.5  | OK (`compilation_unit`)           | pack |
+| Grammar wheel            | Version | `Language()` + parse vs core 0.26 | Install    |
+|--------------------------|---------|-----------------------------------|------------|
+| tree-sitter-python       | 0.25.0  | OK (`module`)                     | **base**   |
+| tree-sitter-javascript   | 0.25.0  | OK (`program`)                    | pack `[js]`|
+| tree-sitter-typescript   | 0.23.2  | OK — accessor note below          | pack `[js]`|
+| tree-sitter-java         | 0.23.5  | OK (`program`)                    | pack `[java]`|
+| tree-sitter-rust         | 0.24.2  | OK (`source_file`)                | pack `[rust]`|
+| tree-sitter-go           | 0.25.0  | OK (`source_file`)                | not planned |
+| tree-sitter-c            | 0.24.2  | OK (`translation_unit`)           | not planned |
+| tree-sitter-cpp          | 0.23.4  | OK (`translation_unit`)           | not planned |
+| tree-sitter-ruby         | 0.23.1  | OK (`program`)                    | not planned |
+| tree-sitter-c-sharp      | 0.23.5  | OK (`compilation_unit`)           | not planned |
 
 **Accessor gotcha (confirmed):** `tree_sitter_typescript` has **no bare
 `language()`**. It exposes `language_typescript()` and `language_tsx()`. So the
@@ -143,7 +162,7 @@ grammar entries for one logical language.** Every other grammar uses `language()
 
 ---
 
-## The core 4, spelled out
+## Per-language resolution notes
 
 Governing rule, carried forward from #19: **a false edge in the
 do-not-contradict table is worse than a missing one.** Each resolver starts
@@ -151,22 +170,23 @@ deliberately *under*-resolving, and when it knows it is partial it trips the sam
 honesty mechanism the edge-budget cap already uses in `context.py` (framing flips
 to "not exhaustive — infer the rest").
 
-### 1. Python — ✅ done
-Move `parser.py`'s resolver to `parsers/python.py` **verbatim** (do not
-re-litigate #19). Pure relocation, Python suite green before anything else moves.
+**Python — ✅ the only built resolver.** Move `parser.py`'s resolver to
+`parsers/python.py` **verbatim** (do not re-litigate #19). Pure relocation,
+Python suite green before anything else moves. Everything below is a pack that
+does not exist yet.
 
-### 2 & 3. JavaScript / TypeScript — one shared resolver
-Specifiers are **path-relative** (`./foo`, `../bar/baz`), not dotted. Resolution:
-extension-probe order (`.ts .tsx .js .jsx .mjs .cjs`), then `<spec>/index.*`.
-Bare specifiers (`react`, `lodash`) → node_modules → **drop** (same rule as
-Python stdlib). `import`, `require()`, and dynamic `import()` all count as edges;
-decide the `kind` label (see models.py touch below). **Out of scope for v1:**
+**JavaScript / TypeScript (pack `[js]`)** — one shared resolver. Specifiers are
+**path-relative** (`./foo`, `../bar/baz`), not dotted. Resolution: extension-probe
+order (`.ts .tsx .js .jsx .mjs .cjs`), then `<spec>/index.*`. Bare specifiers
+(`react`, `lodash`) → node_modules → **drop** (same rule as Python stdlib).
+`import`, `require()`, and dynamic `import()` all count as edges; decide the
+`kind` label (see models.py touch below). **Out of scope for v1:**
 `tsconfig.json` `paths`/`baseUrl` aliases and package `exports` maps — the rabbit
 hole. Relative specifiers alone cover most intra-repo edges. TS + TSX are two
 grammar registrations feeding this one resolver.
 
-### 4. Java — closer to Python than to Go (verified)
-Confirmed against the real grammar: `import com.acme.model.User;` parses to a
+**Java (pack `[java]`)** — closer to Python than to Go (verified). Confirmed
+against the real grammar: `import com.acme.model.User;` parses to a
 `scoped_identifier` `com.acme.model.User`, which maps to path
 `com/acme/model/User.java` — a **fully-qualified-name → file** model, the direct
 analog of Python's dotted-module → file. **No** Go-style directory-as-target
@@ -182,27 +202,19 @@ mismatch.
   `import static com.acme.util.Helpers.now;` (member → strip trailing member,
   resolve the class file). Handle both explicitly or drop them honestly.
 
----
+**Rust (pack `[rust]`)** — the third planned pack. Two steps: `mod foo;` →
+`foo.rs`/`foo/mod.rs` (builds the module tree), then `use crate::/super::/self::`
+resolves against that **module tree**, not the raw filesystem. External crates
+(`use serde::…`) → drop. More involved than JS relative paths.
 
-## Pack tier (bundled resolvers, opt-in wheels)
-
-Same resolver-quality bar as core; the language just isn't in the base install.
-
-- **Go** — import path is the **full module path** (`github.com/x/y/pkg`); read
-  `go.mod`'s `module` line to strip the prefix. Imports resolve to a **directory
-  (package), not a file** — a structural mismatch with `ImportEdge.to_path`.
-  **Decide before coding:** synthesize a representative file per package, or widen
-  the edge target to a directory. Self-check: Go forbids import cycles at compile
-  time, so any Go cycle graphlm reports is a resolver bug.
-- **Rust** — two steps: `mod foo;` → `foo.rs`/`foo/mod.rs`, then
-  `use crate::/super::/self::` resolves against the **module tree**.
-- **C/C++** — quoted `#include "foo.h"` is the easy win; users want **`.h`↔`.c`
-  pairing**. Angle-bracket includes → drop.
-- **Ruby / C#** — grammars load; resolvers are each their own effort. On demand.
+**Not planned (possible later, on demand only):** Go (import path = full module
+path; resolves to a package = *directory*, a structural mismatch with
+`ImportEdge.to_path` that would need a decision first), C/C++ (`.h`↔`.c` pairing),
+Ruby, C#. Their grammars load fine against core 0.26 (see the table) — but no
+resolver is committed for them here.
 
 Cycle *interpretation* is language-specific (scoring in `cycles.py` is not):
-Go cycle = resolver bug; Python cycle = real smell; JS/TS cycle = common/benign.
-Worth a render note.
+Python cycle = real smell; JS/TS cycle = common/benign. Worth a render note.
 
 ---
 
@@ -210,12 +222,15 @@ Worth a render note.
 
 1. **Refactor first** (`parser.py` → `parsers/` package, Python moved verbatim,
    suite green). No behavior change — de-risks everything after.
-2. **JS/TS** — fixes a live facade defect (`SUPPORTED_LANGUAGES` claims them,
-   `parse_file` returns empty) *and* delivers real edges. Highest coverage.
-3. **Java** — completes the core 4.
-4. **First pack (Go or Rust)** — proves the extras mechanism end to end,
-   including the ImportError-degradation path.
-5. Remaining packs on demand.
+2. **JS/TS pack** — the first pack. Chosen first for a concrete reason unrelated
+   to tiering: it removes a *live* facade defect (`SUPPORTED_LANGUAGES` claims
+   JS/TS, `parse_file` returns empty today) *and* delivers real edges for the
+   most repos. This is also the PR that proves the whole opt-in-extra mechanism
+   end to end, including the ImportError-degradation path on a base install.
+3. **Java pack**, then **Rust pack**. These are the planned packs. None is
+   privileged over the others; each is the same shape of work (a new in-tree
+   resolver + its extra + fixtures). Further languages (Go, C, …) only on demand
+   — nothing here commits to them.
 
 ---
 
@@ -236,35 +251,36 @@ before adding anything. Splitting into `graphlm/parsers/` is **required**:
 `(pip_module, accessor_fn_name)` — TS/TSX as two entries — that **degrades on
 `ImportError`** rather than raising, so a pack language whose wheel isn't
 installed yields no edges (one log line) instead of crashing the run. This is the
-load-bearing mechanism for the whole two-tier design.
+load-bearing mechanism for the whole Python-core / opt-in-pack design.
 
 ---
 
-## Packaging: core deps + pack extras
+## Packaging: Python in the base, every other language an extra
 
 ```toml
 [project]
 dependencies = [
   # …existing…
   "tree-sitter>=0.26,<0.27",
-  "tree-sitter-python>=0.25,<0.26",
-  "tree-sitter-javascript>=0.25,<0.26",   # core
-  "tree-sitter-typescript>=0.23,<0.24",   # core
-  "tree-sitter-java>=0.23,<0.24",         # core
+  "tree-sitter-python>=0.25,<0.26",       # the ONLY grammar in the base install
 ]
 
 [project.optional-dependencies]
-go   = ["tree-sitter-go>=0.25,<0.26"]
+# Planned packs (in build order):
+js   = ["tree-sitter-javascript>=0.25,<0.26", "tree-sitter-typescript>=0.23,<0.24"]
+java = ["tree-sitter-java>=0.23,<0.24"]
 rust = ["tree-sitter-rust>=0.24,<0.25"]
-c    = ["tree-sitter-c>=0.24,<0.25", "tree-sitter-cpp>=0.23,<0.24"]
-all  = ["graphlm[go,rust,c]"]
+all  = ["graphlm[js,java,rust]"]
+# (Go / C / Ruby / C# extras would be added here only if those packs are ever built.)
 ```
 
-The 4 core grammars become base deps (4 ABI windows, all verified satisfiable
-against core 0.26). Pin windows are illustrative — set from current versions at
-implementation time; *loading* was verified, exact upper bounds are judgment.
-`graphlm --version` / a `--languages` flag could report which grammars are
-actually importable, so users see what's active.
+Only `tree-sitter-python` is a base dependency — the base install stays as lean
+as it is today. Every other grammar is behind an extra, so a user opts into
+exactly the languages they need (`graphlm[js]`, or `graphlm[all]`). Pin windows
+are illustrative — set from current versions at implementation time; grammar
+*loading* against core 0.26 was verified for all of these, exact upper bounds
+are judgment. `graphlm --version` / a `--languages` flag could report which
+grammars are actually importable, so users see what's active in their install.
 
 ---
 
@@ -285,9 +301,10 @@ actually importable, so users see what's active.
   ranks new source above docs the same way (#19). Likely no change.
 - **`CLAUDE.md`** — the "Only Python is fully implemented; JS/TS are recognized
   by extension but return empty `ParsedFile`" claim moves in lock-step.
-- **`DECISIONS.md`** — new ADR: two-tier core/pack model, bundled-resolver
-  (no plugin API), registry + ImportError degradation, under-resolve-honestly
-  rule. (ADR material *once approved*.)
+- **`DECISIONS.md`** — new ADR: Python-core / opt-in-pack model (every non-Python
+  language is a pip extra with a bundled resolver, no plugin API), registry +
+  ImportError degradation, under-resolve-honestly rule. (ADR material *once
+  approved*.)
 - **Tests / fixtures** — all four fixture trees are Python. Per-language
   fixtures needed; per CLAUDE.md **extend a fixture, don't mock file I/O.** A
   cyclic fixture per language is the cheapest correctness check. Add a test that

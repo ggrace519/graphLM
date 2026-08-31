@@ -13,7 +13,7 @@ and this project adheres to Semantic Versioning.
 
 ### Docs
 
-- Design docs for multi-language AST support (#42): `docs/plans/multi-language-support.md` (research + the two-tier core/pack recommendation) and `docs/plans/multi-language-implementation.md` (phased build plan). No code change yet — this is the approved design for adding deterministic import-edge extraction beyond Python (core 4: Python/JS/TS/Java; other languages as opt-in pip extras with bundled resolvers).
+- Design docs for multi-language AST support (#42): `docs/plans/multi-language-support.md` (research + recommendation) and `docs/plans/multi-language-implementation.md` (phased build plan). No code change yet — this is the approved design for adding deterministic import-edge extraction beyond Python. Model: **Python is the only core language** (the sole grammar in the base install); every other language is an **opt-in pip extra** (`graphlm[js]`, `graphlm[java]`, `graphlm[rust]`, `graphlm[all]`) with a bundled, graphlm-authored resolver — no third-party plugin API. Planned packs, in build order: JS/TS, Java, Rust.
 
 ### Infrastructure
 
