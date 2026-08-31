@@ -254,6 +254,13 @@ graphLM reads its LLM settings from environment variables. Copy `.env.example` t
 cp .env.example .env
 ```
 
+Settings are resolved in this order (first non-empty wins):
+
+1. **Exported shell environment** — `export GRAPHLM_BASE_URL=…` etc.
+2. **Project `.env`** — searched from the current working directory upward, so it works whether graphLM is run from a source checkout or `uv tool install`ed.
+3. **User-level `.env`** at `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`) — a global config for an installed graphLM, so you don't need a `.env` in every project.
+4. Built-in defaults.
+
 | Variable | Description | Default |
 |---|---|---|
 | `GRAPHLM_BASE_URL` | OpenAI-compatible API endpoint | `https://openrouter.ai/api/v1` |

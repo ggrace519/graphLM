@@ -1,8 +1,10 @@
 """Tests for config.py."""
 
+import os
+
 import pytest
 
-from graphlm.config import Settings
+from graphlm.config import Settings, _load_env_files, _user_config_path
 
 
 class TestSettings:
@@ -84,3 +86,99 @@ class TestSettings:
         monkeypatch.setenv("GRAPHLM_MODEL", "m")
         monkeypatch.setenv("GRAPHLM_MAX_OUTPUT_TOKENS", "48000")
         assert Settings.from_env().max_output_tokens == 48000
+
+
+# A dedicated key that no .env in this repo (or any ancestor) defines, so the
+# loader tests can't collide with the repo's real .env — and because
+# load_dotenv mutates os.environ directly (monkeypatch cannot roll back a
+# delenv of a var that was absent), a dedicated key also keeps any value the
+# loader sets from leaking into other tests.
+_PROBE = "GRAPHLM_USER_CONFIG_PROBE"
+
+
+class TestUserConfigPath:
+    def test_honors_xdg_config_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        assert _user_config_path() == tmp_path / "graphlm" / ".env"
+
+    def test_falls_back_to_home_config_when_xdg_unset(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))  # Path.home() honors $HOME on POSIX
+        assert _user_config_path() == tmp_path / ".config" / "graphlm" / ".env"
+
+    def test_empty_xdg_config_home_falls_back_to_home(self, monkeypatch, tmp_path):
+        # "$XDG_CONFIG_HOME when set AND non-empty" — empty must fall back.
+        monkeypatch.setenv("XDG_CONFIG_HOME", "")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _user_config_path() == tmp_path / ".config" / "graphlm" / ".env"
+
+
+class TestLoadEnvFiles:
+    def test_user_config_supplies_value_when_unset(self, monkeypatch, tmp_path):
+        # No project .env on the path (chdir to an empty tmp dir); usecwd=True
+        # means the project search starts from cwd, so nothing is found there.
+        monkeypatch.chdir(tmp_path)
+        cfgdir = tmp_path / "xdg" / "graphlm"
+        cfgdir.mkdir(parents=True)
+        (cfgdir / ".env").write_text(f"{_PROBE}=from-user-config\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.delenv(_PROBE, raising=False)
+
+        _load_env_files()
+
+        assert os.environ.get(_PROBE) == "from-user-config"
+
+    def test_shell_env_wins_over_user_config(self, monkeypatch, tmp_path):
+        # Precedence: a value already in os.environ (simulating an exported
+        # shell var) must NOT be overwritten by the user config.
+        monkeypatch.chdir(tmp_path)
+        cfgdir = tmp_path / "xdg" / "graphlm"
+        cfgdir.mkdir(parents=True)
+        (cfgdir / ".env").write_text(f"{_PROBE}=from-user-config\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setenv(_PROBE, "from-shell")  # recorded → rolled back by monkeypatch
+
+        _load_env_files()
+
+        assert os.environ.get(_PROBE) == "from-shell"
+
+    def test_project_env_found_from_cwd_not_package_dir(self, monkeypatch, tmp_path):
+        # Regression guard for the #45 second facet: the project .env must be
+        # located from the working directory upward (usecwd=True), NOT from
+        # graphlm's own install directory. Write a .env into cwd and assert it
+        # is picked up. No user config present here.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(f"{_PROBE}=from-project-env\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-such-xdg"))
+        monkeypatch.delenv(_PROBE, raising=False)
+
+        _load_env_files()
+
+        assert os.environ.get(_PROBE) == "from-project-env"
+
+    def test_project_env_wins_over_user_config(self, monkeypatch, tmp_path):
+        # Pins the load ORDER: the project .env loads first, so with
+        # override=False the user config cannot replace it. Swapping the two
+        # load_dotenv calls in _load_env_files() must fail this test.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(f"{_PROBE}=from-project-env\n")
+        cfgdir = tmp_path / "xdg" / "graphlm"
+        cfgdir.mkdir(parents=True)
+        (cfgdir / ".env").write_text(f"{_PROBE}=from-user-config\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.delenv(_PROBE, raising=False)
+
+        _load_env_files()
+
+        assert os.environ.get(_PROBE) == "from-project-env"
+
+    def test_missing_user_config_is_clean_noop(self, monkeypatch, tmp_path):
+        # Point XDG at a dir with no graphlm/.env, and no project .env in cwd:
+        # loading must not raise and must not invent the probe var.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty-xdg"))
+        monkeypatch.delenv(_PROBE, raising=False)
+
+        _load_env_files()  # must not raise
+
+        assert os.environ.get(_PROBE) is None
