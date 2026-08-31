@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-authors = [{ name = "Greg Grace", email = "ggrace@519lab.com" }]
+authors = [{ name = "Greg Grace", email = "graphlm@519lab.com" }]
 keywords = ["codebase", "graph", "llm", "static-analysis", "tree-sitter", "documentation", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync --group dev                          # install (incl. pytest, pytest-cov, pytest-httpx, mypy)
-uv run pytest -q                             # full suite (~350 tests, ~4s, no network — LLM is mocked via pytest-httpx)
+uv run pytest -q                             # full suite (~390 tests, ~4s, no network — LLM is mocked via pytest-httpx)
 uv run pytest tests/test_parser.py -q        # one file
 uv run pytest tests/test_parser.py::test_name -q   # one test
 uv run pytest --cov=graphlm --cov-report=term-missing   # coverage (CI reports it; ~90%, but NOT gated — no --cov-fail-under)

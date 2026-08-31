@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in graphLM doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **do not** use this form for security
+        vulnerabilities — see [SECURITY.md](https://github.com/ggrace519/graphLM/security/policy).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did graphLM do, and what did you expect instead?
+      placeholder: When I ran ... it produced ... but I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        The command you ran and, if possible, the shape of the project you ran it
+        against. `--dry-run` output is often enough and involves no LLM call.
+      placeholder: |
+        1. graphlm /path/to/project --dry-run
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / error
+      description: Paste the relevant CLI output or traceback.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: graphLM version
+      description: "`graphlm --version` (or the commit SHA if from source)"
+      placeholder: graphlm 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: LLM endpoint (optional)
+      description: >
+        The kind of OpenAI-compatible endpoint, if relevant (e.g. vLLM, a Qwen
+        server, OpenAI). **Do not paste your API key.**
+      placeholder: self-hosted Qwen (OpenAI-compatible)
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
