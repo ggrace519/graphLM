@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning.
 ### Fixed
 
 - `--dry-run` mislabeled its file count. The line read `Files scanned: N`, but `N` was the number of files **selected for pass-2 analysis** (capped at `--max-pass2-files`, default 80), not the number of files scanned (bounded by `--max-files`, default 200). On any project with more than 80 source files the two differ, so the label under-reported the scan and read as a smaller repo than was actually walked. The line now reads `Files selected for pass-2 analysis: N`.
+- Config from a `.env` file was silently ignored for installed users (#45). `config.py` loaded `.env` with a bare `load_dotenv()`, which searches upward from the *package's own directory* — so once graphLM was `uv tool install`ed, it looked next to its site-packages install, never at the project you were mapping. Two consequences, both fixed: (1) a **project `.env`** is now found from the **current working directory** upward (`find_dotenv(usecwd=True)`), so it works from an installed graphLM, not only from a source checkout; and (2) a new **user-level fallback** at `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`) lets you configure an installed graphLM once instead of dropping a `.env` in every project. Precedence, first non-empty wins: exported shell env > project `.env` (cwd upward) > user-level `.env` > built-in defaults; higher sources are never clobbered. (Running with the repo as your working directory is unchanged.)
 
 ### Docs
 

@@ -2,15 +2,58 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from graphlm.llm import LLM_MAX_OUTPUT_TOKENS
 
-# Load .env from the project root (one level up from graphlm/).
-load_dotenv()
+
+def _user_config_path() -> Path:
+    """User-level config path: ``$XDG_CONFIG_HOME/graphlm/.env`` when
+    ``$XDG_CONFIG_HOME`` is set and non-empty, else ``~/.config/graphlm/.env``.
+
+    Reads the env var at call time (not import time) so it stays testable.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "graphlm" / ".env"
+
+
+def _load_env_files() -> None:
+    """Populate ``os.environ`` from .env files without clobbering real env vars.
+
+    Resolution precedence (first non-empty wins), highest to lowest:
+
+    1. the real shell environment (already in ``os.environ`` — never touched);
+    2. the project ``.env`` (searched from the CURRENT WORKING DIRECTORY
+       upward — ``usecwd=True``, so an *installed* graphlm sees the user's
+       project, not its own site-packages tree — #45);
+    3. the user-level ``~/.config/graphlm/.env`` (or
+       ``$XDG_CONFIG_HOME/graphlm/.env``) — a global fallback for a
+       ``uv tool install`` where no project ``.env`` is on the path (#45);
+    4. the built-in defaults in :class:`Settings`.
+
+    ``load_dotenv(override=False)`` never overwrites a variable already present,
+    so loading the lower-precedence source second yields exactly the order
+    above. Bare ``load_dotenv()`` / ``find_dotenv()`` (no ``usecwd``) searches
+    upward from *this module's* directory, so an installed graphlm would miss
+    the user's project ``.env`` entirely — that is why we pass ``usecwd=True``
+    and guard the empty ("not found") result: ``load_dotenv("")`` would fall
+    back to that broken frame-based search.
+    """
+    project_env = find_dotenv(usecwd=True)  # "" when none found on the path
+    if project_env:
+        load_dotenv(project_env, override=False)
+
+    user_env = _user_config_path()
+    if user_env.is_file():
+        load_dotenv(user_env, override=False)
+
+
+_load_env_files()
 
 
 # Default maximum context window (tokens) — ~128k with room for output
@@ -52,15 +95,18 @@ class Settings:
 
         if not base_url:
             raise ValueError(
-                "GRAPHLM_BASE_URL not set. Set it in .env or pass --base-url."
+                "GRAPHLM_BASE_URL not set. Export it, set it in a project "
+                ".env or ~/.config/graphlm/.env, or pass --base-url."
             )
         if not api_key:
             raise ValueError(
-                "GRAPHLM_API_KEY not set. Set it in .env or pass --api-key."
+                "GRAPHLM_API_KEY not set. Export it, set it in a project "
+                ".env or ~/.config/graphlm/.env, or pass --api-key."
             )
         if not model:
             raise ValueError(
-                "GRAPHLM_MODEL not set. Set it in .env or pass --model."
+                "GRAPHLM_MODEL not set. Export it, set it in a project "
+                ".env or ~/.config/graphlm/.env, or pass --model."
             )
 
         return cls(
