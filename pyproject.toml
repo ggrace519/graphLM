@@ -5,16 +5,40 @@ build-backend = "hatchling.build"
 [project]
 name = "graphlm"
 version = "0.1.0"
-description = "Generate codebase graphs (Markdown + JSON) from any project directory using an OpenAI-compatible LLM"
+description = "Generate codebase graphs (Markdown + JSON + interactive HTML) from any project directory using an OpenAI-compatible LLM"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Greg Grace", email = "ggrace@519lab.com" }]
+keywords = ["codebase", "graph", "llm", "static-analysis", "tree-sitter", "documentation", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "python-dotenv",
     "typer",
     "httpx",
     "pydantic>=2.0",
-    "tree-sitter>=0.26.0",
-    "tree-sitter-python>=0.25.0",
+    "tree-sitter>=0.26.0,<0.27",
+    "tree-sitter-python>=0.25.0,<0.26",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ggrace519/graphLM"
+Repository = "https://github.com/ggrace519/graphLM"
+Changelog = "https://github.com/ggrace519/graphLM/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ggrace519/graphLM/issues"
 
 [project.scripts]
 graphlm = "graphlm.cli:app"

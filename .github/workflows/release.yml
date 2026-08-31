@@ -1,0 +1,144 @@
+name: Release
+
+# Publishes graphlm to PyPI *and* a GitHub Release from one git tag.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag drives everything: build once, smoke-test the built wheel in a clean
+# venv, attach the artifacts to a GitHub Release, and publish the same artifacts
+# to PyPI via Trusted Publishing (OIDC — no stored API token).
+#
+# A manual run (workflow_dispatch) publishes to TestPyPI instead, so the whole
+# Trusted-Publishing path can be rehearsed without burning the real name/version.
+# This does NOT re-run the test matrix — the push/PR CI (ci.yml) already gates
+# the commit on 3-version pytest + mypy.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target for a manual run"
+        type: choice
+        options:
+          - testpypi
+          - none
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist
+
+      # The check the test suite can't do: install the *built wheel* into a
+      # fresh venv (never .venv) and run it. This catches a missing entry point,
+      # a missing data file (_html_template.html), or a missing dependency — all
+      # at once, with no network (--dry-run makes no LLM call).
+      - name: Smoke-test the built wheel in a clean venv
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          echo "--- graphlm --version ---"
+          /tmp/smoke/bin/graphlm --version
+          echo "--- graphlm <fixture> --dry-run ---"
+          /tmp/smoke/bin/graphlm tests/fixtures/small_project --dry-run
+          echo "--- HTML template ships in the wheel ---"
+          /tmp/smoke/bin/python -c "import graphlm, importlib.resources as r; \
+            p = r.files('graphlm') / '_html_template.html'; \
+            assert p.is_file(), 'MISSING _html_template.html'; print('ok:', p)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release + upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            graphlm ${{ github.ref_name }}
+
+            Install: `uv tool install graphlm` or `pipx install graphlm`
+            (or grab the wheel/sdist below). See the
+            [CHANGELOG](https://github.com/ggrace519/graphLM/blob/main/CHANGELOG.md)
+            for what's in this release.
+
+  pypi-publish:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/graphlm
+    permissions:
+      id-token: write # Trusted Publishing (OIDC) — no API token secret
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  testpypi-publish:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/graphlm
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

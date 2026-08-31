@@ -27,6 +27,74 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Analyze a project directory" in result.stdout or "project directory" in result.stdout
 
+    def test_version_flag(self):
+        # --version is eager: it prints and exits 0 without needing project_dir.
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        out = result.stdout + result.stderr
+        assert "graphlm" in out
+        # Never prints a bare "None" (the source-checkout fallback path).
+        assert "None" not in out
+
+    def test_version_short_flag(self):
+        result = runner.invoke(app, ["-V"])
+        assert result.exit_code == 0
+        assert "graphlm" in (result.stdout + result.stderr)
+
+    def test_install_skill_without_project_dir(self, tmp_path, monkeypatch):
+        # The whole point: --install-skill works with no PROJECT_DIR.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = runner.invoke(app, ["--install-skill", "claude"])
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert (tmp_path / ".claude" / "skills" / "graphlm" / "SKILL.md").is_file()
+
+    def test_install_skill_unknown_harness(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = runner.invoke(app, ["--install-skill", "vim"])
+        assert result.exit_code == 2
+        assert "unknown harness" in (result.stdout + result.stderr)
+
+    def test_install_skill_local_needs_project_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = runner.invoke(app, ["--install-skill", "claude", "--skill-local"])
+        assert result.exit_code == 2
+        assert "PROJECT_DIR" in (result.stdout + result.stderr)
+
+    def test_no_args_errors_cleanly(self):
+        # project_dir is optional (so --install-skill can run alone), but the
+        # analyze path still requires it — with a clean message, not a traceback.
+        result = runner.invoke(app, [])
+        assert result.exit_code == 2
+        assert "PROJECT_DIR" in (result.stdout + result.stderr)
+
+    def test_install_skill_idempotent_skip_via_cli(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        first = runner.invoke(app, ["--install-skill", "claude"])
+        assert first.exit_code == 0
+        second = runner.invoke(app, ["--install-skill", "claude"])
+        assert second.exit_code == 0
+        out = second.stdout + second.stderr
+        assert "Skipped" in out and "--skill-force" in out
+
+    def test_install_skill_codex_prints_note_via_cli(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        result = runner.invoke(app, ["--install-skill", "codex"])
+        assert result.exit_code == 0, result.stdout + result.stderr
+        out = result.stdout + result.stderr
+        # The wiring note (Codex won't auto-read the standalone guide).
+        assert "AGENTS.md" in out
+        assert (tmp_path / ".codex" / "graphlm.md").is_file()
+
+    def test_install_skill_symlink_exits_cleanly(self, tmp_path, monkeypatch):
+        # A symlink at the target → clean exit-2 error, not a traceback (#33).
+        monkeypatch.setenv("HOME", str(tmp_path))
+        target = tmp_path / ".claude" / "skills" / "graphlm" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        target.symlink_to(tmp_path / "elsewhere.txt")
+        result = runner.invoke(app, ["--install-skill", "claude", "--skill-force"])
+        assert result.exit_code == 2
+        assert "symlink" in (result.stdout + result.stderr)
+
     def test_nonexistent_directory(self):
         result = runner.invoke(app, ["/nonexistent/directory"])
         assert result.exit_code == 1
@@ -108,13 +176,15 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
 
-    def test_output_destination_defaults_to_project(self, tmp_path):
+    def test_output_destination_defaults_to_dot_graphlm(self, tmp_path):
         project = tmp_path / "scanned"
         other = tmp_path / "elsewhere"
-        assert output_destination(project, None) == project
+        # Default: a .graphlm/ subdir of the scanned project.
+        assert output_destination(project, None) == project / ".graphlm"
+        # -o is honored literally (no .graphlm appended).
         assert output_destination(project, str(other)) == other
 
-    def test_cli_writes_into_scanned_project_not_cwd(
+    def test_cli_writes_into_dot_graphlm_not_cwd(
         self, small_project, tmp_path, monkeypatch
     ):
         cwd = tmp_path / "cwd"
@@ -140,7 +210,8 @@ class TestCLI:
             result = runner.invoke(app, [str(small_project)])
 
         assert result.exit_code == 0, result.stdout + result.stderr
-        assert recorded["dest"] == small_project.resolve()
+        # Default output lands in the scanned project's .graphlm/ subdir.
+        assert recorded["dest"] == (small_project / ".graphlm").resolve()
         assert not (cwd / "GRAPH.md").exists()
 
     def test_cli_dash_o_overrides_project_dir(

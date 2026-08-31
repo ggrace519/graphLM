@@ -49,10 +49,16 @@ _ALWAYS_EXCLUDE = {
     "htmlcov",
     ".idea",
     ".vscode",
-    # graphlm's own output artifacts. On a re-run over a project graphlm has
-    # already mapped, these sit in the scanned dir; excluding them keeps graphlm
-    # from ingesting its own map (and, since #28, its own diff) as source. Named
-    # explicitly (not a broad GRAPH*) so a user's GRAPHICS.md etc. is untouched.
+    # graphlm's own output directory. The CLI writes GRAPH.* / GRAPH_DIFF.* into
+    # a `.graphlm/` subdir of the scanned project by default, so excluding the
+    # whole directory keeps graphlm from ingesting its own map (and diff, #28) as
+    # source on a re-run. `_should_exclude` matches any path component, so this
+    # drops `.graphlm/` and everything under it in one entry.
+    ".graphlm",
+    # graphlm's own output artifacts *by filename*, for the case where output is
+    # redirected into the scanned tree with `-o` (or a library caller writes to
+    # the project root) rather than the default `.graphlm/` dir. Named explicitly
+    # (not a broad GRAPH*) so a user's GRAPHICS.md etc. is untouched.
     # NOTE: these are the *default* suffix ("GRAPH") only. write_outputs accepts
     # custom *_suffix / diff_suffix params, so a library caller writing e.g.
     # `map.json` / `map_DIFF.json` and then re-scanning that dir would re-ingest

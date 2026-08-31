@@ -264,8 +264,8 @@ requires-dist = [
     { name = "httpx" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv" },
-    { name = "tree-sitter", specifier = ">=0.26.0" },
-    { name = "tree-sitter-python", specifier = ">=0.25.0" },
+    { name = "tree-sitter", specifier = ">=0.26.0,<0.27" },
+    { name = "tree-sitter-python", specifier = ">=0.25.0,<0.26" },
     { name = "typer" },
 ]
 
