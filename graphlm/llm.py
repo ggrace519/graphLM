@@ -230,7 +230,7 @@ def call_llm(
 
     url = base_url.rstrip("/") + "/chat/completions"
 
-    payload = {
+    payload: dict[str, object] = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -245,6 +245,27 @@ def call_llm(
         # handles transparently.
         "stream": True,
     }
+
+    # Constrain the output to the JSON schema when a structured response is
+    # requested (pass 2 only — pass 1 passes response_format=None and wants a
+    # free-form {"requested_files": [...]} object). Prompt-only instruction is
+    # not enough for every served model: Qwen3.6-35B, told in-prompt to emit a
+    # CodebaseGraph, returned a near-empty `{"database_schema": null}` and the
+    # run produced no graph at all — with response_format attached it emits the
+    # full graph (#31). The endpoint treats the schema as a guided-JSON hint,
+    # not strict all-required enforcement, so the prompt's "return an empty
+    # directory_tree" (and the locally-filled meta / import_cycles /
+    # deterministic_edges) still come back empty — #18 is not reopened. On an
+    # endpoint that rejects response_format, the call degrades: see the
+    # non-200 handling below, which retries once without the constraint.
+    if response_format is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_format.__name__,
+                "schema": response_format.model_json_schema(),
+            },
+        }
 
     headers = {
         "Content-Type": "application/json",
@@ -270,6 +291,25 @@ def call_llm(
                         # so we don't burn minutes re-waiting on a hard failure.
                         response.read()
                         detail = response.text[:500]
+                        # Portability fallback: an endpoint that doesn't support
+                        # response_format (or rejects the schema's $defs/anyOf)
+                        # rejects the *parameter* with a 400 Bad Request. Rather
+                        # than turn a previously-working prompt-only setup into a
+                        # hard failure, drop the constraint and re-issue via the
+                        # retry loop. Scoped to 400 specifically — a 404 (missing
+                        # endpoint/model), 401/403 (auth), or 429 (rate limit) is
+                        # not a schema problem and must still surface as an error,
+                        # not be masked by a constraint-less retry. `continue`
+                        # costs one connection-retry attempt, which is fine: a 400
+                        # is deterministic, so the freed attempt would not have
+                        # helped, and popping the constraint makes this one-shot
+                        # (the next 400 cannot loop back here).
+                        if (
+                            response.status_code == 400
+                            and "response_format" in payload
+                        ):
+                            payload.pop("response_format")
+                            continue
                         raise GraphLLErrorResponse(
                             f"LLM returned HTTP {response.status_code}: {detail}"
                         )
