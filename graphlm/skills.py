@@ -67,12 +67,18 @@ the map.)
   codebase looks like (its main modules, entry points, any notable import
   cycles). Check the refresh directive (below) and offer to regenerate if stale.
 - **If it does NOT exist:** **generate it — run `graphlm .` — without asking.**
-  This is the expected outcome of an explicit invocation, and it's a safe,
-  local, idempotent action (no network side effects beyond one call to the LLM
-  endpoint graphlm is already configured for; it only writes into `.graphlm/`).
-  Do **not** stall with a menu or ask permission for this specific command. Then
-  read the map you just generated and summarize it. Generation streams and can
-  take a minute or two on a large repo — that's normal; let it run.
+  This is the expected outcome of an explicit invocation, and it's a local,
+  idempotent action that only writes into `.graphlm/`. Do **not** stall with a
+  menu. Then read the map you just generated and summarize it. Generation streams
+  and can take a minute or two on a large repo — that's normal; let it run.
+  - **One caveat worth a heads-up, not a stall:** generating a map **sends
+    selected repository file content** (typically tens of thousands of tokens)
+    to whatever endpoint graphlm is configured for (`GRAPHLM_BASE_URL`). If that
+    endpoint is **local or otherwise trusted**, just proceed. If it's a
+    **third-party API** — or you can't tell — say in one line where the code will
+    be sent and get a quick OK before running, since exporting a private codebase
+    is the user's call to make. Don't send code from a repo the user wouldn't
+    want shared with that endpoint.
 - Only stop to ask if graphlm is **not installed** or its **LLM endpoint isn't
   configured/reachable** (`graphlm .` will say so) — then tell the user what's
   missing instead of guessing.
@@ -102,6 +108,12 @@ since the previous run.
 
 - The map is **advisory** and best-effort. Trust the code over the map when they
   disagree; a stale map is possible (regenerate to be sure).
+- **Generating a map sends code off-box.** `graphlm .` transmits selected
+  repository file content to the configured LLM endpoint (`GRAPHLM_BASE_URL`).
+  That's fine for a local/trusted endpoint; for a third-party API, treat it as a
+  code-export the user should be aware of before you run it (see the caveat under
+  A above). graphlm redacts obvious secrets and skips sensitive files, but that's
+  defense-in-depth, not a guarantee.
 - graphlm needs an OpenAI-compatible LLM endpoint (`GRAPHLM_BASE_URL` /
   `GRAPHLM_API_KEY` / `GRAPHLM_MODEL`); `graphlm .` will tell you if it's not
   configured. `graphlm --help` lists every flag.
@@ -114,10 +126,14 @@ def _claude_skill_file(body: str) -> str:
         "---\n"
         "name: graphlm\n"
         "description: >-\n"
-        "  Read and refresh the graphlm codebase map (.graphlm/GRAPH.md) when working in "
-        "a repository. Use when orienting in an unfamiliar codebase, before exploring "
-        "files by hand, or when you need modules / import edges / entry points / import "
-        "cycles at a glance. Regenerate a missing or stale map with `graphlm .`.\n"
+        "  Read the graphlm codebase map (.graphlm/GRAPH.md) to get oriented in a "
+        "repository. Use this at the START of working in a codebase — before reading "
+        "or searching through files to understand the structure, and before answering "
+        "questions about how the project is laid out. It gives you modules, "
+        "import/dependency edges, entry points, and import cycles at a glance, so you "
+        "don't have to explore file-by-file. Reach for it whenever you're getting your "
+        "bearings in an unfamiliar or large repo. If the map is missing or stale, "
+        "regenerate it with `graphlm .`.\n"
         "---\n\n"
         "# graphlm codebase map\n\n"
     )
