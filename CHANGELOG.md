@@ -7,6 +7,8 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-31
+
 ### Fixed
 
 - `--dry-run` mislabeled its file count. The line read `Files scanned: N`, but `N` was the number of files **selected for pass-2 analysis** (capped at `--max-pass2-files`, default 80), not the number of files scanned (bounded by `--max-files`, default 200). On any project with more than 80 source files the two differ, so the label under-reported the scan and read as a smaller repo than was actually walked. The line now reads `Files selected for pass-2 analysis: N`.
@@ -140,7 +142,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/ggrace519/graphLM/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ggrace519/graphLM/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ggrace519/graphLM/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ggrace519/graphLM/releases/tag/v0.1.0
