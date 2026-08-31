@@ -294,7 +294,10 @@ def main(
 
     if dry_run:
         typer.echo("Dry run complete. No LLM call was made.", err=True)
-        typer.echo(f"Files scanned: {result.files_analyzed}", err=True)
+        typer.echo(
+            f"Files selected for pass-2 analysis: {result.files_analyzed}",
+            err=True,
+        )
         typer.echo(
             f"Pass 1 context: ~{result.pass1_context_tokens} tokens", err=True
         )
