@@ -179,6 +179,82 @@ class TestCLI:
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
 
+    def test_dry_run_reports_ast_edge_count_not_llm_edges(self):
+        # A dry run has no LLM edges, so the old "0 import edges" figure was
+        # always 0 and misread as "no imports found". The AST count is what a
+        # dry run actually measured.
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run"])
+        assert result.exit_code == 0
+        out = result.stdout + result.stderr
+        assert "AST import edges: 4" in out
+        assert "import edges," not in out  # the misleading LLM-field count is gone
+
+    def test_dry_run_no_ast_reports_ast_off(self):
+        cyclic_project = Path(__file__).parent / "fixtures" / "cyclic_project"
+        result = runner.invoke(app, [str(cyclic_project), "--dry-run", "--no-ast"])
+        assert result.exit_code == 0
+        assert "AST import edges: AST off" in result.stdout + result.stderr
+
+    def test_full_run_prints_telemetry_lines(self, small_project, tmp_path):
+        from graphlm.models import Faithfulness, GraphMeta, PassUsage, RunUsage
+
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+            dest = Path(output_dir).resolve()
+            return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
+
+        meta = GraphMeta(
+            created_at="2026-09-02T00:00:00Z",
+            usage=RunUsage(
+                pass2=PassUsage(
+                    prompt_tokens=2500, completion_tokens=400, estimated_prompt_tokens=3000
+                )
+            ),
+            faithfulness=Faithfulness(
+                precision=0.5, recall=1.0, llm_edges=2, ast_edges=1, matched=1
+            ),
+        )
+
+        def fake_generate_graph(**_kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n", meta=meta), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(app, [str(small_project), "-o", str(tmp_path)])
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        out = result.stdout + result.stderr
+        assert "Usage: pass 2 prompt: 2500 tokens (graphlm estimated 3000); output: 400 tokens" in out
+        assert "Faithfulness: LLM import edges vs parser ground truth: precision 0.50, recall 1.00 (n=2 LLM / 1 AST, 1 matched)" in out
+
+    def test_full_run_without_telemetry_prints_no_telemetry_lines(self, small_project, tmp_path):
+        # meta present but nothing measured (e.g. a library graph): no Usage /
+        # Faithfulness lines rather than "None" placeholders.
+        from graphlm.models import GraphMeta
+
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+            dest = Path(output_dir).resolve()
+            return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
+
+        def fake_generate_graph(**_kwargs):
+            graph = CodebaseGraph(
+                directory_tree="t/\n", meta=GraphMeta(created_at="2026-09-02T00:00:00Z")
+            )
+            return GraphResult(graph, 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(app, [str(small_project), "-o", str(tmp_path)])
+
+        assert result.exit_code == 0, result.stdout + result.stderr
+        out = result.stdout + result.stderr
+        assert "Usage:" not in out
+        assert "Faithfulness:" not in out
+
     def test_output_destination_defaults_to_dot_graphlm(self, tmp_path):
         project = tmp_path / "scanned"
         other = tmp_path / "elsewhere"

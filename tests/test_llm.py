@@ -558,6 +558,28 @@ class TestUsageCapture:
         result = self._call()
         assert isinstance(result, CodebaseGraph)
 
+    def test_non_object_sse_chunks_are_skipped(self, httpx_mock):
+        # A `data:` line that decodes to a list/string/number is not a chunk;
+        # it must neither crash usage capture nor content reassembly.
+        body = (
+            b"data: [1, 2]\n\n"
+            b'data: "just a string"\n\n'
+            b"data: 42\n\n"
+            + _sse_body_with_usage(self.CONTENT, {"prompt_tokens": 3})
+        )
+        httpx_mock.add_response(status_code=200, content=body)
+        seen: list[dict] = []
+        result = self._call(on_usage=seen.append)
+        assert isinstance(result, CodebaseGraph)
+        assert seen == [{"prompt_tokens": 3}]
+
+    def test_usage_from_chunk_rejects_non_dict_input(self):
+        from graphlm.llm import _usage_from_chunk
+
+        assert _usage_from_chunk(["usage"]) is None
+        assert _usage_from_chunk({"usage": "x"}) is None
+        assert _usage_from_chunk({"usage": {"prompt_tokens": 1}}) == {"prompt_tokens": 1}
+
     def test_read_streamed_completion_returns_stream_result(self):
         from httpx import Request
 

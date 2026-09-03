@@ -47,6 +47,66 @@ def _render_directive(meta: GraphMeta) -> str:
     )
 
 
+def usage_summary(meta: GraphMeta) -> str | None:
+    """One terse clause on pass-2 token usage, or None when there is nothing to say.
+
+    Reports the server's real prompt count beside graphlm's own estimate so a
+    reader can see how far the ``estimate_tokens`` heuristic (#17) is off on
+    this endpoint, plus the output size. Pass 1 is omitted from the prose (it
+    is a tree-only prompt and rarely interesting); it stays in ``GRAPH.json``.
+    Shared by ``GRAPH.md`` and the CLI so the wording cannot drift.
+    """
+    if meta.usage is None or meta.usage.pass2 is None:
+        return None
+    p2 = meta.usage.pass2
+    prompt = (
+        f"{p2.prompt_tokens} tokens"
+        if p2.prompt_tokens is not None
+        else "not reported by endpoint"
+    )
+    text = f"pass 2 prompt: {prompt} (graphlm estimated {p2.estimated_prompt_tokens})"
+    if p2.completion_tokens is not None:
+        text += f"; output: {p2.completion_tokens} tokens"
+    return text
+
+
+def faithfulness_summary(meta: GraphMeta) -> str | None:
+    """One terse clause on LLM-vs-AST edge agreement, or None when not scored.
+
+    ``n/a`` marks a ratio with no denominator (no comparable LLM edges, or no
+    AST edges) — distinct from a real 0.00, which means the sides disagree.
+    Shared by ``GRAPH.md`` and the CLI.
+    """
+    f = meta.faithfulness
+    if f is None:
+        return None
+
+    def _ratio(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.2f}"
+
+    return (
+        "LLM import edges vs parser ground truth: "
+        f"precision {_ratio(f.precision)}, recall {_ratio(f.recall)} "
+        f"(n={f.llm_edges} LLM / {f.ast_edges} AST, {f.matched} matched)"
+    )
+
+
+def _render_telemetry(meta: GraphMeta) -> str | None:
+    """Render the run-telemetry blockquote line under the directive, or None.
+
+    Both halves are optional (a dry run has neither; ``--no-ast`` has no
+    faithfulness; an endpoint may report no usage) — whichever is present is
+    shown, and the line is omitted entirely when neither is. Terse on purpose:
+    this is read by agents deciding how much to trust the LLM's edge table.
+    """
+    parts = [
+        p for p in (usage_summary(meta), faithfulness_summary(meta)) if p is not None
+    ]
+    if not parts:
+        return None
+    return "> **Run telemetry.** " + ". ".join(parts) + "."
+
+
 def _render_html(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a self-contained HTML visualization."""
     from graphlm.html_render import render_html as _render_html_impl
@@ -62,6 +122,9 @@ def render_markdown(graph: CodebaseGraph) -> str:
     # there is no stamp (older format or a library caller that never set meta).
     if graph.meta is not None:
         lines.append(_render_directive(graph.meta))
+        telemetry = _render_telemetry(graph.meta)
+        if telemetry is not None:
+            lines.append(telemetry)
         lines.append("")
 
     # Header
