@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -112,10 +113,39 @@ class GraphLLErrorTruncated(GraphLLErrorParse):
     """The model hit its max_tokens ceiling and returned truncated output."""
 
 
+@dataclass(frozen=True, slots=True)
+class StreamResult:
+    """What ``_read_streamed_completion`` pulls out of one response.
+
+    ``content`` is the reassembled message text. ``usage`` is the server's
+    token accounting (``prompt_tokens`` / ``completion_tokens`` / ...) when the
+    response carried one, else ``None`` — an endpoint that ignores
+    ``stream_options`` simply never sends it, and that is a normal state, not
+    an error (innovation #6).
+    """
+
+    content: str
+    usage: dict[str, object] | None = None
+
+
+def _usage_from_chunk(chunk: object) -> dict[str, object] | None:
+    """Return the ``usage`` object of a chat-completions chunk/body, or None.
+
+    Tolerant by design: usage is telemetry, never load-bearing, so a missing
+    or malformed value (a string, a list, ``null``) must not raise — it just
+    reads as "no usage seen". A non-dict ``chunk`` yields None too, so this is
+    safe to call on any decoded JSON.
+    """
+    if not isinstance(chunk, dict):
+        return None
+    usage = chunk.get("usage")
+    return usage if isinstance(usage, dict) else None
+
+
 def _read_streamed_completion(
     response: httpx.Response, *, max_output_tokens: int = LLM_MAX_OUTPUT_TOKENS
-) -> str:
-    """Read a streamed (SSE) chat-completions response into its content string.
+) -> StreamResult:
+    """Read a streamed (SSE) chat-completions response into a ``StreamResult``.
 
     The request is sent with ``stream: true`` so the response arrives as a
     sequence of ``data: {json}`` lines (OpenAI SSE), terminated by ``data:
@@ -128,6 +158,14 @@ def _read_streamed_completion(
     JSON object by the caller. This keeps non-streaming test mocks (and any
     server that ignores ``stream``) working unchanged.
 
+    Token usage: the request asks for ``stream_options.include_usage``, so a
+    compliant server appends one last chunk *before* ``[DONE]`` whose
+    ``choices`` is ``[]`` and whose ``usage`` carries the real prompt /
+    completion token counts. That chunk must be inspected **before** the
+    empty-``choices`` skip below, or it is silently dropped. A plain (non-SSE)
+    completion object carries ``usage`` at top level and is read the same way.
+    Usage is optional end to end — absent or malformed, ``usage`` is ``None``.
+
     Raises GraphLLErrorTruncated if the model stopped on ``finish_reason ==
     "length"`` (output hit max_tokens — the JSON is truncated and unparseable),
     so that surfaces as a clear "graph too large" error rather than a confusing
@@ -137,6 +175,7 @@ def _read_streamed_completion(
     raw: list[str] = []
     saw_sse = False
     finish_reason: str | None = None
+    usage: dict[str, object] | None = None
 
     for line in response.iter_lines():
         raw.append(line)
@@ -151,6 +190,12 @@ def _read_streamed_completion(
             chunk = json.loads(data)
         except (json.JSONDecodeError, ValueError):
             continue
+        if not isinstance(chunk, dict):
+            continue
+        # The usage chunk has empty `choices` — read it before the skip below.
+        seen_usage = _usage_from_chunk(chunk)
+        if seen_usage is not None:
+            usage = seen_usage
         choices = chunk.get("choices") or []
         if not choices:
             continue
@@ -177,12 +222,13 @@ def _read_streamed_completion(
         body = "".join(raw)
         try:
             data = json.loads(body)
-            return data["choices"][0]["message"]["content"] or ""
+            content = data["choices"][0]["message"]["content"] or ""
         except (json.JSONDecodeError, ValueError, KeyError, IndexError, TypeError):
             # Not a recognizable completion object — return raw for the caller's
             # JSON-recovery to attempt (preserves prior lenient behavior).
-            return body
-    return "".join(parts)
+            return StreamResult(content=body)
+        return StreamResult(content=content, usage=_usage_from_chunk(data))
+    return StreamResult(content="".join(parts), usage=usage)
 
 
 def call_llm(
@@ -195,6 +241,7 @@ def call_llm(
     response_format: type[CodebaseGraph] | None = None,
     timeout: float | None = None,
     max_output_tokens: int = LLM_MAX_OUTPUT_TOKENS,
+    on_usage: Callable[[dict[str, object]], None] | None = None,
 ) -> CodebaseGraph | str:
     """Call an OpenAI-compatible LLM endpoint and parse the response.
 
@@ -208,6 +255,12 @@ def call_llm(
             this Pydantic model.
         timeout: Request timeout in seconds (default 300; streamed responses can
             legitimately take several minutes on a large project — #18).
+        on_usage: Optional callback invoked once with the server's ``usage``
+            dict (``prompt_tokens`` / ``completion_tokens`` / ...) when the
+            response carried one. Never invoked when the endpoint sent no
+            usage. A callback rather than a changed return type so the
+            ``CodebaseGraph | str`` contract and every existing caller stay
+            untouched (innovation #6).
 
     The response is streamed (``stream: true``) and reassembled; a server that
     ignores the flag and returns a normal body is handled transparently. Both
@@ -244,6 +297,14 @@ def call_llm(
         # this flag returns a normal body, which _read_streamed_completion
         # handles transparently.
         "stream": True,
+        # Ask for the real token accounting as a final SSE chunk (OpenAI
+        # `stream_options`). Streaming otherwise loses `usage` entirely — a
+        # streamed response has no top-level usage object — and the real
+        # prompt count is what lets the estimate_tokens heuristic be checked
+        # against the served model instead of guessed at (#17). An endpoint
+        # that ignores the option just never sends the chunk; usage stays
+        # None and nothing else changes (innovation #6).
+        "stream_options": {"include_usage": True},
     }
 
     # Constrain the output to the JSON schema when a structured response is
@@ -314,9 +375,13 @@ def call_llm(
                             f"LLM returned HTTP {response.status_code}: {detail}"
                         )
 
-                    content = _read_streamed_completion(
+                    streamed = _read_streamed_completion(
                         response, max_output_tokens=max_output_tokens
                     )
+
+                content = streamed.content
+                if on_usage is not None and streamed.usage is not None:
+                    on_usage(streamed.usage)
 
                 if not content:
                     raise GraphLLErrorParse("LLM returned an empty response")
