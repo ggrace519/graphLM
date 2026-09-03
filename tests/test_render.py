@@ -631,3 +631,96 @@ class TestMermaidModuleGraph:
                 )
             )
             assert got == baseline
+class TestRunTelemetryLine:
+    """The run-telemetry blockquote (innovation #6): each half optional, the
+    whole line omitted when neither is present, `n/a` for a ratio with no
+    denominator."""
+
+    @staticmethod
+    def _meta(**kw):
+        from graphlm.models import GraphMeta
+
+        return GraphMeta(created_at="2026-09-02T00:00:00Z", **kw)
+
+    def test_omitted_when_nothing_measured(self):
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=self._meta()))
+        assert "Run telemetry" not in md
+
+    def test_usage_only(self):
+        from graphlm.models import PassUsage, RunUsage
+
+        meta = self._meta(
+            usage=RunUsage(
+                pass2=PassUsage(
+                    prompt_tokens=2000, completion_tokens=300, estimated_prompt_tokens=2400
+                )
+            )
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        assert (
+            "> **Run telemetry.** pass 2 prompt: 2000 tokens (graphlm estimated 2400); "
+            "output: 300 tokens.\n"
+        ) in md
+        assert "parser ground truth" not in md
+
+    def test_usage_with_pass2_missing_is_omitted(self):
+        from graphlm.models import PassUsage, RunUsage
+
+        meta = self._meta(usage=RunUsage(pass1=PassUsage(estimated_prompt_tokens=5)))
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        assert "Run telemetry" not in md
+
+    def test_usage_without_completion_tokens_drops_output_clause(self):
+        from graphlm.models import PassUsage, RunUsage
+
+        meta = self._meta(
+            usage=RunUsage(pass2=PassUsage(prompt_tokens=10, estimated_prompt_tokens=12))
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        assert "pass 2 prompt: 10 tokens (graphlm estimated 12)." in md
+        assert "output:" not in md
+
+    def test_faithfulness_only_with_na_ratios(self):
+        from graphlm.models import Faithfulness
+
+        meta = self._meta(
+            faithfulness=Faithfulness(
+                precision=None, recall=None, llm_edges=0, ast_edges=0, matched=0
+            )
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        assert (
+            "> **Run telemetry.** LLM import edges vs parser ground truth: "
+            "precision n/a, recall n/a (n=0 LLM / 0 AST, 0 matched).\n"
+        ) in md
+        assert "pass 2 prompt" not in md
+
+    def test_both_halves_joined(self):
+        from graphlm.models import Faithfulness, PassUsage, RunUsage
+
+        meta = self._meta(
+            usage=RunUsage(
+                pass2=PassUsage(prompt_tokens=None, estimated_prompt_tokens=99)
+            ),
+            faithfulness=Faithfulness(
+                precision=0.9333, recall=0.8125, llm_edges=15, ast_edges=16, matched=14
+            ),
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        assert (
+            "> **Run telemetry.** pass 2 prompt: not reported by endpoint "
+            "(graphlm estimated 99). LLM import edges vs parser ground truth: "
+            "precision 0.93, recall 0.81 (n=15 LLM / 16 AST, 14 matched).\n"
+        ) in md
+
+    def test_line_sits_directly_under_directive(self):
+        from graphlm.models import Faithfulness
+
+        meta = self._meta(
+            faithfulness=Faithfulness(precision=1.0, recall=1.0, llm_edges=1, ast_edges=1, matched=1)
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="r/\n", meta=meta))
+        lines = md.splitlines()
+        directive_end = next(i for i, l in enumerate(lines) if "best-effort" in l)
+        assert lines[directive_end + 1].startswith("> **Run telemetry.**")
+        assert lines[directive_end + 2] == ""
