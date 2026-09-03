@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Infrastructure
+
+- `ci.yml` now sets an explicit read-only `permissions: contents: read` at the workflow level. Neither the test nor typecheck job writes anything (no releases, no PR comments, no checks API calls), so this is least-privilege, not a behavior change; addresses CodeQL's `actions/missing-workflow-permissions` finding.
+
 ## [0.2.0] - 2026-09-03
 
 This release is the output of an innovation pass over the codebase (`INNOVATIONS.md`): the map becomes queryable by agents over MCP, every run stamps its real token usage and an LLM-vs-parser faithfulness score, the map gets a native Mermaid picture, and oversized files are sent as signature skeletons instead of being cut off.
