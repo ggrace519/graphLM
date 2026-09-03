@@ -211,6 +211,23 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTS
 
 
+def _is_nested_checkout(dir_path: Path) -> bool:
+    """True if ``dir_path`` is the root of another git checkout.
+
+    A git worktree or submodule marks its root with a ``.git`` *file* (a
+    pointer into the parent's gitdir), a vendored clone with a ``.git``
+    directory; ``exists()`` covers both. Such a subtree is a different project
+    — merging it into the parent's map duplicates every module and edge under a
+    second prefix (observed with agent worktrees under ``.claude/worktrees/``
+    and would equally hit submodules). The scan root itself is never tested
+    here (only children are), so scanning a repo is unaffected.
+    """
+    try:
+        return (dir_path / ".git").exists()
+    except OSError:
+        return False
+
+
 def _path_is_inside(project_dir: Path, target: Path) -> bool:
     """Check if target path is inside (or equal to) project_dir.
 
