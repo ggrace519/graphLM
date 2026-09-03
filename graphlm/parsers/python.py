@@ -372,14 +372,27 @@ def _text(code: bytes, start: int, end: int) -> str:
     return code[start:end].decode("utf-8", errors="replace")
 
 
+def _col(code: bytes, node) -> int:
+    """Column a node starts at: bytes since the previous newline.
+
+    Derived from byte offsets, NOT the node's ``start_point`` — py-tree-sitter
+    0.26.0's ``start_point``/``end_point`` corrupt the heap on a full-tree
+    walk (ASLR-dependent segfault, isolated with a probe that walked the
+    same tree with and without them; byte offsets were clean every run).
+    Byte and character columns agree for what this measures: the leading
+    whitespace before a statement/clause/decorator.
+    """
+    return node.start_byte - (code.rfind(b"\n", 0, node.start_byte) + 1)
+
+
 def _node_src(code: bytes, node) -> str:
     """A node's source text, prefixed with its own column of indentation."""
-    return " " * node.start_point.column + _text(code, node.start_byte, node.end_byte)
+    return " " * _col(code, node) + _text(code, node.start_byte, node.end_byte)
 
 
-def _rows(node) -> int:
+def _rows(code: bytes, node) -> int:
     """Physical lines a node spans (1 for a single-line node)."""
-    return node.end_point.row - node.start_point.row + 1
+    return code.count(b"\n", node.start_byte, node.end_byte) + 1
 
 
 def _block_of(node):
@@ -388,11 +401,11 @@ def _block_of(node):
 
 def _docstring_node(block):
     """The docstring string node of a body block (or module), or None."""
-    if block is None or not block.children:
+    if block is None or block.child_count == 0:
         return None
-    first = block.children[0]
-    if first.type == "expression_statement" and len(first.children) == 1:
-        inner = first.children[0]
+    first = block.child(0)
+    if first.type == "expression_statement" and first.child_count == 1:
+        inner = first.child(0)
         if inner.type == "string":
             return inner
     return None
@@ -421,23 +434,23 @@ def _docstring_head(code: bytes, string_node) -> str:
     return f"{quote}{first}{closing}"
 
 
-def _body_indent(node, body) -> int:
+def _body_indent(code: bytes, node, body) -> int:
     """Column for placeholder lines inside a definition's body.
 
     A body on its own line(s) already carries the source indentation; a
     one-liner (``def f(): return x``) has none, so indent one level past it.
     """
-    if body is not None and body.start_point.row > node.start_point.row:
-        return body.start_point.column
-    return node.start_point.column + 4
+    if body is not None and code.count(b"\n", node.start_byte, body.start_byte):
+        return _col(code, body)
+    return _col(code, node) + 4
 
 
 def _emit_definition(code: bytes, node, out: list[str]) -> None:
     """Render a class/def: header line(s), docstring head, members or ``...``."""
     body = node.child_by_field_name("body")
     header_end = body.start_byte if body is not None else node.end_byte
-    out.append(" " * node.start_point.column + _text(code, node.start_byte, header_end).rstrip())
-    inner = " " * _body_indent(node, body)
+    out.append(" " * _col(code, node) + _text(code, node.start_byte, header_end).rstrip())
+    inner = " " * _body_indent(code, node, body)
     doc = _docstring_node(body)
     if doc is not None:
         out.append(inner + _docstring_head(code, doc))
@@ -467,8 +480,8 @@ def _emit_elided_assignment(code: bytes, stmt, assignment, out: list[str]) -> No
     else:
         placeholder = "…"
     out.append(
-        f"{' ' * stmt.start_point.column}{lhs} = {placeholder}"
-        f"  # {_rows(stmt)} lines elided"
+        f"{' ' * _col(code, stmt)}{lhs} = {placeholder}"
+        f"  # {_rows(code, stmt)} lines elided"
     )
 
 
@@ -488,11 +501,11 @@ def _emit_guarded_imports(code: bytes, node, out: list[str]) -> None:
         if block is None:  # pragma: no cover - grammar always gives clauses a block
             continue
         header = _text(code, clause.start_byte, block.start_byte).rstrip()
-        staged.append(" " * clause.start_point.column + header)
+        staged.append(" " * _col(code, clause) + header)
         imports = [c for c in block.children if c.type in _IMPORT_NODE_TYPES]
         staged.extend(_node_src(code, c) for c in imports)
         if not imports:
-            staged.append(" " * block.start_point.column + "...")
+            staged.append(" " * _col(code, block) + "...")
         kept += len(imports)
     if kept:
         out.extend(staged)
@@ -515,7 +528,7 @@ def _emit_statement(code: bytes, node, out: list[str], *, nested: bool = False) 
         child = node.children[0] if node.children else None
         if child is None or child.type != "assignment":
             return  # bare expression (a call, a stray string) — dropped
-        if _rows(node) <= 2:
+        if _rows(code, node) <= 2:
             out.append(_node_src(code, node))
         else:
             _emit_elided_assignment(code, node, child, out)

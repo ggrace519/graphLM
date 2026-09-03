@@ -350,3 +350,33 @@ def test_skeleton_for_is_re_exported(shim):
     mod = importlib.import_module(shim)
     assert mod.skeleton_for is parser_base.skeleton_for
     assert "skeleton_for" in mod.__all__
+
+
+REPO = Path(__file__).parent.parent
+REPO_MODULES = sorted((REPO / "graphlm").rglob("*.py")) + sorted((REPO / "tests").glob("test_*.py"))
+
+
+class TestRealWorldModules:
+    """Skeletonise every module in this repo — the renderer's real workload."""
+
+    @pytest.mark.parametrize("path", REPO_MODULES, ids=lambda p: str(p.relative_to(REPO)))
+    def test_every_module_skeletonises(self, path):
+        src = path.read_bytes()
+        out = skeleton(src)
+        assert out.startswith(SKELETON_HEADER.format(n=src.count(b"\n") + 1))
+        # Class/def headers survive; bodies do not (a big module shrinks).
+        if len(src) > 4000:
+            assert len(out) < len(src)
+        for line in out.splitlines()[1:]:
+            assert line == line.rstrip()  # no trailing whitespace in output
+
+    def test_renderer_uses_byte_offsets_not_points(self):
+        # py-tree-sitter 0.26.0's Node.start_point / end_point corrupted the
+        # heap on a full-tree walk (ASLR-dependent segfault in ~50-100% of
+        # runs on graphlm/diff.py, isolated by walking the same tree with and
+        # without them). Columns and row spans are derived from byte offsets
+        # instead — keep it that way until the upstream fix is verified.
+        src = (REPO / "graphlm" / "parsers" / "python.py").read_text()
+        body = src.split("# --- Signature skeleton", 1)[1]
+        assert ".start_point" not in body
+        assert ".end_point" not in body
