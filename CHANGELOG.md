@@ -7,6 +7,14 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Run telemetry in the stamp.** Every real run now records, in `GRAPH.json`'s `meta` block, (1) the endpoint's **real token usage** per pass — `prompt_tokens` / `completion_tokens` as the server counted them, stored beside graphlm's own `estimated_prompt_tokens` for the same prompt — and (2) a **faithfulness score**: how well the LLM's `import_edges` agree with the parser's `deterministic_edges` (precision = share of the model's Python import edges the parser confirms; recall = share of the parser's edges the model reproduced). Why it matters: the estimate-vs-real pair makes the `estimate_tokens` heuristic auditable per endpoint instead of guessed at, and the faithfulness score tells a reading agent how much to trust the LLM's edge table on *this* run — a low precision means the model invented dependencies the parser can't see. Both are summarised in one `> **Run telemetry.**` line directly under the refresh directive at the top of `GRAPH.md`, and echoed by the CLI as `Usage:` / `Faithfulness:` lines. Usage comes from `stream_options.include_usage` on the streamed request; an endpoint that doesn't report usage simply leaves the counts `null` ("not reported by endpoint"). The new `meta` fields are additive and optional — no `schema_version` bump, and a prior `GRAPH.json` without them still diffs normally. Not recorded on `--dry-run` (no LLM call) and faithfulness is absent under `--no-ast` (no ground truth).
+
+### Fixed
+
+- `--dry-run` reported `0 import edges` on every run. That figure was `len(graph.import_edges)` — the **LLM's** field, which a dry run never fills — so it always read 0 and looked like "no imports found" even on a project the parser had fully resolved. The stats now show `AST import edges: N` from the parser's `deterministic_edges` (`AST off` under `--no-ast`), and the misleading LLM-field count is gone from the dry-run line.
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
