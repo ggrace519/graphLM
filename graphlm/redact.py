@@ -1,15 +1,19 @@
-"""Secret redaction for scanned file content.
+"""Secret handling for scanned files: the never-read list and content redaction.
 
-Relocated verbatim from ``scanner.py`` (the regex passes are unchanged) so the
-scanner stays under the module size limit once it grew skeletonisation. The
-scanner re-imports ``_redact_secrets`` from here, so every fragment still
-passes through it — the "redaction runs on every file's content" invariant
-lives in ``scan_project``, not in where the regexes are defined.
+Both halves were relocated verbatim from ``scanner.py`` (the patterns are
+unchanged) so the scanner stays under the module size limit once it grew
+skeletonisation and the nested-checkout guard. ``scan_project`` re-imports
+``_is_sensitive_file`` and ``_redact_secrets`` from here, so every candidate
+file is still screened and every fragment still passes through redaction —
+the security invariants live in ``scan_project``, not in where the patterns
+are defined.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import re
+from pathlib import Path
 
 
 def _redact_secrets(content: str) -> str:
@@ -86,3 +90,99 @@ def _redact_secrets(content: str) -> str:
     )
 
     return redacted
+
+
+# Secret-bearing file extensions — never read these
+_SECRET_EXTS = {
+    # TLS / certificate / key files
+    ".pem",
+    ".key",
+    ".crt",
+    ".cert",
+    ".p12",
+    ".pfx",
+    ".jks",
+    ".cer",
+    # SSH keys
+    ".ppk",
+    # Database credentials / connection strings
+    ".env.local",
+    ".env.production",
+    ".env.staging",
+    ".env.dev",
+    ".env.secret",
+    ".env.override",
+    "env.local",
+    "env.production",
+    "env.staging",
+    "env.secret",
+}
+
+# Glob patterns for secret-bearing file stems/names.
+# Checked against both the stem and the full filename.
+_SECRET_NAME_PATTERNS = {
+    "*secrets*",
+    "*credentials*",
+    "*private*",
+    "*password*",
+    "*token*",
+    "*api*key*",
+    "*auth*key*",
+}
+
+# Any dotenv-style file (.env, .env.<anything>) is treated as secret-bearing,
+# EXCEPT these deliberately-committed, non-secret template variants which are
+# scanned normally (they document required vars without holding real values).
+_ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
+
+# Source-code extensions exempt from the name patterns above (token.py is code).
+_SOURCE_EXTS_FOR_SECRET_NAMES = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp"}
+
+
+def _is_sensitive_file(path: Path) -> bool:
+    """Check if a file likely contains secrets or credentials.
+
+    Checks file extension against known secret-bearing extensions and
+    filename glob patterns for common secret-credential naming conventions.
+    """
+    suffix = path.suffix.lower()
+    if suffix in _SECRET_EXTS:
+        return True
+
+    # Check full filename for non-dot-prefixed patterns like "env.production"
+    if path.name.lower() in _SECRET_EXTS:
+        return True
+
+    # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
+    # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
+    # arbitrary variants like .env.qa / .env.test; this catches them all.
+    name = path.name.lower()
+    if name == ".env" or name.startswith(".env."):
+        env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
+        if env_suffix not in _ENV_SAFE_SUFFIXES:
+            return True
+
+    stem = path.stem.lower()
+    # Only apply name-based patterns to non-source files
+    if suffix not in _SOURCE_EXTS_FOR_SECRET_NAMES:
+        for pattern in _SECRET_NAME_PATTERNS:
+            if fnmatch.fnmatch(stem, pattern) or fnmatch.fnmatch(path.name.lower(), pattern):
+                return True
+    return False
+
+
+def _is_nested_checkout(dir_path: Path) -> bool:
+    """True if ``dir_path`` is the root of another git checkout.
+
+    A git worktree or submodule marks its root with a ``.git`` *file* (a
+    pointer into the parent's gitdir), a vendored clone with a ``.git``
+    directory; ``exists()`` covers both. Such a subtree is a different project
+    — merging it into the parent's map duplicates every module and edge under a
+    second prefix (observed with agent worktrees under ``.claude/worktrees/``
+    and would equally hit submodules). The scan root itself is never tested
+    here (only children are), so scanning a repo is unaffected.
+    """
+    try:
+        return (dir_path / ".git").exists()
+    except OSError:
+        return False

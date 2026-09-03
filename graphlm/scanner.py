@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 
-from graphlm.redact import _redact_secrets
+from graphlm.redact import _is_sensitive_file, _redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -129,49 +129,6 @@ _BINARY_EXTS = {
     ".pptx",
 }
 
-# Secret-bearing file extensions — never read these
-_SECRET_EXTS = {
-    # TLS / certificate / key files
-    ".pem",
-    ".key",
-    ".crt",
-    ".cert",
-    ".p12",
-    ".pfx",
-    ".jks",
-    ".cer",
-    # SSH keys
-    ".ppk",
-    # Database credentials / connection strings
-    ".env.local",
-    ".env.production",
-    ".env.staging",
-    ".env.dev",
-    ".env.secret",
-    ".env.override",
-    "env.local",
-    "env.production",
-    "env.staging",
-    "env.secret",
-}
-
-# Glob patterns for secret-bearing file stems/names.
-# Checked against both the stem and the full filename.
-_SECRET_NAME_PATTERNS = {
-    "*secrets*",
-    "*credentials*",
-    "*private*",
-    "*password*",
-    "*token*",
-    "*api*key*",
-    "*auth*key*",
-}
-
-# Any dotenv-style file (.env, .env.<anything>) is treated as secret-bearing,
-# EXCEPT these deliberately-committed, non-secret template variants which are
-# scanned normally (they document required vars without holding real values).
-_ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
-
 # Source-code extensions that should NOT be excluded by name patterns
 # to avoid false positives (e.g. token.py, credentials.py).
 _SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp"}
@@ -252,38 +209,6 @@ def _should_exclude(rel_path: str, exclude_patterns: tuple[str, ...]) -> bool:
 def _is_binary(path: Path) -> bool:
     """Check if a file is likely binary by extension."""
     return path.suffix.lower() in _BINARY_EXTS
-
-
-def _is_sensitive_file(path: Path) -> bool:
-    """Check if a file likely contains secrets or credentials.
-
-    Checks file extension against known secret-bearing extensions and
-    filename glob patterns for common secret-credential naming conventions.
-    """
-    suffix = path.suffix.lower()
-    if suffix in _SECRET_EXTS:
-        return True
-
-    # Check full filename for non-dot-prefixed patterns like "env.production"
-    if path.name.lower() in _SECRET_EXTS:
-        return True
-
-    # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
-    # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
-    # arbitrary variants like .env.qa / .env.test; this catches them all.
-    name = path.name.lower()
-    if name == ".env" or name.startswith(".env."):
-        env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
-        if env_suffix not in _ENV_SAFE_SUFFIXES:
-            return True
-
-    stem = path.stem.lower()
-    # Only apply name-based patterns to non-source files
-    if suffix not in _SOURCE_EXTS:
-        for pattern in _SECRET_NAME_PATTERNS:
-            if fnmatch.fnmatch(stem, pattern) or fnmatch.fnmatch(path.name.lower(), pattern):
-                return True
-    return False
 
 
 def _path_is_inside(project_dir: Path, target: Path) -> bool:
@@ -394,6 +319,12 @@ def scan_project(
             # tree and consumes a max_files slot, even though its content is
             # blocked later by the _path_is_inside check before reading.
             if entry.is_symlink() and not _path_is_inside(project_dir, entry):
+                skipped_count += 1
+                continue
+
+            # A nested git checkout (worktree, submodule, vendored clone) is a
+            # separate project: keep it out of the tree and the file walk.
+            if entry.is_dir() and _is_nested_checkout(entry):
                 skipped_count += 1
                 continue
 
@@ -516,6 +447,8 @@ def scan_project(
             if not _should_exclude(str(Path(root, d).relative_to(project_dir)), all_exclude)
             # Also exclude symlinks pointing outside project
             and (not Path(root, d).is_symlink() or _path_is_inside(project_dir, Path(root, d)))
+            # ...and nested git checkouts (mirrors the tree walk above)
+            and not _is_nested_checkout(Path(root, d))
         ]
         for fname in files:
             fpath = Path(root, fname)

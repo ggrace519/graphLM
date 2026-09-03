@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning.
 
 - Import-cycle risk scores under-weighted large files. The `log10(total_lines)` term counted the lines of the *truncated* fragment (cut at `--max-file-chars`), so a 1500-line module in a cycle scored as a ~100-line one — exactly the file a risk score should weigh most. `FileFragment` now carries the real on-disk `line_count`, captured before any truncation or skeletonisation, and cycle scoring uses it.
 
+### Fixed
+
+- Nested git checkouts inside the scanned project — a worktree, a submodule, or a vendored clone (anything whose directory holds a `.git` file or directory) — were scanned as if they were part of the project, so every module and import edge under them was duplicated into the map under a second path prefix (observed with agent worktrees under `.claude/worktrees/`). The scanner now treats such a subtree as a separate project and leaves it out of both the pass-1 tree and the file walk; the scan root itself is unaffected.
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
