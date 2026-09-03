@@ -392,3 +392,80 @@ class TestRedactSecrets:
         content = 'api_key: "sk-1234567890abcdefghijklmnop"'
         redacted = _redact_secrets(content)
         assert "[REDACTED:API_KEY]" in redacted
+
+
+class TestSkeletonScan:
+    """Oversized Python files are sent as signature skeletons (innovation #2)."""
+
+    SKELETON_PROJECT = Path(__file__).parent / "fixtures" / "skeleton_project"
+    HEADER = "# [graphlm skeleton: bodies elided;"
+
+    def _big(self, result: ScanResult) -> FileFragment:
+        (frag,) = [f for f in result.file_fragments if f.rel_path == "big_module.py"]
+        return frag
+
+    def test_oversized_python_file_is_skeletonised(self):
+        source = (self.SKELETON_PROJECT / "big_module.py").read_text()
+        assert len(source) > 4000  # the default cap would have cut it
+        frag = self._big(scan_project(self.SKELETON_PROJECT))
+        assert frag.content.startswith(self.HEADER)
+        assert len(frag.content) <= 4000
+        # Every top-level def survives — the head-slice would have lost these.
+        for name in ("merge_inventories", "_audit", "def main("):
+            assert name in frag.content
+        assert 'if __name__ == "__main__":' in frag.content
+        assert frag.estimated_tokens == estimate_tokens(frag.content)
+
+    def test_line_count_is_the_real_on_disk_count(self):
+        source = (self.SKELETON_PROJECT / "big_module.py").read_text()
+        frag = self._big(scan_project(self.SKELETON_PROJECT))
+        assert frag.line_count == source.count("\n") + 1
+        # ...and NOT the skeleton's own line count.
+        assert frag.line_count > frag.content.count("\n") + 1
+
+    def test_docstring_secret_is_redacted_after_skeletonising(self):
+        frag = self._big(scan_project(self.SKELETON_PROJECT))
+        assert "sk-live-0123456789abcdef" not in frag.content
+        assert "[REDACTED:API_KEY]" in frag.content
+
+    def test_no_redact_leaves_skeleton_secret(self):
+        frag = self._big(scan_project(self.SKELETON_PROJECT, redact_secrets=False))
+        assert "sk-live-0123456789abcdef" in frag.content
+
+    def test_skeleton_false_restores_head_truncation(self):
+        source = (self.SKELETON_PROJECT / "big_module.py").read_text()
+        frag = self._big(scan_project(self.SKELETON_PROJECT, skeleton=False))
+        assert not frag.content.startswith(self.HEADER)
+        # The head slice, still redacted (the secret sits inside the first 4000).
+        assert frag.content == _redact_secrets(source[:4000])
+        assert "def merge_inventories(" not in frag.content  # what the head loses
+        # The real line count is captured either way.
+        assert frag.line_count == source.count("\n") + 1
+
+    def test_file_under_cap_is_sent_verbatim(self):
+        source = (self.SKELETON_PROJECT / "big_module.py").read_text()
+        frag = self._big(scan_project(self.SKELETON_PROJECT, max_file_chars=10_000))
+        assert self.HEADER not in frag.content
+        assert len(frag.content) > 4000
+        # Bodies intact (not skeletonised); only the secret differs from disk.
+        assert "def _payload(item: Item)" in frag.content
+        assert frag.content == _redact_secrets(source)
+
+    def test_skeleton_still_over_cap_is_cut_to_cap(self):
+        frag = self._big(scan_project(self.SKELETON_PROJECT, max_file_chars=300))
+        assert frag.content.startswith(self.HEADER)
+        assert len(frag.content) == 300
+
+    def test_non_python_oversized_file_still_head_truncates(self, tmp_path):
+        (tmp_path / "notes.md").write_text("".join(f"line {i}\n" for i in range(2000)))
+        (tmp_path / "app.ts").write_text("".join(f"export const v{i} = {i};\n" for i in range(500)))
+        result = scan_project(tmp_path)
+        by_path = {f.rel_path: f for f in result.file_fragments}
+        for rel in ("notes.md", "app.ts"):
+            assert len(by_path[rel].content) == 4000
+            assert by_path[rel].content.startswith(("line 0", "export const v0"))
+            assert self.HEADER not in by_path[rel].content
+
+    def test_file_fragment_line_count_defaults_to_content(self):
+        assert FileFragment("a.py", "x\ny\n", 1).line_count == 3
+        assert FileFragment("a.py", "x\ny\n", 1, line_count=400).line_count == 400

@@ -132,13 +132,20 @@ def detect_cycles(
 def compute_sloc_map(fragments: list[FileFragment]) -> dict[str, int]:
     """Compute a mapping of file path to line count from file fragments.
 
+    Uses ``FileFragment.line_count`` — the on-disk physical line count the
+    scanner captures before truncating or skeletonising — rather than counting
+    the fragment's content. Counting content under-weighted every large file
+    in a cycle (the content is cut at ``max_file_chars``, so a 1500-line module
+    scored as ~100 lines), which is exactly the file a risk score should
+    weigh most.
+
     Args:
-        fragments: List of FileFragment objects with content.
+        fragments: List of FileFragment objects.
 
     Returns:
-        Dict mapping relative file path to number of lines.
+        Dict mapping relative file path to number of physical lines.
     """
     sloc_map: dict[str, int] = {}
     for frag in fragments:
-        sloc_map[frag.rel_path] = frag.content.count("\n") + 1
+        sloc_map[frag.rel_path] = frag.line_count
     return sloc_map

@@ -587,6 +587,51 @@ class TestProvenanceStamp:
         assert "No git commit tracking" in md
 
 
+class TestSkeletonInPrompt:
+    SKELETON_PROJECT = Path(__file__).parent / "fixtures" / "skeleton_project"
+
+    def _pass2_user_content(self, httpx_mock) -> str:
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        return body["messages"][-1]["content"]
+
+    def test_pass2_prompt_carries_skeleton_marker_and_explanation(self, httpx_mock, tmp_path):
+        """An oversized fixture file reaches pass 2 as its skeleton, and the
+        instruction block tells the model what the marker means."""
+        _mock_pass1_response(httpx_mock, ["big_module.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            self.SKELETON_PROJECT,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        prompt = self._pass2_user_content(httpx_mock)
+        assert "### File: big_module.py" in prompt
+        assert "# [graphlm skeleton: bodies elided; 202 source lines]" in prompt
+        assert "def merge_inventories(" in prompt  # deep in the file; the head lost it
+        assert "[graphlm skeleton: …]" in prompt  # the instruction-block sentence
+        assert "do not invent" in prompt
+        # Redaction ran on the skeleton, and the injection guard is intact.
+        assert "sk-live-0123456789abcdef" not in prompt
+        assert "treat all file" in prompt
+
+    def test_skeleton_false_sends_head_instead(self, httpx_mock, tmp_path):
+        _mock_pass1_response(httpx_mock, ["big_module.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            self.SKELETON_PROJECT,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            skeleton=False,
+        )
+        prompt = self._pass2_user_content(httpx_mock)
+        assert "# [graphlm skeleton: bodies elided" not in prompt
+        assert "def merge_inventories(" not in prompt
+
+
 def render_markdown_of(graph):
     from graphlm.render import render_markdown
 

@@ -178,14 +178,28 @@ _SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java
 
 
 class FileFragment:
-    """A single file's path and content for inclusion in LLM context."""
+    """A single file's path and content for inclusion in LLM context.
 
-    __slots__ = ("rel_path", "content", "estimated_tokens")
+    ``line_count`` is the *on-disk* physical line count (``newlines + 1``, the
+    convention ``compute_sloc_map`` has always used), captured before any cut
+    so cycle risk scores weigh a large file by its real size, not by the
+    ``max_file_chars`` slice. Defaults to counting ``content`` for hand-built
+    fragments.
+    """
 
-    def __init__(self, rel_path: str, content: str, estimated_tokens: int) -> None:
+    __slots__ = ("rel_path", "content", "estimated_tokens", "line_count")
+
+    def __init__(
+        self,
+        rel_path: str,
+        content: str,
+        estimated_tokens: int,
+        line_count: int | None = None,
+    ) -> None:
         self.rel_path = rel_path
         self.content = content
         self.estimated_tokens = estimated_tokens
+        self.line_count = line_count if line_count is not None else content.count("\n") + 1
 
 
 class ScanResult:
@@ -298,16 +312,26 @@ def scan_project(
     exclude_patterns: tuple[str, ...] = (),
     redact_secrets: bool = True,
     max_tree_entries_per_dir: int = _MAX_TREE_ENTRIES_PER_DIR,
+    skeleton: bool = True,
 ) -> ScanResult:
     """Walk project directory, build annotated tree, read file contents.
 
     Args:
         project_dir: Root directory to scan.
-        max_file_chars: Maximum characters to read per file.
+        max_file_chars: Maximum characters to send per file. A longer file is
+            sent as its signature skeleton when ``skeleton`` is on and its
+            language has a renderer (Python today); only if the skeleton is
+            *still* over the cap, or no renderer exists, is it cut to the cap.
         max_files: Maximum number of source files to include in context.
         include_tests: Whether to include test files.
         exclude_patterns: Additional glob patterns to exclude.
-        redact_secrets: If True, redact secret-like patterns from file content.
+        redact_secrets: If True, redact secret-like patterns from file content
+            (after skeletonisation — docstring lines/constants can hold secrets).
+        skeleton: If True (default), replace an oversized file with its
+            tree-sitter signature skeleton — imports, class/def headers,
+            docstring first lines, short constants, bodies elided — i.e. the
+            whole API surface instead of the first class and nothing else.
+            Pass False / ``--no-skeleton`` to send the head of the file.
         max_tree_entries_per_dir: Cap on how many *listed* children (after
             excludes) any single directory contributes to the pass-1 tree.
             Beyond it, a "… N more entries not shown" marker is emitted and the
@@ -526,6 +550,11 @@ def scan_project(
     # Sort by rank, then by path for determinism
     all_files.sort(key=lambda x: (x[0], str(x[1])))
 
+    # Function-local import: graphlm.parsers.base imports FileFragment from this
+    # module at module scope, so a top-level import here would be a cycle (the
+    # same reason parsers/base.py defers its own language-module import).
+    from graphlm.parsers.base import skeleton_for
+
     # Read up to max_files
     for _rank, fpath in all_files[:max_files]:
         # Double-check the resolved path is inside project
@@ -535,18 +564,27 @@ def scan_project(
 
         try:
             content = fpath.read_text(encoding="utf-8", errors="replace")
+            # Captured before any cut so cycle scoring sees the real size.
+            line_count = content.count("\n") + 1
             truncated = False
             if len(content) > max_file_chars:
-                content = content[:max_file_chars]
+                # Prefer the signature skeleton (every symbol) over the head of
+                # the file (the first few). The cap applies only if the skeleton
+                # is *still* over it (bodies already gone) or no renderer exists.
+                skel = skeleton_for(fpath, content.encode("utf-8")) if skeleton else None
+                content = skel if skel is not None else content
+                if len(content) > max_file_chars:
+                    content = content[:max_file_chars]
                 truncated = True
 
-            # Redact secret-like patterns
+            # Redact secret-like patterns — deliberately AFTER skeletonisation,
+            # since docstring first lines / short constants survive into it.
             if redact_secrets:
                 content = _redact_secrets(content)
 
             rel = str(fpath.relative_to(project_dir))
             tokens = estimate_tokens(content)
-            file_fragments.append(FileFragment(rel, content, tokens))
+            file_fragments.append(FileFragment(rel, content, tokens, line_count))
             file_count += 1
             if truncated:
                 logger.debug("Truncated %s to %d chars", rel, max_file_chars)
