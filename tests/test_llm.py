@@ -249,8 +249,11 @@ class TestCallLlm:
         assert "response_format" not in body
 
     def test_400_falls_back_to_prompt_only(self, httpx_mock):
-        """An endpoint that rejects response_format (HTTP 400) is retried once
-        without the constraint, so a prompt-only endpoint still works (#31)."""
+        """An endpoint that rejects response_format (HTTP 400) is retried
+        without the constraint, so a prompt-only endpoint still works (#31).
+        stream_options is shed first (it is optional telemetry), so the
+        prompt-only request is the third one."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
         httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
         httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
         result = call_llm(
@@ -262,10 +265,44 @@ class TestCallLlm:
             response_format=CodebaseGraph,
         )
         assert isinstance(result, CodebaseGraph)
-        requests = httpx_mock.get_requests()
+        requests = [json.loads(r.content) for r in httpx_mock.get_requests()]
+        assert len(requests) == 3
+        assert "response_format" in requests[0] and "stream_options" in requests[0]
+        assert "response_format" in requests[1] and "stream_options" not in requests[1]
+        assert "response_format" not in requests[2] and "stream_options" not in requests[2]
+
+    def test_400_sheds_stream_options_but_keeps_schema(self, httpx_mock):
+        """A strict endpoint that rejects only stream_options keeps the
+        load-bearing response_format constraint on the retry."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        assert isinstance(result, CodebaseGraph)
+        requests = [json.loads(r.content) for r in httpx_mock.get_requests()]
         assert len(requests) == 2
-        assert "response_format" in json.loads(requests[0].content)  # first tried
-        assert "response_format" not in json.loads(requests[1].content)  # then dropped
+        assert "stream_options" not in requests[1] and "response_format" in requests[1]
+
+    def test_400_on_pass1_sheds_stream_options(self, httpx_mock):
+        """Pass 1 sends no response_format; a 400 there must still retry once
+        without stream_options rather than fail outright."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
+        httpx_mock.add_response(json={"choices": [{"message": {"content": '{"requested_files": []}'}}]})
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+        )
+        assert result == '{"requested_files": []}'
+        assert len(httpx_mock.get_requests()) == 2
 
     def test_404_does_not_fall_back(self, httpx_mock):
         """A 404 (missing endpoint/model) is NOT a schema rejection — it must

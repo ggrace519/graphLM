@@ -365,12 +365,22 @@ def call_llm(
                         # is deterministic, so the freed attempt would not have
                         # helped, and popping the constraint makes this one-shot
                         # (the next 400 cannot loop back here).
-                        if (
-                            response.status_code == 400
-                            and "response_format" in payload
-                        ):
-                            payload.pop("response_format")
-                            continue
+                        #
+                        # stream_options is dropped FIRST (innovation #6): it is
+                        # optional telemetry, whereas response_format is
+                        # load-bearing (#31) — so a strict endpoint that rejects
+                        # the newer stream_options parameter keeps the schema
+                        # constraint, and one that rejects response_format loses
+                        # only the usage stamp on the way to the prompt-only
+                        # retry. Two pops + the final request fit the three
+                        # attempts (_MAX_RETRIES + 1).
+                        if response.status_code == 400:
+                            if "stream_options" in payload:
+                                payload.pop("stream_options")
+                                continue
+                            if "response_format" in payload:
+                                payload.pop("response_format")
+                                continue
                         raise GraphLLErrorResponse(
                             f"LLM returned HTTP {response.status_code}: {detail}"
                         )
