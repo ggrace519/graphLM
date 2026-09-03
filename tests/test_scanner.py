@@ -392,3 +392,38 @@ class TestRedactSecrets:
         content = 'api_key: "sk-1234567890abcdefghijklmnop"'
         redacted = _redact_secrets(content)
         assert "[REDACTED:API_KEY]" in redacted
+
+
+class TestNestedCheckouts:
+    """A nested git checkout is a different project — never merged into the map."""
+
+    @staticmethod
+    def _project(tmp_path, marker: str):
+        (tmp_path / "app").mkdir()
+        (tmp_path / "app" / "main.py").write_text("import os\n")
+        nested = tmp_path / "vendor" / "other"
+        nested.mkdir(parents=True)
+        (nested / "mod.py").write_text("x = 1\n")
+        if marker == "file":
+            # Worktree / submodule shape: a .git *file* pointing elsewhere.
+            (nested / ".git").write_text("gitdir: /elsewhere/.git/worktrees/other\n")
+        else:
+            (nested / ".git").mkdir()
+        return tmp_path
+
+    @pytest.mark.parametrize("marker", ["file", "dir"])
+    def test_nested_checkout_is_skipped_from_tree_and_files(self, tmp_path, marker):
+        project = self._project(tmp_path, marker)
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "app/main.py" in paths
+        assert "vendor/other/mod.py" not in paths
+        assert "vendor/other" not in result.tree
+        # The parent dir still appears (it is not itself a checkout).
+        assert "vendor/" in result.tree
+
+    def test_scan_root_being_a_checkout_is_fine(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "a.py").write_text("x = 1\n")
+        result = scan_project(tmp_path)
+        assert {f.rel_path for f in result.file_fragments} == {"a.py"}

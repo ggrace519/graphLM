@@ -15,6 +15,10 @@ and this project adheres to Semantic Versioning.
 
 - `--dry-run` reported `0 import edges` on every run. That figure was `len(graph.import_edges)` — the **LLM's** field, which a dry run never fills — so it always read 0 and looked like "no imports found" even on a project the parser had fully resolved. The stats now show `AST import edges: N` from the parser's `deterministic_edges` (`AST off` under `--no-ast`), and the misleading LLM-field count is gone from the dry-run line.
 
+### Fixed
+
+- Nested git checkouts inside the scanned project — a worktree, a submodule, or a vendored clone (anything whose directory holds a `.git` file or directory) — were scanned as if they were part of the project, so every module and import edge under them was duplicated into the map under a second path prefix (observed with agent worktrees under `.claude/worktrees/`). The scanner now treats such a subtree as a separate project and leaves it out of both the pass-1 tree and the file walk; the scan root itself is unaffected.
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
