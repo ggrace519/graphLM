@@ -293,12 +293,26 @@ def dependents(
     }
 
 
+# Question filler an agent naturally types ("where is the X?"). Dropped before
+# scoring — otherwise every quick-reference entry (they all start "Where is…")
+# matches every query and outranks the real hit.
+_STOPWORDS = frozenset(
+    "a an and are as at by do does find for from how i in is it of on or the "
+    "this to what where which who".split()
+)
+
+
+def _tokens(query: str) -> list[str]:
+    return [t for t in query.lower().replace("?", " ").split() if t and t not in _STOPWORDS]
+
+
 def _score(query_tokens: list[str], *texts: str) -> int:
-    """Rank a hit: exact-token matches outweigh substring matches.
+    """Rank a hit: exact-token matches outweigh prefix/substring matches.
 
     Small integer score so ties are broken deterministically by path in the
-    caller; not a relevance model, just enough to put ``where is the CLI entry``
-    above a file that happens to contain the letters ``cli``.
+    caller; not a relevance model, just enough to put ``secret redaction``
+    on ``_redact_secrets`` (prefix match ``redact`` ↔ ``redaction``) above a
+    file that happens to contain the letters ``cli``.
     """
     hay = " ".join(t.lower() for t in texts if t)
     words = set(hay.replace("/", " ").replace(".", " ").replace("_", " ").split())
@@ -306,6 +320,10 @@ def _score(query_tokens: list[str], *texts: str) -> int:
     for tok in query_tokens:
         if tok in words:
             score += 3
+        elif len(tok) >= 4 and any(
+            (w.startswith(tok) or tok.startswith(w)) and len(w) >= 4 for w in words
+        ):
+            score += 2
         elif tok in hay:
             score += 1
     return score
@@ -317,7 +335,7 @@ def find(index: MapIndex, query: str, limit: int = 20) -> dict[str, Any]:
     Answers "where is X?" from the LLM-curated sections instead of grepping the
     tree. Returns ranked hits with a ``kind`` so an agent knows what it found.
     """
-    tokens = [t for t in query.lower().split() if t]
+    tokens = _tokens(query)
     if not tokens:
         return {"query": query, "hits": []}
     g = index.graph

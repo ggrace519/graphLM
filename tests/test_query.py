@@ -217,6 +217,27 @@ class TestQueries:
         assert {h["kind"] for h in hits} == {"symbol", "file_summary"}
         assert hits[0]["kind"] == "symbol"
 
+    def test_find_ignores_question_filler(self, index):
+        # "where is" must not make every quick-reference entry a hit.
+        hits = query.find(index, "where is the pipeline?")["hits"]
+        assert hits and all(h["kind"] != "quick_reference" for h in hits)
+        assert hits[0]["kind"] == "symbol"
+
+    def test_find_prefix_matches_inflections(self, index):
+        # "redaction" should reach a symbol named _redact_secrets.
+        g = CodebaseGraph(
+            directory_tree="",
+            file_summaries=[
+                FileSummary(
+                    path="app/scanner.py",
+                    summary="Walks the tree.",
+                    symbols=[Symbol(name="_redact_secrets", kind="function", description="Masks keys")],
+                )
+            ],
+        )
+        hits = query.find(query.build_index(g), "secret redaction")["hits"]
+        assert hits[0]["kind"] == "symbol" and hits[0]["name"] == "_redact_secrets"
+
     def test_find_empty_and_limit(self, index):
         assert query.find(index, "   ") == {"query": "   ", "hits": []}
         r = query.find(index, "app", limit=1)
