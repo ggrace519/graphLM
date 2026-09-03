@@ -121,20 +121,26 @@ def render_mermaid(graph: CodebaseGraph, *, max_nodes: int = 40) -> list[str]:
     }
 
     # Collapse to directory level; a collapsed edge is a cycle edge if ANY of
-    # the file-level edges behind it was one. Self-edges are dropped.
+    # the file-level edges behind it was one. Self-edges are dropped, but
+    # their directory is still a node: a package whose files only import each
+    # other (a single-package project is the extreme case) would otherwise
+    # vanish from the picture entirely — along with its cycle outline.
     collapsed: dict[tuple[str, str], bool] = {}
+    degree: dict[str, int] = defaultdict(int)
     for edge in edges:
         key = (_collapse_dir(edge.from_path), _collapse_dir(edge.to_path))
+        degree[key[0]] += 0
+        degree[key[1]] += 0
         if key[0] == key[1]:
             continue
         collapsed[key] = collapsed.get(key, False) or is_cycle(edge)
-
-    degree: dict[str, int] = defaultdict(int)
     for src, dst in collapsed:
         degree[src] += 1
         degree[dst] += 1
-    # Highest degree first; label breaks ties so the cut is deterministic.
-    ranked = sorted(degree, key=lambda d: (-degree[d], d))
+
+    # Highest degree first; cycle members win ties (the red outline is the
+    # last thing the cap should cut); label makes the cut deterministic.
+    ranked = sorted(degree, key=lambda d: (-degree[d], d not in cycle_dirs, d))
     hidden = len(ranked) - max_nodes if len(ranked) > max_nodes else 0
     kept = set(ranked[:max_nodes])
     nodes = sorted(kept)

@@ -555,6 +555,44 @@ class TestMermaidModuleGraph:
         assert "Red edges are members of an import cycle." not in md
         assert "Red-outlined directories contain a file in an import cycle." in md
 
+    def test_single_package_project_still_renders_its_node(self):
+        # Every edge collapses to a self-edge (all files in one package). The
+        # node must survive — with its cycle outline — even though no edge does.
+        # Caught by the cyclic_project fixture: the block came out empty.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("app/a.py", "app/b.py"),
+                _edge("app/b.py", "app/a.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["app/a.py", "app/b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert 'n_app["app"]' in block
+        assert " --> " not in block
+        assert "style n_app stroke:#e11,stroke-width:2px" in block
+
+    def test_cap_keeps_cycle_member_over_equal_degree_peer(self):
+        # hub->a, hub->b, hub->z: all leaves have degree 1. With z in a cycle
+        # and max_nodes=2, z must beat a and b despite sorting last by name.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("hub/h.py", "a/x.py"),
+                _edge("hub/h.py", "b/x.py"),
+                _edge("hub/h.py", "z/x.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["z/x.py", "z/y.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        text = "\n".join(render_mermaid(graph, max_nodes=2))
+        assert 'n_z["z"]' in text
+        assert 'n_a["a"]' not in text
+        assert "*… 2 more directories not shown*" in text
+
     def test_no_cycle_legend_without_cycles(self):
         graph = CodebaseGraph(
             directory_tree="root/",
