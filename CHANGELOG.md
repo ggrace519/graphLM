@@ -7,6 +7,15 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Mermaid module graph in `GRAPH.md`.** The map now carries a picture, not only tables: a `## Module Graph` section right after the directory tree with a Mermaid `flowchart` of the import edges. GitHub (and most Markdown viewers) render Mermaid natively, so the diagram shows up in any repo that commits its map — no CDN, no separate file, works offline, unlike `GRAPH.html`. It draws the parser's Tree-sitter edges when present (labelled *ground truth*) and falls back to the LLM's edges under `--no-ast` (labelled *inferred*), so you always know which you are looking at. To stay legible it is **directory-level** — files collapse to their parent directory, root-level files stay their own node — and caps at 40 directories (highest-degree kept, with a "… N more directories not shown" note). Import-cycle members are drawn in red: edges whose endpoints share a cycle, plus a red outline on any directory containing a cycle member so a cycle inside one package (the common case, which collapses to nothing at directory level) is still visible. Output is sorted, so a regenerated map diffs cleanly
+- **Ground-truth layers in `GRAPH.html`.** The interactive graph now draws the parser's `deterministic_edges` as a distinct solid-blue "Parser imports" layer alongside the grey LLM imports and the dashed data flow, with a **Layers** control (three checkboxes) to show or hide each. Every node that is part of an import cycle gets a red ring and a "Member of an import cycle" line in its tooltip. Where the LLM reported the same edge the parser found, only the parser's line is drawn (the duplicate is dropped and the AST link marked *corroborated* in the embedded data), so one relationship is never two lines. The legend and the stats line (edges broken down by parser / LLM / data flow, plus the cycle count) reflect the new layers
+
+### Fixed
+
+- `GRAPH.html` showed only the LLM's edges and never highlighted cycles. The map's *verified* structure — the Tree-sitter import edges and the Tarjan import cycles with risk scores — was computed and written to `GRAPH.md`/`GRAPH.json` but never reached the picture, so the interactive view could contradict the ground-truth table beneath it and gave no visual cue for the cycles the report called out. Both now render (see Added above)
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
