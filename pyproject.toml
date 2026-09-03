@@ -34,6 +34,12 @@ dependencies = [
     "tree-sitter-python>=0.25.0,<0.26",
 ]
 
+[project.optional-dependencies]
+# `graphlm --serve` — the MCP server that lets a coding agent query the map.
+# Opt-in so the base install stays lean; the CLI prints an install hint if the
+# flag is used without it.
+mcp = ["mcp>=2,<3"]
+
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"
 Repository = "https://github.com/ggrace519/graphLM"
