@@ -42,6 +42,8 @@ pipx install graphlm         # via pipx
 
 Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs.
 
+Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`.
+
 **No PyPI, no problem.** Every release also ships the wheel and sdist on its [GitHub Release](https://github.com/ggrace519/graphLM/releases). Install straight from a release asset:
 
 ```bash
@@ -158,6 +160,28 @@ graphlm --install-skill codex     # writes ~/.codex/graphlm.md + a snippet to pa
 It drops a short guide telling the agent to look for `.graphlm/GRAPH.md` when it opens a repo, follow the map's refresh directive, and regenerate with `graphlm .` when the map is missing or stale. Installs **user-global** by default (so every repo benefits); add `--skill-local` to write into the current project instead, and `--skill-force` to overwrite an existing guide.
 
 graphLM only ever creates its *own* files — it will **never** edit your existing `CLAUDE.md` or `AGENTS.md`. For Codex (whose config is a user-owned `AGENTS.md`), it writes a standalone guide and prints the one line for you to paste in yourself.
+
+## Serve the map to your agent (MCP)
+
+Reading `GRAPH.md` costs an agent the whole document — tens of thousands of tokens — to answer one question. `graphlm --serve` exposes the same map as a stdio [MCP](https://modelcontextprotocol.io) server with typed, zero-LLM tools, so the agent asks "who imports `scanner.py`?" and gets a few hundred tokens back:
+
+| Tool | Answers |
+|---|---|
+| `overview` | counts, provenance, most-imported files, entry points, architecture notes |
+| `find` | "where is X?" — ranked hits across quick-reference, modules, symbols, summaries |
+| `module` | everything the map knows about one file (accepts a unique suffix like `cli.py`) |
+| `neighbors` | what a file imports / what imports it, each edge labelled `ast` (parser-proven), `llm`, or `both` |
+| `dependents` | blast radius — direct importers, or transitive with distances |
+| `cycles`, `entry_points` | the import cycles (by risk) and every entry point |
+| `staleness` | stamped commit vs current `HEAD`: `fresh` / `stale` / `unknown` |
+
+```bash
+uv tool install 'graphlm[mcp]'                       # the extra pulls in the MCP SDK
+graphlm .                                            # generate the map first (serving never calls the LLM)
+claude mcp add graphlm -- graphlm --serve /path/to/repo   # register with Claude Code (once per repo)
+```
+
+The server reads `<project>/.graphlm/GRAPH.json` (or the `-o` directory) and picks up a regenerated map automatically — no restart. It never runs the LLM: if there is no map yet it says so and tells the agent to run `graphlm .`. The `--install-skill` guide tells the agent to prefer these tools when they are registered.
 
 ## Self-refreshing graph
 
@@ -290,6 +314,7 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `--no-html` | Do not write `GRAPH.html` | HTML on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |
 | `--cycle-threshold` | Minimum cycle risk score | 0.0 |
+| `--serve` | Serve the existing map to a coding agent over MCP (stdio); needs `graphlm[mcp]` | — |
 | `--install-skill <harness>` | Install an agent guide (`claude` / `codex`) and exit | — |
 | `--skill-local` | With `--install-skill`: write into the project, not user-global | User-global |
 | `--skill-force` | With `--install-skill`: overwrite an existing guide | Skip if exists |
