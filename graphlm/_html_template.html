@@ -39,6 +39,14 @@
     cursor: pointer; font-size: 14px; transition: border-color 0.2s;
   }
   #theme-toggle:hover { border-color: var(--accent); }
+  #layers {
+    display: flex; gap: 10px; align-items: center;
+    padding: 6px 12px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--surface); font-size: 12px;
+  }
+  #layers .title { opacity: 0.6; }
+  #layers label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #layers input { accent-color: var(--accent); margin: 0; }
   #legend {
     position: absolute; top: 12px; right: 12px; z-index: 10;
     background: var(--surface); border: 1px solid var(--border);
@@ -79,6 +87,12 @@
 <div id="controls">
   <input type="text" id="search" placeholder="Search nodes...">
   <button id="theme-toggle">Toggle Theme</button>
+  <div id="layers">
+    <span class="title">Layers</span>
+    <label><input type="checkbox" data-layer="ast" checked> Parser imports</label>
+    <label><input type="checkbox" data-layer="import" checked> LLM imports</label>
+    <label><input type="checkbox" data-layer="data_flow" checked> Data flow</label>
+  </div>
 </div>
 <div id="legend"></div>
 <div id="tooltip"></div>
@@ -99,6 +113,12 @@ function escapeHtml(s) {
   div.textContent = s || '';
   return div.innerHTML;
 }
+// Cycle members keep a red ring at rest; hover swaps the stroke to the node
+// color and mouseout restores it, so every restore goes through these.
+const CYCLE_COLOR = '#e11';
+function nodeStroke(d) { return d.in_cycle ? CYCLE_COLOR : '#fff'; }
+function nodeStrokeWidth(d) { return d.in_cycle ? 2.5 : 1.5; }
+function nodeStrokeOpacity(d) { return d.in_cycle ? 1 : 0.3; }
 function buildLegend() {
   const el = document.getElementById('legend');
   el.innerHTML = '<h3>Legend</h3>';
@@ -106,7 +126,9 @@ function buildLegend() {
     {label:'Module', html:'<span class="dot"></span>'},
     {label:'Entry Point', html:'<span class="rect"></span>'},
     {label:'File Summary', html:'<span class="dot" style="width:6px;height:6px"></span>'},
-    {label:'Import Edge', html:'<span class="line" style="border-color:#888"></span>'},
+    {label:'In Import Cycle', html:'<span class="dot" style="border:2px solid ' + CYCLE_COLOR + '"></span>'},
+    {label:'Parser Import (AST)', html:'<span class="line" style="border-color:#7aa2f7"></span>'},
+    {label:'LLM Import', html:'<span class="line" style="border-color:#888"></span>'},
     {label:'Data Flow', html:'<span class="line" style="border-color:#c69;border-style:dashed"></span>'},
   ];
   for (const item of items) {
@@ -186,13 +208,13 @@ function initGraph() {
         .attr('x', -d.r).attr('y', -d.r)
         .attr('width', d.r * 2).attr('height', d.r * 2)
         .attr('rx', 3).attr('fill', nodeColor(d))
-        .attr('stroke', '#fff').attr('stroke-width', 1.5)
-        .attr('stroke-opacity', 0.3);
+        .attr('stroke', nodeStroke(d)).attr('stroke-width', nodeStrokeWidth(d))
+        .attr('stroke-opacity', nodeStrokeOpacity(d));
     } else {
       sel.append('circle')
         .attr('r', d.r).attr('fill', nodeColor(d))
-        .attr('stroke', '#fff').attr('stroke-width', 1.5)
-        .attr('stroke-opacity', 0.3);
+        .attr('stroke', nodeStroke(d)).attr('stroke-width', nodeStrokeWidth(d))
+        .attr('stroke-opacity', nodeStrokeOpacity(d));
     }
     if (d.r >= 8) {
       const parts = (d.name || d.path).split('.');
@@ -220,7 +242,8 @@ function initGraph() {
       '<div class="tt-name">' + escapeHtml(d.name || d.path) + '</div>' +
       '<div class="tt-path">' + escapeHtml(d.path) + '</div>' +
       (d.description ? '<div class="tt-desc">' + escapeHtml(d.description) + '</div>' : '') +
-      '<div style="opacity:0.5;margin-top:4px">Type: ' + escapeHtml(d.type) + '</div>'
+      '<div style="opacity:0.5;margin-top:4px">Type: ' + escapeHtml(d.type) + '</div>' +
+      (d.in_cycle ? '<div style="color:' + CYCLE_COLOR + ';margin-top:2px">Member of an import cycle</div>' : '')
     );
     d3.select(this).select('circle, rect')
       .transition().duration(100)
@@ -228,11 +251,11 @@ function initGraph() {
   }).on('mousemove', function(event) {
     tooltip.style('left', (event.pageX + 12) + 'px')
       .style('top', (event.pageY - 12) + 'px');
-  }).on('mouseout', function() {
+  }).on('mouseout', function(event, d) {
     tooltip.style('display', 'none');
     d3.select(this).select('circle, rect')
       .transition().duration(100)
-      .attr('stroke-opacity', 0.3).attr('stroke', '#fff');
+      .attr('stroke-opacity', nodeStrokeOpacity(d)).attr('stroke', nodeStroke(d));
   });
   let highlighted = new Set();
   node.on('click', function(event, d) {
@@ -285,11 +308,27 @@ function initGraph() {
   document.getElementById('theme-toggle').addEventListener('click', () => {
     document.body.classList.toggle('light');
   });
+  // Layer toggles hide/show links by type via CSS display only — the
+  // simulation is untouched, so the layout does not jump when a layer is
+  // switched off.
+  const layerVisible = {ast: true, import: true, data_flow: true};
+  document.querySelectorAll('#layers input[data-layer]').forEach(box => {
+    box.addEventListener('change', function() {
+      layerVisible[this.dataset.layer] = this.checked;
+      link.style('display', l => layerVisible[l.type] === false ? 'none' : null);
+    });
+  });
   buildLegend();
 }
 window.addEventListener('DOMContentLoaded', () => {
+  const links = graphData.links || [];
+  const count = t => links.filter(l => l.type === t).length;
+  const cycles = graphData.cycles || 0;
   document.getElementById('stats').textContent =
-    graphData.nodes.length + ' nodes, ' + graphData.links.length + ' edges';
+    graphData.nodes.length + ' nodes, ' + links.length + ' edges (' +
+    count('ast') + ' parser, ' + count('import') + ' LLM, ' +
+    count('data_flow') + ' data flow), ' +
+    cycles + (cycles === 1 ? ' import cycle' : ' import cycles');
   initGraph();
 });
 </script>

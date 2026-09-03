@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+from graphlm.cycles import compute_sloc_map, detect_cycles
 from graphlm.html_render import (
     _build_links,
     _build_nodes,
@@ -14,12 +15,21 @@ from graphlm.html_render import (
 )
 from graphlm.models import (
     CodebaseGraph,
+    Cycle,
     FileSummary,
     ImportEdge,
     ModuleDescription,
     Symbol,
 )
+from graphlm.parser import build_dependency_graph
 from graphlm.render import write_outputs
+from graphlm.scanner import scan_project
+
+
+def _embedded(html: str) -> dict:
+    """Parse the JSON graphlm embeds as ``const graphData = ...;``."""
+    start = html.index("const graphData = ") + len("const graphData = ")
+    return json.loads(html[start:html.index(";\nconst _PALETTE")])
 
 
 class TestDirectoryColor:
@@ -485,3 +495,220 @@ class TestWriteOutputsWithHtml:
             html = html_path.read_text(encoding="utf-8")
             assert "<style>" in html
             assert "d3js.org" in html
+
+
+def _edge(a: str, b: str, kind: str = "import") -> ImportEdge:
+    return ImportEdge(from_path=a, to_path=b, kind=kind)
+
+
+class TestGroundTruthLinks:
+    def test_ast_edges_become_ast_links(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py")],
+        )
+        links = _build_links(graph)
+        assert len(links) == 1
+        assert links[0]["type"] == "ast"
+        assert links[0]["source"] == "a.py"
+        assert links[0]["target"] == "b.py"
+        assert links[0]["stroke"] == "#7aa2f7"
+        assert links[0]["dash"] is None
+        assert links[0]["corroborated"] is False
+
+    def test_duplicate_llm_edge_dropped_and_ast_link_corroborated(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py")],
+            import_edges=[_edge("a.py", "b.py", kind="from")],
+        )
+        links = _build_links(graph)
+        assert len(links) == 1
+        assert links[0]["type"] == "ast"
+        assert links[0]["corroborated"] is True
+
+    def test_llm_only_edge_kept_as_import_link(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py")],
+            import_edges=[_edge("a.py", "b.py"), _edge("a.py", "c.py")],
+        )
+        links = _build_links(graph)
+        by_type = {(l["type"], l["source"], l["target"]) for l in links}
+        assert by_type == {("ast", "a.py", "b.py"), ("import", "a.py", "c.py")}
+        llm = next(l for l in links if l["type"] == "import")
+        assert llm["stroke"] == "#888"
+        assert "corroborated" not in llm
+
+    def test_reverse_direction_is_not_a_duplicate(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py")],
+            import_edges=[_edge("b.py", "a.py")],
+        )
+        links = _build_links(graph)
+        assert {l["type"] for l in links} == {"ast", "import"}
+        assert next(l for l in links if l["type"] == "ast")["corroborated"] is False
+
+    def test_repeated_ast_pair_emitted_once(self):
+        # The parser can produce one edge per import statement; two lines
+        # between the same pair would read as two relationships.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py"), _edge("a.py", "b.py", kind="from")],
+        )
+        assert len(_build_links(graph)) == 1
+
+    def test_ast_none_leaves_import_links_unchanged(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=None,
+            import_edges=[_edge("a.py", "b.py")],
+        )
+        links = _build_links(graph)
+        assert len(links) == 1
+        assert links[0]["type"] == "import"
+
+    def test_data_flow_links_untouched(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py")],
+            data_flow=[{"source": "a.py", "destination": "b.py", "description": "d"}],
+        )
+        links = _build_links(graph)
+        assert [l["type"] for l in links] == ["ast", "data_flow"]
+
+
+class TestGroundTruthNodes:
+    def test_ast_only_endpoints_become_nodes(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "pkg/b.py")],
+        )
+        nodes = _build_nodes(graph)
+        assert {n["id"] for n in nodes} == {"pkg/a.py", "pkg/b.py"}
+        assert all(n["type"] == "file" for n in nodes)
+
+    def test_in_cycle_flag_set_from_import_cycles(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[ModuleDescription(path="c.py", name="C", description="not in cycle")],
+            deterministic_edges=[_edge("a.py", "b.py"), _edge("b.py", "a.py"), _edge("a.py", "c.py")],
+            import_cycles=[Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)],
+        )
+        flags = {n["id"]: n["in_cycle"] for n in _build_nodes(graph)}
+        assert flags == {"a.py": True, "b.py": True, "c.py": False}
+
+    def test_in_cycle_false_everywhere_without_cycles(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[ModuleDescription(path="a.py", name="A", description="A")],
+            import_edges=[_edge("a.py", "b.py")],
+        )
+        nodes = _build_nodes(graph)
+        assert nodes and all(n["in_cycle"] is False for n in nodes)
+
+    def test_existing_module_node_gains_in_cycle_flag(self):
+        # A cycle member that is already a module keeps its module identity
+        # and only gains the flag.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[ModuleDescription(path="a.py", name="A", description="A")],
+            import_cycles=[Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)],
+        )
+        nodes = _build_nodes(graph)
+        assert len(nodes) == 1
+        assert nodes[0]["type"] == "module"
+        assert nodes[0]["in_cycle"] is True
+
+
+class TestGroundTruthHtml:
+    def test_template_has_three_layer_toggles(self):
+        html = render_html(CodebaseGraph(directory_tree="root/"))
+        assert 'data-layer="ast"' in html
+        assert 'data-layer="import"' in html
+        assert 'data-layer="data_flow"' in html
+        assert "Parser imports" in html
+        assert "LLM imports" in html
+        assert "Data flow" in html
+
+    def test_rendered_html_embeds_ast_links_and_cycle_flags(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a.py", "b.py"), _edge("b.py", "a.py")],
+            import_edges=[_edge("a.py", "b.py")],
+            import_cycles=[Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)],
+        )
+        data = _embedded(render_html(graph))
+        assert [l["type"] for l in data["links"]] == ["ast", "ast"]
+        assert data["links"][0]["corroborated"] is True
+        assert data["links"][1]["corroborated"] is False
+        assert all(n["in_cycle"] for n in data["nodes"])
+        assert data["cycles"] == 1
+
+    def test_cycles_count_zero_when_no_cycles(self):
+        data = _embedded(render_html(CodebaseGraph(directory_tree="root/")))
+        assert data["cycles"] == 0
+
+    def test_template_draws_cycle_ring_and_legend(self):
+        html = render_html(CodebaseGraph(directory_tree="root/"))
+        assert "const CYCLE_COLOR = '#e11'" in html
+        assert "in_cycle" in html
+        assert "In Import Cycle" in html
+        assert "Parser Import (AST)" in html
+        assert "LLM Import" in html
+        assert "border-color:#7aa2f7" in html
+
+    def test_stats_line_reports_parser_edges_and_cycles(self):
+        html = render_html(CodebaseGraph(directory_tree="root/"))
+        after_load = html.split("window.addEventListener('DOMContentLoaded'", 1)[1]
+        assert "count('ast')" in after_load
+        assert "graphData.cycles" in after_load
+        assert "import cycle" in after_load
+
+    def test_layer_toggle_uses_display_not_simulation(self):
+        html = render_html(CodebaseGraph(directory_tree="root/"))
+        toggle_block = html.split("const layerVisible", 1)[1].split("buildLegend()", 1)[0]
+        assert "link.style('display'" in toggle_block
+        assert "simulation" not in toggle_block
+
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+class TestGroundTruthEndToEnd:
+    def test_cyclic_project_renders_red_in_both_outputs(self):
+        project = FIXTURES_DIR / "cyclic_project"
+        scan = scan_project(project)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=project)
+        cycles = detect_cycles(edges, compute_sloc_map(scan.file_fragments))
+        assert edges and cycles, "fixture must yield AST edges and a cycle"
+
+        graph = CodebaseGraph(
+            directory_tree=scan.tree,
+            deterministic_edges=edges,
+            import_cycles=cycles,
+        )
+        with TemporaryDirectory() as tmpdir:
+            md_path, _, html_path = write_outputs(graph, Path(tmpdir))
+            md = md_path.read_text(encoding="utf-8")
+            html = html_path.read_text(encoding="utf-8")
+
+        # GRAPH.md: a Mermaid block from the parser edges. The fixture's cycle
+        # is entirely inside app/, so it surfaces as the red directory outline.
+        assert "## Module Graph" in md
+        assert "parser-extracted import edges (ground truth)" in md
+        assert "```mermaid" in md
+        assert 'n_app["app"]' in md
+        assert "style n_app stroke:#e11,stroke-width:2px" in md
+        assert "Red-outlined directories contain a file in an import cycle." in md
+
+        # GRAPH.html: AST links, and every cycle member ringed red.
+        data = _embedded(html)
+        ast_links = [l for l in data["links"] if l["type"] == "ast"]
+        assert len(ast_links) == len({(e.from_path, e.to_path) for e in edges})
+        cycle_members = {n for c in cycles for n in c.nodes}
+        flagged = {n["id"] for n in data["nodes"] if n["in_cycle"]}
+        assert flagged == cycle_members
+        assert data["cycles"] == len(cycles)
+        assert "#e11" in html
