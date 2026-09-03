@@ -70,9 +70,11 @@ def _upsert_node(
 def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
     """Build D3 node data from the graph.
 
-    One node per file path (or data-flow label). Import-edge and data-flow
-    endpoints that are not already modules/entry points/summaries are added
-    so every link can resolve — D3 forceLink throws on missing node ids.
+    One node per file path (or data-flow label). Import-edge (LLM *and* AST)
+    and data-flow endpoints that are not already modules/entry points/summaries
+    are added so every link can resolve — D3 forceLink throws on missing node
+    ids. Every node carries ``in_cycle``: True when its path is a member of
+    any ``import_cycles`` SCC, so the template can ring it red.
     """
     by_id: dict[str, dict[str, Any]] = {}
 
@@ -106,7 +108,7 @@ def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
             description=fs.summary,
             r=5,
         )
-    for edge in graph.import_edges:
+    for edge in [*graph.import_edges, *(graph.deterministic_edges or [])]:
         for p in (edge.from_path, edge.to_path):
             if p not in by_id:
                 _upsert_node(
@@ -125,14 +127,47 @@ def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
                     r=7,
                 )
 
+    cycle_paths = {node for cycle in graph.import_cycles for node in cycle.nodes}
+    for node in by_id.values():
+        node["in_cycle"] = node["path"] in cycle_paths
+
     return list(by_id.values())
 
 
 def _build_links(graph: CodebaseGraph) -> list[dict[str, Any]]:
-    """Build D3 link data from the graph."""
+    """Build D3 link data from the graph.
+
+    Three link types, so the picture distinguishes parser-proven structure
+    from LLM inference: ``ast`` (``deterministic_edges``, solid accent
+    stroke), ``import`` (LLM ``import_edges``, grey), ``data_flow`` (dashed).
+    An LLM edge with the same ``(from, to)`` as an AST edge is **dropped** and
+    the AST link marked ``corroborated`` — drawing two lines between one pair
+    would read as two relationships. Only the LLM-only imports survive as
+    ``import`` links.
+    """
     links: list[dict[str, Any]] = []
 
+    ast_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for edge in graph.deterministic_edges or []:
+        pair = (edge.from_path, edge.to_path)
+        if pair in ast_by_pair:
+            continue  # the parser can emit one edge per import statement
+        link = {
+            "source": edge.from_path,
+            "target": edge.to_path,
+            "type": "ast",
+            "stroke": "#7aa2f7",
+            "dash": None,
+            "corroborated": False,
+        }
+        ast_by_pair[pair] = link
+        links.append(link)
+
     for edge in graph.import_edges:
+        pair = (edge.from_path, edge.to_path)
+        if pair in ast_by_pair:
+            ast_by_pair[pair]["corroborated"] = True
+            continue
         links.append({
             "source": edge.from_path,
             "target": edge.to_path,
@@ -165,8 +200,15 @@ def render_html(graph: CodebaseGraph) -> str:
     The output is a single HTML file with inline CSS, embedded data,
     and inline JavaScript -- no external files needed (except D3 CDN).
     """
+    # ``cycles`` is the SCC count for the stats line — it is not derivable
+    # from the in_cycle node flags (two cycles of three nodes and one of six
+    # both flag six nodes).
     data = json.dumps(
-        {"nodes": _build_nodes(graph), "links": _build_links(graph)},
+        {
+            "nodes": _build_nodes(graph),
+            "links": _build_links(graph),
+            "cycles": len(graph.import_cycles),
+        },
         ensure_ascii=False,
     )
     palette_js = json.dumps(_PALETTE, ensure_ascii=False)

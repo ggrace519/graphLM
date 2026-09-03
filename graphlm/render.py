@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from graphlm.mermaid import render_mermaid
 from graphlm.models import CodebaseGraph, GraphMeta
 
 
@@ -139,6 +140,12 @@ def render_markdown(graph: CodebaseGraph) -> str:
     lines.append("```\n")
     lines.append(graph.directory_tree)
     lines.append("\n```\n")
+
+    # Module graph — a Mermaid picture of the import edges (directory-level,
+    # ground-truth AST edges when present). Renders natively on GitHub, so the
+    # map has a diagram without the CDN-backed GRAPH.html. Omitted when there
+    # are no edges to draw.
+    lines.extend(render_mermaid(graph))
 
     # Import edges
     if graph.import_edges:

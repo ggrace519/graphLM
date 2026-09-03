@@ -25,7 +25,8 @@ By default the map is written into a `.graphlm/` folder inside the project (so i
 - **Architecture notes** — key decisions and patterns
 - **Quick reference** — "where do I find X?" lookups
 - **Import cycles** — strongly-connected components with SLOC-based risk scores
-- **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, and theme toggle
+- **Mermaid module graph** — a directory-level `flowchart` of the parser's import edges inside `GRAPH.md`, with import-cycle members in red. GitHub renders it natively, so a committed map shows a picture with no CDN and no extra file
+- **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, theme toggle, and layer toggles for parser-proven imports vs LLM-inferred imports vs data flow; cycle members are ringed red
 - **Provenance stamp** — `GRAPH.json` records when and against which git commit the map was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
 - **Graph-vs-graph diff** — every run also writes `GRAPH_DIFF.md` / `GRAPH_DIFF.json`: what changed in the *map* (modules, edges, cycles, data flows, entry points, file summaries added and removed) since the prior run, so you see a new entry point or a broken import cycle at a glance without re-reading the whole graph (see [Graph diff](#graph-diff))
 

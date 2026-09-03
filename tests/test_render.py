@@ -3,12 +3,15 @@
 import copy
 import json
 import pickle
+import random
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from graphlm.mermaid import render_mermaid
 from graphlm.models import (
     ArchitectureNote,
     CodebaseGraph,
+    Cycle,
     DBColumn,
     DBTable,
     DataFlowEdge,
@@ -339,6 +342,295 @@ class TestRenderJsonMeta:
         assert graph.meta is None
 
 
+def _edge(a: str, b: str) -> ImportEdge:
+    return ImportEdge(from_path=a, to_path=b, kind="import")
+
+
+def _mermaid_block(md: str) -> str:
+    """The text between the ```mermaid fence and its closing fence."""
+    start = md.index("```mermaid\n") + len("```mermaid\n")
+    return md[start:md.index("```", start)]
+
+
+class TestMermaidModuleGraph:
+    def test_section_present_with_ast_edges(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "lib/b.py")],
+        )
+        md = render_markdown(graph)
+        assert "## Module Graph" in md
+        assert "parser-extracted import edges (ground truth)" in md
+        block = _mermaid_block(md)
+        assert block.startswith("flowchart LR")
+        assert 'n_pkg["pkg"]' in block
+        assert 'n_lib["lib"]' in block
+        assert "n_pkg --> n_lib" in block
+
+    def test_section_sits_right_after_directory_tree(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "lib/b.py")],
+            import_edges=[_edge("pkg/a.py", "lib/b.py")],
+        )
+        md = render_markdown(graph)
+        assert (
+            md.index("## Directory Tree")
+            < md.index("## Module Graph")
+            < md.index("## Import Edges")
+        )
+
+    def test_absent_when_no_edges(self):
+        graph = CodebaseGraph(directory_tree="root/")
+        assert render_mermaid(graph) == []
+        assert "## Module Graph" not in render_markdown(graph)
+        # An explicitly empty AST list with no LLM edges is also "no edges".
+        empty_ast = CodebaseGraph(directory_tree="root/", deterministic_edges=[])
+        assert render_mermaid(empty_ast) == []
+
+    def test_falls_back_to_llm_edges_when_ast_is_none(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=None,
+            import_edges=[_edge("pkg/a.py", "lib/b.py")],
+        )
+        md = render_markdown(graph)
+        assert "LLM-inferred import edges" in md
+        assert "ground truth" not in md
+        assert "n_pkg --> n_lib" in _mermaid_block(md)
+
+    def test_ast_edges_win_over_llm_edges(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "lib/b.py")],
+            import_edges=[_edge("pkg/a.py", "other/c.py")],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert "n_pkg --> n_lib" in block
+        assert "n_other" not in block
+
+    def test_collapses_files_to_directory_and_drops_self_edges(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("pkg/a.py", "lib/x.py"),
+                _edge("pkg/b.py", "lib/y.py"),  # same dir pair -> one edge
+                _edge("pkg/a.py", "pkg/b.py"),  # self-edge after collapse -> dropped
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert block.count(" --> ") == 1
+        assert "n_pkg --> n_lib" in block
+        assert "n_pkg --> n_pkg" not in block
+        assert block.count('["pkg"]') == 1
+
+    def test_root_level_file_is_its_own_node(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("setup.py", "pkg/a.py")],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert 'n_setup_py["setup.py"]' in block
+        assert "n_setup_py --> n_pkg" in block
+
+    def test_unsafe_path_chars_yield_safe_ids_and_escaped_labels(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("my-dir/a.b.py", 'we"ird/c.py')],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert 'n_my_dir["my-dir"]' in block
+        assert 'n_we_ird["we#quot;ird"]' in block
+        assert "n_my_dir --> n_we_ird" in block
+        # Every id token is [A-Za-z0-9_] only.
+        for line in block.splitlines()[1:]:
+            for tok in line.split():
+                if tok.startswith("n_"):
+                    ident = tok.split("[", 1)[0]
+                    assert ident.replace("_", "a").isalnum(), ident
+
+    def test_colliding_sanitized_ids_are_disambiguated(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("a-b/x.py", "a_b/y.py")],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert 'n_a_b["a-b"]' in block
+        assert 'n_a_b_2["a_b"]' in block
+        assert "n_a_b --> n_a_b_2" in block
+
+    def test_max_nodes_cap_keeps_highest_degree_and_notes_the_rest(self):
+        # hub has degree 5; leaves have degree 1. Cap at 3 keeps hub + 2 leaves
+        # (alphabetical tie-break) and hides 3 directories.
+        edges = [_edge("hub/h.py", f"leaf{i}/l.py") for i in range(5)]
+        graph = CodebaseGraph(directory_tree="root/", deterministic_edges=edges)
+        text = "\n".join(render_mermaid(graph, max_nodes=3))
+        assert 'n_hub["hub"]' in text
+        assert 'n_leaf0["leaf0"]' in text
+        assert 'n_leaf1["leaf1"]' in text
+        assert "leaf2" not in text and "leaf4" not in text
+        assert "*… 3 more directories not shown*" in text
+        assert text.count(" --> ") == 2
+
+    def test_no_more_note_when_under_cap(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "lib/b.py")],
+        )
+        assert "more directories not shown" not in render_markdown(graph)
+
+    def test_cycle_edges_styled_with_exact_link_indices(self):
+        # Four collapsed edges, two of which are cycle edges (both file-level
+        # endpoints in the same SCC). Cycle links are emitted last, so with two
+        # plain links at indices 0 and 1 the cycle links are indices 2 and 3.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("a/x.py", "b/y.py"),
+                _edge("b/y.py", "a/x.py"),
+                _edge("c/z.py", "d/w.py"),
+                _edge("d/w.py", "e/v.py"),
+            ],
+            import_cycles=[
+                Cycle(
+                    nodes=["a/x.py", "b/y.py"],
+                    edges=[_edge("a/x.py", "b/y.py"), _edge("b/y.py", "a/x.py")],
+                    length=2,
+                    risk_score=1.0,
+                )
+            ],
+        )
+        md = render_markdown(graph)
+        block = _mermaid_block(md)
+        links = [ln.strip() for ln in block.splitlines() if " --> " in ln]
+        assert links == [
+            "n_c --> n_d",
+            "n_d --> n_e",
+            "n_a --> n_b",
+            "n_b --> n_a",
+        ]
+        assert "linkStyle 2,3 stroke:#e11,stroke-width:2px" in block
+        assert "style n_a stroke:#e11,stroke-width:2px" in block
+        assert "style n_b stroke:#e11,stroke-width:2px" in block
+        assert "Red edges are members of an import cycle." in md
+        assert "Red-outlined directories contain a file in an import cycle." in md
+
+    def test_single_cycle_edge_gets_index_of_last_link(self):
+        # Three collapsed edges, exactly one a cycle edge -> linkStyle 2.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("a/x.py", "b/y.py"),
+                _edge("b/y.py", "a/z.py"),  # a/y.py is NOT in the cycle
+                _edge("c/z.py", "d/w.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["a/x.py", "b/y.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        links = [ln.strip() for ln in block.splitlines() if " --> " in ln]
+        assert links == ["n_b --> n_a", "n_c --> n_d", "n_a --> n_b"]
+        assert "linkStyle 2 stroke:#e11,stroke-width:2px" in block
+
+    def test_intra_directory_cycle_shows_as_red_node_outline(self):
+        # All cycle members in one directory: the edges collapse to a dropped
+        # self-edge, so the directory outline is the only trace of the cycle.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("app/a.py", "app/b.py"),
+                _edge("app/b.py", "app/a.py"),
+                _edge("app/a.py", "lib/c.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["app/a.py", "app/b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        md = render_markdown(graph)
+        block = _mermaid_block(md)
+        assert "linkStyle" not in block
+        assert "style n_app stroke:#e11,stroke-width:2px" in block
+        assert "style n_lib" not in block
+        assert "Red edges are members of an import cycle." not in md
+        assert "Red-outlined directories contain a file in an import cycle." in md
+
+    def test_single_package_project_still_renders_its_node(self):
+        # Every edge collapses to a self-edge (all files in one package). The
+        # node must survive — with its cycle outline — even though no edge does.
+        # Caught by the cyclic_project fixture: the block came out empty.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("app/a.py", "app/b.py"),
+                _edge("app/b.py", "app/a.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["app/a.py", "app/b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        assert 'n_app["app"]' in block
+        assert " --> " not in block
+        assert "style n_app stroke:#e11,stroke-width:2px" in block
+
+    def test_cap_keeps_cycle_member_over_equal_degree_peer(self):
+        # hub->a, hub->b, hub->z: all leaves have degree 1. With z in a cycle
+        # and max_nodes=2, z must beat a and b despite sorting last by name.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("hub/h.py", "a/x.py"),
+                _edge("hub/h.py", "b/x.py"),
+                _edge("hub/h.py", "z/x.py"),
+            ],
+            import_cycles=[
+                Cycle(nodes=["z/x.py", "z/y.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        text = "\n".join(render_mermaid(graph, max_nodes=2))
+        assert 'n_z["z"]' in text
+        assert 'n_a["a"]' not in text
+        assert "*… 2 more directories not shown*" in text
+
+    def test_no_cycle_legend_without_cycles(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[_edge("pkg/a.py", "lib/b.py")],
+        )
+        md = render_markdown(graph)
+        section = md.split("## Module Graph", 1)[1]
+        assert "linkStyle" not in section
+        assert "style n_" not in section
+        assert "import cycle" not in section
+
+    def test_output_stable_under_shuffled_edge_order(self):
+        edges = [
+            _edge("a/x.py", "b/y.py"),
+            _edge("b/y.py", "a/x.py"),
+            _edge("c/z.py", "d/w.py"),
+            _edge("a/x.py", "d/w.py"),
+            _edge("e/q.py", "a/x.py"),
+            _edge("a-b/x.py", "a_b/y.py"),
+        ]
+        cycles = [Cycle(nodes=["a/x.py", "b/y.py"], edges=[], length=2, risk_score=1.0)]
+        baseline = render_mermaid(
+            CodebaseGraph(
+                directory_tree="root/", deterministic_edges=edges, import_cycles=cycles
+            )
+        )
+        rng = random.Random(7)
+        for _ in range(5):
+            shuffled = list(edges)
+            rng.shuffle(shuffled)
+            got = render_mermaid(
+                CodebaseGraph(
+                    directory_tree="root/",
+                    deterministic_edges=shuffled,
+                    import_cycles=cycles,
+                )
+            )
+            assert got == baseline
 class TestRunTelemetryLine:
     """The run-telemetry blockquote (innovation #6): each half optional, the
     whole line omitted when neither is present, `n/a` for a ratio with no
