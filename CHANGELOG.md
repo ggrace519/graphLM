@@ -7,6 +7,8 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
 This release is the output of an innovation pass over the codebase (`INNOVATIONS.md`): the map becomes queryable by agents over MCP, every run stamps its real token usage and an LLM-vs-parser faithfulness score, the map gets a native Mermaid picture, and oversized files are sent as signature skeletons instead of being cut off.
 
 ### Added
@@ -163,7 +165,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ggrace519/graphLM/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/ggrace519/graphLM/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ggrace519/graphLM/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ggrace519/graphLM/compare/v0.1.0...v0.1.1
