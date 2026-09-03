@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Neither job needs to write anything (no releases, no PR comments, no checks
+# API calls) — read-only is the least privilege the checkout + test/typecheck
+# steps require. Addresses CodeQL actions/missing-workflow-permissions (#1, #2).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
