@@ -193,6 +193,54 @@ def test_baseline_with_schema_version_absent_is_normal(tmp_path):
     assert graph.meta.schema_version == 1
 
 
+def test_pre_telemetry_meta_without_usage_or_faithfulness_is_normal(tmp_path):
+    """A schema_version-1 GRAPH.json written before the run-telemetry fields
+    existed (innovation #6) still loads as NORMAL: `usage` / `faithfulness`
+    are additive optionals that default to None — no schema bump (ADR-001)."""
+    p = tmp_path / "GRAPH.json"
+    data = json.loads(render_json_bytes(_graph(modules=["a.py"])))
+    assert data["meta"]["schema_version"] == 1
+    data["meta"].pop("usage", None)
+    data["meta"].pop("faithfulness", None)
+    p.write_text(json.dumps(data))
+
+    graph, state = load_baseline(p)
+
+    assert state is BaselineState.NORMAL
+    assert graph is not None
+    assert graph.meta is not None
+    assert graph.meta.usage is None
+    assert graph.meta.faithfulness is None
+
+
+def test_telemetry_meta_round_trips_through_baseline(tmp_path):
+    """A stamp carrying usage + faithfulness is written with its nulls kept
+    (render_json re-splices meta) and reads back intact as NORMAL."""
+    from graphlm.models import Faithfulness, PassUsage, RunUsage
+
+    g = _graph(modules=["a.py"])
+    assert g.meta is not None
+    g.meta.usage = RunUsage(
+        pass1=PassUsage(prompt_tokens=None, estimated_prompt_tokens=10),
+        pass2=PassUsage(prompt_tokens=900, completion_tokens=50, estimated_prompt_tokens=1000),
+    )
+    g.meta.faithfulness = Faithfulness(
+        precision=0.5, recall=None, llm_edges=2, ast_edges=0, matched=1
+    )
+    p = tmp_path / "GRAPH.json"
+    p.write_bytes(render_json_bytes(g))
+    data = json.loads(p.read_text())
+    # Nulls inside meta are preserved, not dropped by exclude_none.
+    assert data["meta"]["usage"]["pass1"]["prompt_tokens"] is None
+    assert data["meta"]["faithfulness"]["recall"] is None
+
+    graph, state = load_baseline(p)
+    assert state is BaselineState.NORMAL
+    assert graph is not None and graph.meta is not None
+    assert graph.meta.usage == g.meta.usage
+    assert graph.meta.faithfulness == g.meta.faithfulness
+
+
 def test_det_edges_none_survives_baseline_round_trip(tmp_path):
     """`deterministic_edges=None` (AST off) must read back as None from a baseline.
 

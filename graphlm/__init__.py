@@ -27,12 +27,19 @@ from graphlm.context import (
     filter_requested_files,
 )
 from graphlm.cycles import compute_sloc_map, detect_cycles
+from graphlm.faithfulness import score as score_faithfulness
 from graphlm.llm import (
     CodebaseGraph,
     GraphLLError,
     call_llm,
 )
-from graphlm.models import ArchitectureNote, GraphMeta, ImportEdge
+from graphlm.models import (
+    ArchitectureNote,
+    GraphMeta,
+    ImportEdge,
+    PassUsage,
+    RunUsage,
+)
 from graphlm.parser import build_dependency_graph
 from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.provenance import git_commit_sha, graphlm_version, now_utc_iso
@@ -50,6 +57,29 @@ def _build_meta(project_path: Path) -> GraphMeta:
         created_at=now_utc_iso(),
         commit_sha=git_commit_sha(project_path),
         graphlm_version=graphlm_version(),
+    )
+
+
+def _pass_usage(usage: dict[str, object] | None, estimated: int) -> PassUsage:
+    """Build one pass's ``PassUsage`` from the server's raw ``usage`` dict.
+
+    The dict is untrusted telemetry from the endpoint: a missing key, a
+    non-int (some servers emit floats or strings), or ``None`` all read as
+    "not reported" rather than raising — the run must never fail on
+    accounting. ``bool`` is excluded explicitly because it is an ``int``
+    subclass and ``true`` would otherwise stamp as ``1``.
+    """
+
+    def _int(key: str) -> int | None:
+        value = usage.get(key) if usage else None
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    return PassUsage(
+        prompt_tokens=_int("prompt_tokens"),
+        completion_tokens=_int("completion_tokens"),
+        estimated_prompt_tokens=estimated,
     )
 
 
@@ -277,6 +307,11 @@ def generate_graph(
     # Phase 1: LLM identifies key files from tree only
     assert settings is not None
 
+    # Real token accounting per pass, when the endpoint reports it (innovation
+    # #6). Captured via call_llm's on_usage callback so the return contract is
+    # untouched; each slot stays None if the server sent no usage chunk.
+    usage_seen: dict[str, dict[str, object] | None] = {"pass1": None, "pass2": None}
+
     pass1_prompt = assemble_pass1_prompt(scan.tree)
     pass1_result_json = call_llm(
         base_url=settings.base_url,
@@ -285,6 +320,7 @@ def generate_graph(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=pass1_prompt,
         timeout=resolved_timeout,
+        on_usage=lambda u: usage_seen.__setitem__("pass1", u),
     )
     pass1_result_json = cast(str, pass1_result_json)
 
@@ -320,6 +356,7 @@ def generate_graph(
         response_format=CodebaseGraph,
         timeout=resolved_timeout,
         max_output_tokens=max_output_tokens,
+        on_usage=lambda u: usage_seen.__setitem__("pass2", u),
     )
     graph = cast(CodebaseGraph, graph_result)
     # Fill the tree locally rather than making the model echo it back — the echo
@@ -346,6 +383,19 @@ def generate_graph(
     # for `meta` (like directory_tree, meta is filled here, never trusted from
     # the LLM). The GRAPH.md refresh directive is rendered from this.
     graph.meta = _build_meta(project_path)
+    # Run telemetry (innovation #6), also local-only. `usage` pairs the
+    # server's real counts with graphlm's own estimate for the same prompt so
+    # the estimate_tokens heuristic (#17) is auditable from the stamp;
+    # `faithfulness` scores the LLM's import_edges against the AST ground
+    # truth (None when AST was off — never a fake zero). Neither is set on a
+    # dry run: no LLM call, so no usage and no LLM edges to score.
+    graph.meta.usage = RunUsage(
+        pass1=_pass_usage(usage_seen["pass1"], pass1_tokens(scan.tree)),
+        pass2=_pass_usage(usage_seen["pass2"], pass2_tokens),
+    )
+    graph.meta.faithfulness = score_faithfulness(
+        graph.import_edges, deterministic_edges
+    )
 
     # Write outputs if output_dir specified
     if output_dir is not None:
