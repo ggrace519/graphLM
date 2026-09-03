@@ -11,6 +11,10 @@ and this project adheres to Semantic Versioning.
 
 - **`graphlm --serve` — the map as an MCP server for coding agents.** Until now an agent had to read the whole `GRAPH.md` (tens of thousands of tokens) to answer one question like "who imports `scanner.py`?". `--serve` exposes the generated map over a stdio [MCP](https://modelcontextprotocol.io) server with eight typed, zero-LLM tools — `overview`, `find`, `module`, `neighbors`, `dependents` (blast radius, optionally transitive), `cycles`, `entry_points`, and `staleness` (stamped commit vs current `HEAD`) — each answering in a few hundred tokens. Import edges are unified from both sources and labelled `ast` (parser-proven), `llm` (inferred), or `both`, so an agent can weight them. The server reads `.graphlm/GRAPH.json` (or the `-o` directory), reloads it automatically when a regeneration lands, never calls the LLM, and reports a missing/corrupt map as an actionable tool error rather than a crash. The MCP SDK is an opt-in extra (`uv tool install 'graphlm[mcp]'`); the base install is unchanged, and using `--serve` without it prints the install hint. Register once per repo with `claude mcp add graphlm -- graphlm --serve /path/to/repo`. The `--install-skill` guide now tells the agent to prefer these tools when they are available. The query logic (`graphlm/query.py`) is a plain library surface too, usable without MCP.
 
+### Fixed
+
+- Nested git checkouts inside the scanned project — a worktree, a submodule, or a vendored clone (anything whose directory holds a `.git` file or directory) — were scanned as if they were part of the project, so every module and import edge under them was duplicated into the map under a second path prefix (observed with agent worktrees under `.claude/worktrees/`). The scanner now treats such a subtree as a separate project and leaves it out of both the pass-1 tree and the file walk; the scan root itself is unaffected.
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
