@@ -1,6 +1,8 @@
 """Tests for the CLI."""
 
 import re
+import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +11,7 @@ from typer.testing import CliRunner
 from graphlm import GraphResult
 from graphlm.cli import app, output_destination
 from graphlm.models import CodebaseGraph
-from graphlm.render import WriteResult
+from graphlm.render import WriteResult, write_outputs
 
 runner = CliRunner()
 
@@ -53,6 +55,40 @@ class TestCLI:
         result = runner.invoke(app, ["--install-skill", "vim"])
         assert result.exit_code == 2
         assert "unknown harness" in (result.stdout + result.stderr)
+
+    def test_serve_flag_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert "--serve" in _plain(result.stdout)
+
+    def test_serve_without_map_exits_2_before_needing_mcp(self, tmp_path, monkeypatch):
+        # The map check runs first, so a user without the extra still gets the
+        # actionable message (run graphlm) rather than an install hint.
+        monkeypatch.setitem(sys.modules, "mcp", None)
+        result = runner.invoke(app, [str(tmp_path), "--serve"])
+        assert result.exit_code == 2
+        assert "run `graphlm .`" in (result.stdout + result.stderr)
+
+    def test_serve_without_mcp_extra_exits_2_with_install_hint(self, tmp_path, monkeypatch):
+        (tmp_path / ".graphlm").mkdir()
+        write_outputs(CodebaseGraph(directory_tree=""), tmp_path / ".graphlm", html=False, diff=False)
+        monkeypatch.setitem(sys.modules, "mcp", None)
+        monkeypatch.setitem(sys.modules, "graphlm.mcp_server", None)
+        result = runner.invoke(app, [str(tmp_path), "--serve"])
+        assert result.exit_code == 2
+        assert "graphlm[mcp]" in (result.stdout + result.stderr)
+
+    def test_serve_runs_server_with_resolved_paths(self, tmp_path, monkeypatch):
+        # -o is honored for the map location, and PROJECT_DIR defaults to cwd.
+        out = tmp_path / "maps"
+        write_outputs(CodebaseGraph(directory_tree=""), out, html=False, diff=False)
+        calls = []
+        fake = types.ModuleType("graphlm.mcp_server")
+        fake.run_server = lambda project, json_path: calls.append((project, json_path))
+        monkeypatch.setitem(sys.modules, "graphlm.mcp_server", fake)
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["--serve", "-o", str(out)])
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert calls == [(tmp_path.resolve(), (out / "GRAPH.json").resolve())]
 
     def test_install_skill_local_needs_project_dir(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))

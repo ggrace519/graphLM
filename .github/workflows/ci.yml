@@ -25,8 +25,10 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      # --extra mcp so the `--serve` MCP-server tests run (they importorskip
+      # without it); the missing-extra CLI path is covered by a sys.modules stub.
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --extra mcp
 
       - name: Run tests with coverage
         run: uv run pytest --cov=graphlm --cov-report=xml --cov-report=term-missing -v
