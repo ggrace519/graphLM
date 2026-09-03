@@ -135,6 +135,23 @@ class TestResolvePath:
         match, cands = query.resolve_path(idx, "foo.py")
         assert match is None and cands == ["x/foo.py", "y/foo.py"]
 
+    def test_absolute_and_repo_prefixed_paths(self, index):
+        # An agent holds absolute paths; the map holds repo-relative ones.
+        assert query.resolve_path(index, "/home/me/repo/app/core.py") == ("app/core.py", [])
+        assert query.resolve_path(index, "repo/app/core.py") == ("app/core.py", [])
+
+    def test_longest_known_path_wins_for_prefixed_query(self):
+        idx = query.build_index(
+            CodebaseGraph(directory_tree="", import_edges=[_edge("cli.py", "app/cli.py")])
+        )
+        assert query.resolve_path(idx, "/x/app/cli.py") == ("app/cli.py", [])
+
+    def test_suffix_candidates_are_capped(self):
+        edges = [_edge(f"pkg{i}/__init__.py", "core.py") for i in range(30)]
+        idx = query.build_index(CodebaseGraph(directory_tree="", import_edges=edges))
+        match, cands = query.resolve_path(idx, "__init__.py")
+        assert match is None and len(cands) == 20
+
     def test_unknown(self, index):
         match, cands = query.resolve_path(index, "nope/zzz.py")
         assert match is None and cands == []
@@ -164,6 +181,31 @@ class TestQueries:
         assert info["imports"] == 2 and info["imported_by"] == 2
         assert info["in_cycles"] == [0]
         assert info["entry_points"] == []
+
+    def test_degree_counts_distinct_files_not_edge_kinds(self):
+        g = CodebaseGraph(
+            directory_tree="",
+            deterministic_edges=[_edge("a.py", "b.py", "import"), _edge("a.py", "b.py", "from")],
+            quick_reference=[
+                QuickReference(query="q", location="data.py"),
+                QuickReference(query="anchored", location="pkg/a.py:main"),
+            ],
+        )
+        idx = query.build_index(g)
+        assert query.overview(idx)["most_imported"] == [{"path": "b.py", "imported_by": 1}]
+        info = query.module_info(idx, "b.py")
+        assert info["imported_by"] == 1
+        # neighbors still lists both kinds — that detail is the point of it.
+        assert len(query.neighbors(idx, "b.py", "in")["imported_by"]) == 2
+        # quick-reference match is path-anchored: `a.py` must not claim data.py.
+        assert query.module_info(idx, "a.py")["quick_reference"] == []
+        idx2 = query.build_index(
+            CodebaseGraph(directory_tree="", import_edges=[_edge("pkg/a.py", "b.py")],
+                          quick_reference=g.quick_reference)
+        )
+        assert query.module_info(idx2, "pkg/a.py")["quick_reference"] == [
+            {"query": "anchored", "location": "pkg/a.py:main"}
+        ]
 
     def test_module_info_unknown(self, index):
         info = query.module_info(index, "ghost.py")
@@ -238,8 +280,31 @@ class TestQueries:
         hits = query.find(query.build_index(g), "secret redaction")["hits"]
         assert hits[0]["kind"] == "symbol" and hits[0]["name"] == "_redact_secrets"
 
+    def test_find_stopword_only_query_still_searches(self):
+        g = CodebaseGraph(
+            directory_tree="",
+            file_summaries=[FileSummary(path="q.py", summary="", symbols=[
+                Symbol(name="find", kind="function", description="Search the map")])],
+        )
+        hits = query.find(query.build_index(g), "find")["hits"]
+        assert hits and hits[0]["name"] == "find"
+
+    def test_limits_are_clamped(self, index):
+        assert query.find(index, "app", limit=10_000_000)["hits"]
+        d = query.dependents(index, "app/util.py", transitive=True, limit=10_000_000)
+        assert d["count"] == 3 and not d["truncated"]
+        assert query.dependents(index, "app/util.py", limit=-5)["count"] == 0
+
+    def test_cycles_tiebreak_is_deterministic(self):
+        cyc = [
+            Cycle(nodes=["z.py", "y.py"], edges=[], length=2, risk_score=1.0),
+            Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0),
+        ]
+        idx = query.build_index(CodebaseGraph(directory_tree="", import_cycles=cyc))
+        assert [c["nodes"] for c in query.cycles(idx)["cycles"]] == [["a.py", "b.py"], ["z.py", "y.py"]]
+
     def test_find_empty_and_limit(self, index):
-        assert query.find(index, "   ") == {"query": "   ", "hits": []}
+        assert query.find(index, "   ") == {"query": "   ", "hits": [], "total": 0}
         r = query.find(index, "app", limit=1)
         assert len(r["hits"]) == 1 and r["total"] > 1
 

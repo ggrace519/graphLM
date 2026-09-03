@@ -26,6 +26,11 @@ from typing import Any, Optional
 from graphlm.models import CodebaseGraph, ImportEdge
 
 
+# Hard ceiling on model-supplied `limit` arguments — a tool call can't flood
+# the agent's context by asking for a million rows.
+MAX_LIMIT = 1000
+
+
 class MapUnavailable(Exception):
     """No readable map at the expected location (missing or uncomparable)."""
 
@@ -137,16 +142,41 @@ def resolve_path(index: MapIndex, path: str) -> tuple[Optional[str], list[str]]:
     q = _norm(path)
     if q in index.known_paths:
         return q, []
-    suffix = [p for p in sorted(index.known_paths) if p.endswith("/" + q) or p == q]
+    known = sorted(index.known_paths)
+    suffix = [p for p in known if p.endswith("/" + q) or p == q]
     if len(suffix) == 1:
         return suffix[0], []
     if suffix:
-        return None, suffix
+        return None, suffix[:20]
+    # The query is *longer* than the map path — an absolute path, or one with
+    # a repo-root prefix (`repo/app/cli.py`). Agents naturally hold absolute
+    # paths, and "no such path" would misread as "unmapped". Longest known
+    # path wins so `app/cli.py` beats `cli.py` when both are known.
+    prefixed = sorted(
+        (p for p in known if q.endswith("/" + p)), key=len, reverse=True
+    )
+    if prefixed:
+        return prefixed[0], []
     lowered = q.lower()
-    contains = [p for p in sorted(index.known_paths) if lowered in p.lower()]
+    contains = [p for p in known if lowered in p.lower()]
     if len(contains) == 1:
         return contains[0], []
     return None, contains[:20]
+
+
+def _distinct(refs: list[EdgeRef]) -> int:
+    """Number of distinct neighbor files behind a list of edge rows."""
+    return len({r.path for r in refs})
+
+
+def _same_file(location: str, match: str) -> bool:
+    """True if a quick-reference ``location`` names ``match`` exactly.
+
+    Locations look like ``app/cli.py`` or ``app/cli.py:main``; ``match`` is
+    already a resolved, canonical map path, so only the exact file counts —
+    a substring test let ``a.py`` claim ``data.py`` (and ``pkg/a.py``).
+    """
+    return _norm(location).split(":", 1)[0] == match
 
 
 def _unresolved(path: str, candidates: list[str]) -> dict[str, Any]:
@@ -168,7 +198,9 @@ def _unresolved(path: str, candidates: list[str]) -> dict[str, Any]:
 def overview(index: MapIndex) -> dict[str, Any]:
     """Counts, provenance, hubs, and the architecture notes — the 30-second tour."""
     g = index.graph
-    in_degree = {p: len(v) for p, v in index.in_edges.items()}
+    # Distinct importing *files*: a file that both `import x` and
+    # `from x import y` contributes two edge rows but one importer.
+    in_degree = {p: _distinct(v) for p, v in index.in_edges.items()}
     hubs = sorted(in_degree.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     meta = g.meta.model_dump() if g.meta is not None else None
     return {
@@ -206,7 +238,7 @@ def module_info(index: MapIndex, path: str) -> dict[str, Any]:
     modules = [m for m in g.modules if _norm(m.path) == match]
     summaries = [fs for fs in g.file_summaries if _norm(fs.path) == match]
     entries = [e for e in g.entry_points if _norm(e.path) == match]
-    refs = [r for r in g.quick_reference if match in _norm(r.location)]
+    refs = [r for r in g.quick_reference if _same_file(r.location, match)]
     return {
         "path": match,
         "found": True,
@@ -225,8 +257,8 @@ def module_info(index: MapIndex, path: str) -> dict[str, Any]:
             {"name": e.name, "kind": e.kind, "description": e.description}
             for e in entries
         ],
-        "imports": len(index.out_edges.get(match, [])),
-        "imported_by": len(index.in_edges.get(match, [])),
+        "imports": _distinct(index.out_edges.get(match, [])),
+        "imported_by": _distinct(index.in_edges.get(match, [])),
         "in_cycles": index.cycle_of.get(match, []),
         "quick_reference": [{"query": r.query, "location": r.location} for r in refs],
     }
@@ -265,6 +297,7 @@ def dependents(
     match, candidates = resolve_path(index, path)
     if match is None:
         return _unresolved(path, candidates)
+    limit = max(0, min(limit, MAX_LIMIT))
 
     found: list[dict[str, Any]] = []
     seen = {match}
@@ -303,7 +336,11 @@ _STOPWORDS = frozenset(
 
 
 def _tokens(query: str) -> list[str]:
-    return [t for t in query.lower().replace("?", " ").split() if t and t not in _STOPWORDS]
+    raw = [t for t in query.lower().replace("?", " ").split() if t]
+    kept = [t for t in raw if t not in _STOPWORDS]
+    # A query made only of "stopwords" (`find`, `do`) is a real symbol search —
+    # fall back to the raw tokens rather than answering nothing.
+    return kept or raw
 
 
 def _score(query_tokens: list[str], *texts: str) -> int:
@@ -335,9 +372,10 @@ def find(index: MapIndex, query: str, limit: int = 20) -> dict[str, Any]:
     Answers "where is X?" from the LLM-curated sections instead of grepping the
     tree. Returns ranked hits with a ``kind`` so an agent knows what it found.
     """
+    limit = max(0, min(limit, MAX_LIMIT))
     tokens = _tokens(query)
     if not tokens:
-        return {"query": query, "hits": []}
+        return {"query": query, "hits": [], "total": 0}
     g = index.graph
     hits: list[tuple[int, str, dict[str, Any]]] = []
 
@@ -368,7 +406,9 @@ def find(index: MapIndex, query: str, limit: int = 20) -> dict[str, Any]:
 
 def cycles(index: MapIndex) -> dict[str, Any]:
     """Import cycles with risk scores, highest risk first."""
-    ordered = sorted(index.graph.import_cycles, key=lambda c: -c.risk_score)
+    ordered = sorted(
+        index.graph.import_cycles, key=lambda c: (-c.risk_score, tuple(c.nodes))
+    )
     return {
         "count": len(ordered),
         "cycles": [

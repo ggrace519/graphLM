@@ -125,6 +125,21 @@ class TestServer:
         write_outputs(_graph(), tmp_path, html=False, diff=False)
         assert _call(server, "overview")["counts"]["modules"] == 1
 
+    def test_bad_direction_message_reaches_the_model(self, tmp_path, map_dir):
+        server = mcp_server.build_server(tmp_path, map_dir / "GRAPH.json")
+        err = _call(server, "neighbors", {"path": "app/core.py", "direction": "sideways"})["__error__"]
+        # Rejected by the tool schema (Literal), so the SDK's argument-
+        # validation message names the field and the allowed values — the
+        # model can act on it (a bare masked "Error executing tool" could not).
+        assert "direction" in err and "'both'" in err and "'in'" in err
+
+    def test_broken_symlink_is_reported_as_unreadable_not_missing(self, tmp_path):
+        link = tmp_path / "GRAPH.json"
+        link.symlink_to(tmp_path / "nowhere.json")
+        server = mcp_server.build_server(tmp_path, link)
+        err = _call(server, "overview")["__error__"]
+        assert "could not be read" in err
+
     def test_corrupt_map_is_a_tool_error(self, tmp_path):
         (tmp_path / "GRAPH.json").write_text("{nope", encoding="utf-8")
         server = mcp_server.build_server(tmp_path, tmp_path / "GRAPH.json")

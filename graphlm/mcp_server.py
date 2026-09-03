@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -67,11 +67,12 @@ class MapCache:
         try:
             mtime_ns = self.json_path.stat().st_mtime_ns
         except OSError:
+            # Let load_map classify it (missing vs. e.g. a broken symlink,
+            # which is UNCOMPARABLE, not "run graphlm .") — one message source.
             self._index = None
             self._mtime_ns = None
-            raise MapUnavailable(
-                f"no map at {self.json_path} — run `graphlm .` from the project root first"
-            )
+            load_map(self.json_path)
+            raise MapUnavailable(f"map at {self.json_path} is not readable")
         if self._index is None or mtime_ns != self._mtime_ns:
             logger.info("loading map from %s", self.json_path)
             self._index = build_index(load_map(self.json_path))
@@ -98,6 +99,15 @@ def build_server(project_dir: Path, json_path: Path) -> MCPServer:
         except MapUnavailable as e:
             raise ToolError(str(e)) from e
 
+    def guarded(fn: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Same rule for argument errors raised by query.py (a bad `direction`):
+        # the message must reach the model, not "Error executing tool".
+        try:
+            result: dict[str, Any] = fn(index(), *args, **kwargs)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        return result
+
     @server.tool()
     def overview() -> dict[str, Any]:
         """Counts, provenance, most-imported files, entry points, and the
@@ -113,12 +123,14 @@ def build_server(project_dir: Path, json_path: Path) -> MCPServer:
         return query.module_info(index(), path)
 
     @server.tool()
-    def neighbors(path: str, direction: str = "both") -> dict[str, Any]:
+    def neighbors(
+        path: str, direction: Literal["both", "out", "in"] = "both"
+    ) -> dict[str, Any]:
         """Direct import neighbors of a file: what it imports (`imports`) and what
         imports it (`imported_by`). Each edge says its `source`: `ast`
         (parser-proven), `llm` (inferred), or `both`. `direction` is `both`,
         `out`, or `in`."""
-        return query.neighbors(index(), path, direction)
+        return guarded(query.neighbors, path, direction)
 
     @server.tool()
     def dependents(path: str, transitive: bool = False, limit: int = 200) -> dict[str, Any]:
