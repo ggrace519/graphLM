@@ -227,6 +227,9 @@ def _first_known_rooted(
 #   - source_roots(known)      -> tuple[str, ...]  (source-root prefixes)
 #   - resolve(imp, from_path, known, roots) -> list[str]  (resolved targets)
 #   - edge_kind(imp)           -> str  (the ImportEdge.kind for a carrier)
+#   - skeleton(code)           -> str  (optional: signature skeleton, see
+#                                 skeleton_for; packs without one keep the
+#                                 scanner's head-truncation for big files)
 
 
 @dataclass(frozen=True)
@@ -238,6 +241,7 @@ class _Resolver:
     source_roots: Callable[[set[str]], tuple[str, ...]]
     resolve: Callable[..., list[str]]
     edge_kind: Callable[..., str]
+    skeleton: Callable[[bytes], str] | None = None
 
 
 _RESOLVERS: dict[str, _Resolver] = {}
@@ -246,6 +250,33 @@ _resolvers_loaded = False
 
 def _register_resolver(language: str, resolver: _Resolver) -> None:
     _RESOLVERS[language] = resolver
+
+
+def skeleton_for(path: Path, code: bytes) -> str | None:
+    """Signature skeleton of ``code`` for the language of ``path``, or None.
+
+    None means "no skeleton available — keep the head of the file": the
+    extension maps to no language, the language has no resolver or its
+    resolver has no skeleton renderer, or the grammar pack is not installed.
+    Never raises: the scanner calls this on every oversized file, and a
+    renderer bug on one odd file must degrade that file to head-truncation,
+    not abort the scan.
+    """
+    _ensure_resolvers()
+    language = detect_language(path)
+    if language is None:
+        return None
+    resolver = _RESOLVERS.get(language)
+    if resolver is None or resolver.skeleton is None:
+        return None
+    try:
+        return resolver.skeleton(code)
+    except _GrammarUnavailable:
+        _warn_grammar_unavailable(language)
+        return None
+    except Exception as e:
+        logger.debug("Skeleton failed for %s: %s", path, e)
+        return None
 
 
 def _ensure_resolvers() -> None:

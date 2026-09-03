@@ -25,6 +25,7 @@ from graphlm.parsers.base import (
     detect_import_cycles,
     detect_language,
     parse_file,
+    skeleton_for,
 )
 
 # Import language modules for their registration side effects. Kept here so a
@@ -43,4 +44,5 @@ __all__ = [
     "detect_import_cycles",
     "detect_language",
     "parse_file",
+    "skeleton_for",
 ]
