@@ -145,6 +145,8 @@ This keeps the first pass lightweight (~tree tokens) and ensures the second pass
 
 A Tree-sitter pass (Python imports) runs by default. It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip.
 
+Big files are sent as **signature skeletons**, not heads. A file longer than `--max-file-chars` (default 4000) used to be cut at the cap, so the model saw the imports and the first class of a large module and guessed the rest. Now a Python file over the cap is rendered with Tree-sitter as its API surface — every import, every class/def signature (decorators and multi-line headers intact), the first line of each docstring, short constants — with bodies elided to `...`. That is exact where the head was partial, and usually smaller. The skeleton starts with a `# [graphlm skeleton: …]` marker, and the pass-2 prompt tells the model to summarize the API from it rather than invent behaviour for the elided bodies. Secret redaction runs on the skeleton too. Python only for now (other languages still send the head); `--no-skeleton` restores head-truncation.
+
 ## Teach your coding agent to use it
 
 The map is most useful when your coding agent reads it *automatically* before it starts spelunking through a codebase. One command sets that up:
@@ -278,7 +280,8 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `-k, --api-key` | LLM API key | `GRAPHLM_API_KEY` env var |
 | `-m, --model` | Model name | `GRAPHLM_MODEL` env var |
 | `--max-files` | Maximum files to scan initially | 200 |
-| `--max-file-chars` | Maximum characters per file | 4000 |
+| `--max-file-chars` | Maximum characters per file (a longer Python file is sent as its signature skeleton) | 4000 |
+| `--no-skeleton` | Send the head of an oversized file instead of its Tree-sitter signature skeleton | Skeletons on |
 | `--max-pass2-files` | Max files in pass 2 context | 80 |
 | `--max-context` | Token budget for pass-2 context | `GRAPHLM_MAX_CONTEXT` env var, else 120000 |
 | `--no-tests` | Exclude test files | Tests included by default |
