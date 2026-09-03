@@ -347,6 +347,23 @@ def _redact_secrets(content: str) -> str:
     return redacted
 
 
+def _is_nested_checkout(dir_path: Path) -> bool:
+    """True if ``dir_path`` is the root of another git checkout.
+
+    A git worktree or submodule marks its root with a ``.git`` *file* (a
+    pointer into the parent's gitdir), a vendored clone with a ``.git``
+    directory; ``exists()`` covers both. Such a subtree is a different project
+    — merging it into the parent's map duplicates every module and edge under a
+    second prefix (observed with agent worktrees under ``.claude/worktrees/``
+    and would equally hit submodules). The scan root itself is never tested
+    here (only children are), so scanning a repo is unaffected.
+    """
+    try:
+        return (dir_path / ".git").exists()
+    except OSError:
+        return False
+
+
 def _path_is_inside(project_dir: Path, target: Path) -> bool:
     """Check if target path is inside (or equal to) project_dir.
 
@@ -445,6 +462,12 @@ def scan_project(
             # tree and consumes a max_files slot, even though its content is
             # blocked later by the _path_is_inside check before reading.
             if entry.is_symlink() and not _path_is_inside(project_dir, entry):
+                skipped_count += 1
+                continue
+
+            # A nested git checkout (worktree, submodule, vendored clone) is a
+            # separate project: keep it out of the tree and the file walk.
+            if entry.is_dir() and _is_nested_checkout(entry):
                 skipped_count += 1
                 continue
 
@@ -567,6 +590,8 @@ def scan_project(
             if not _should_exclude(str(Path(root, d).relative_to(project_dir)), all_exclude)
             # Also exclude symlinks pointing outside project
             and (not Path(root, d).is_symlink() or _path_is_inside(project_dir, Path(root, d)))
+            # ...and nested git checkouts (mirrors the tree walk above)
+            and not _is_nested_checkout(Path(root, d))
         ]
         for fname in files:
             fpath = Path(root, fname)
