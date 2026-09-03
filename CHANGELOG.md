@@ -7,6 +7,15 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Oversized Python files are now sent to the LLM as a **tree-sitter signature skeleton** instead of their first 4000 characters. Previously a file longer than `--max-file-chars` was cut at the cap, so for a 1500-line module the model saw the imports and the first class and nothing else — its `file_summaries`, `symbols`, `entry_points` and `quick_reference` entries for big files were guesses. The skeleton keeps every import, every class/def signature (decorators, multi-line headers, return annotations), the first line of each docstring, and short constants, with bodies elided to `...` and long constants collapsed to `NAME = {…}  # N lines elided`. It is exact where the head was partial, and smaller: on graphLM's own tree the same 80 pass-2 files pack into ~12% fewer estimated tokens (`--no-skeleton` ~73.0k → ~64.1k) while carrying every symbol. The skeleton starts with a `# [graphlm skeleton: …]` marker and the pass-2 prompt tells the model to summarize the API from it and not invent behaviour for elided bodies. Secret redaction still runs on the skeleton (docstring lines and constants can hold secrets). Python only for now — other languages still send the head. `--no-skeleton` / `skeleton=False` restores head-truncation.
+- `graphlm/redact.py` now holds the secret-redaction regexes (`_redact_secrets`), relocated verbatim from `scanner.py`; the scanner re-imports it, so every fragment still passes through redaction and existing imports keep working.
+
+### Fixed
+
+- Import-cycle risk scores under-weighted large files. The `log10(total_lines)` term counted the lines of the *truncated* fragment (cut at `--max-file-chars`), so a 1500-line module in a cycle scored as a ~100-line one — exactly the file a risk score should weigh most. `FileFragment` now carries the real on-disk `line_count`, captured before any truncation or skeletonisation, and cycle scoring uses it.
+
 ### Added
 
 - **Mermaid module graph in `GRAPH.md`.** The map now carries a picture, not only tables: a `## Module Graph` section right after the directory tree with a Mermaid `flowchart` of the import edges. GitHub (and most Markdown viewers) render Mermaid natively, so the diagram shows up in any repo that commits its map — no CDN, no separate file, works offline, unlike `GRAPH.html`. It draws the parser's Tree-sitter edges when present (labelled *ground truth*) and falls back to the LLM's edges under `--no-ast` (labelled *inferred*), so you always know which you are looking at. To stay legible it is **directory-level** — files collapse to their parent directory, root-level files stay their own node — and caps at 40 directories (highest-degree kept, with a "… N more directories not shown" note). Import-cycle members are drawn in red: edges whose endpoints share a cycle, plus a red outline on any directory containing a cycle member so a cycle inside one package (the common case, which collapses to nothing at directory level) is still visible. Output is sorted, so a regenerated map diffs cleanly

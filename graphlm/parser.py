@@ -24,6 +24,7 @@ from graphlm.parsers import (  # noqa: F401
     detect_import_cycles,
     detect_language,
     parse_file,
+    skeleton_for,
 )
 from graphlm.parsers.python import _source_roots  # noqa: F401
 
@@ -38,5 +39,6 @@ __all__ = [
     "detect_import_cycles",
     "detect_language",
     "parse_file",
+    "skeleton_for",
     "_source_roots",
 ]

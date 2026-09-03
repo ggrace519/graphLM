@@ -239,6 +239,12 @@ def main(
         "--no-redact",
         help="Do not redact secret-like patterns from file content.",
     ),
+    no_skeleton: bool = typer.Option(
+        False,
+        "--no-skeleton",
+        help="Send the head of an oversized file instead of its tree-sitter "
+        "signature skeleton.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -319,6 +325,7 @@ def main(
             exclude_patterns=tuple(exclude),
             dry_run=dry_run,
             redact_secrets=not no_redact,
+            skeleton=not no_skeleton,
             ast=not no_ast,
             show_cycles=not no_show_cycles,
             cycle_threshold=cycle_threshold,

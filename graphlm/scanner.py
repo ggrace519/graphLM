@@ -5,8 +5,9 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
-import re
 from pathlib import Path
+
+from graphlm.redact import _is_sensitive_file, _redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -128,63 +129,34 @@ _BINARY_EXTS = {
     ".pptx",
 }
 
-# Secret-bearing file extensions — never read these
-_SECRET_EXTS = {
-    # TLS / certificate / key files
-    ".pem",
-    ".key",
-    ".crt",
-    ".cert",
-    ".p12",
-    ".pfx",
-    ".jks",
-    ".cer",
-    # SSH keys
-    ".ppk",
-    # Database credentials / connection strings
-    ".env.local",
-    ".env.production",
-    ".env.staging",
-    ".env.dev",
-    ".env.secret",
-    ".env.override",
-    "env.local",
-    "env.production",
-    "env.staging",
-    "env.secret",
-}
-
-# Glob patterns for secret-bearing file stems/names.
-# Checked against both the stem and the full filename.
-_SECRET_NAME_PATTERNS = {
-    "*secrets*",
-    "*credentials*",
-    "*private*",
-    "*password*",
-    "*token*",
-    "*api*key*",
-    "*auth*key*",
-}
-
-# Any dotenv-style file (.env, .env.<anything>) is treated as secret-bearing,
-# EXCEPT these deliberately-committed, non-secret template variants which are
-# scanned normally (they document required vars without holding real values).
-_ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
-
 # Source-code extensions that should NOT be excluded by name patterns
 # to avoid false positives (e.g. token.py, credentials.py).
 _SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp"}
 
 
 class FileFragment:
-    """A single file's path and content for inclusion in LLM context."""
+    """A single file's path and content for inclusion in LLM context.
 
-    __slots__ = ("rel_path", "content", "estimated_tokens")
+    ``line_count`` is the *on-disk* physical line count (``newlines + 1``, the
+    convention ``compute_sloc_map`` has always used), captured before any cut
+    so cycle risk scores weigh a large file by its real size, not by the
+    ``max_file_chars`` slice. Defaults to counting ``content`` for hand-built
+    fragments.
+    """
 
-    def __init__(self, rel_path: str, content: str, estimated_tokens: int) -> None:
+    __slots__ = ("rel_path", "content", "estimated_tokens", "line_count")
+
+    def __init__(
+        self,
+        rel_path: str,
+        content: str,
+        estimated_tokens: int,
+        line_count: int | None = None,
+    ) -> None:
         self.rel_path = rel_path
         self.content = content
         self.estimated_tokens = estimated_tokens
+        self.line_count = line_count if line_count is not None else content.count("\n") + 1
 
 
 class ScanResult:
@@ -239,114 +211,6 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTS
 
 
-def _is_sensitive_file(path: Path) -> bool:
-    """Check if a file likely contains secrets or credentials.
-
-    Checks file extension against known secret-bearing extensions and
-    filename glob patterns for common secret-credential naming conventions.
-    """
-    suffix = path.suffix.lower()
-    if suffix in _SECRET_EXTS:
-        return True
-
-    # Check full filename for non-dot-prefixed patterns like "env.production"
-    if path.name.lower() in _SECRET_EXTS:
-        return True
-
-    # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
-    # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
-    # arbitrary variants like .env.qa / .env.test; this catches them all.
-    name = path.name.lower()
-    if name == ".env" or name.startswith(".env."):
-        env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
-        if env_suffix not in _ENV_SAFE_SUFFIXES:
-            return True
-
-    stem = path.stem.lower()
-    # Only apply name-based patterns to non-source files
-    if suffix not in _SOURCE_EXTS:
-        for pattern in _SECRET_NAME_PATTERNS:
-            if fnmatch.fnmatch(stem, pattern) or fnmatch.fnmatch(path.name.lower(), pattern):
-                return True
-    return False
-
-
-def _redact_secrets(content: str) -> str:
-    """Replace secret-like patterns in file content with redaction markers.
-
-    This is a best-effort redaction — it catches common patterns but is not
-    a substitute for proper secret management.
-    """
-    redacted = content
-
-    # AWS access key IDs (AKIA...)
-    redacted = re.sub(
-        r'(AKIA[0-9A-Z]{16})',
-        r'[REDACTED:AWS_ACCESS_KEY]',
-        redacted,
-    )
-
-    # AWS secret access keys (40-char base64-like string, usually preceded by
-    # "aws_secret_access_key" or similar context; the generic pattern catches
-    # standalone values too)
-    redacted = re.sub(
-        r'(?i)(aws_secret[_\s]*(?:access_)?key)\s*[=\s:]\s*["\']?([A-Za-z0-9/+=]{40})["\']?',
-        r'\1=[REDACTED:AWS_SECRET_KEY]',
-        redacted,
-    )
-
-    # GitHub / GITHUB_TOKEN patterns
-    redacted = re.sub(
-        r'(?i)(gh[pousr]_[A-Za-z0-9_]{36,})',
-        r'[REDACTED:GITHUB_TOKEN]',
-        redacted,
-    )
-
-    # Generic bearer / API key assignments
-    redacted = re.sub(
-        r'(?i)((?:api[_-]?key|apikey)\s*[=:]\s*)["\']?([A-Za-z0-9_\-/+=]{20,})["\']?',
-        r'\1"[REDACTED:API_KEY]"',
-        redacted,
-    )
-
-    # Private key headers
-    redacted = re.sub(
-        r'(-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
-        r'[REDACTED:PRIVATE_KEY_HEADER]',
-        redacted,
-    )
-    redacted = re.sub(
-        r'(-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
-        r'[REDACTED:PRIVATE_KEY_HEADER]',
-        redacted,
-    )
-
-    # Password assignments (KEY = value patterns)
-    redacted = re.sub(
-        r"(?i)((?:password|passwd|pwd)\s*[=:]\s*)([\"']?)(?!none|null|false|true|''|\"\"|\$\{)"
-        r"[^\s\"',}]+\2",
-        r"\1\2[REDACTED:PASSWORD]\2",
-        redacted,
-    )
-
-    # Connection strings with embedded passwords
-    redacted = re.sub(
-        r'((?:mysql|postgres|postgresql|mongodb|redis|amqp)://[^:\s]+:)([^@\s]+)(@)',
-        r'\1[REDACTED:CONN_STRING_PASSWORD]\3',
-        redacted,
-    )
-
-    # Long random-looking strings assigned to variable names suggesting secrets
-    redacted = re.sub(
-        r'((?:secret|token|key|password|credential|auth)[^\s=]*\s*=\s*)["\']?([A-Za-z0-9_\-/+=]{32,})["\']?',
-        r'\1"[REDACTED:SECRET]"',
-        redacted,
-        flags=re.IGNORECASE,
-    )
-
-    return redacted
-
-
 def _is_nested_checkout(dir_path: Path) -> bool:
     """True if ``dir_path`` is the root of another git checkout.
 
@@ -390,16 +254,26 @@ def scan_project(
     exclude_patterns: tuple[str, ...] = (),
     redact_secrets: bool = True,
     max_tree_entries_per_dir: int = _MAX_TREE_ENTRIES_PER_DIR,
+    skeleton: bool = True,
 ) -> ScanResult:
     """Walk project directory, build annotated tree, read file contents.
 
     Args:
         project_dir: Root directory to scan.
-        max_file_chars: Maximum characters to read per file.
+        max_file_chars: Maximum characters to send per file. A longer file is
+            sent as its signature skeleton when ``skeleton`` is on and its
+            language has a renderer (Python today); only if the skeleton is
+            *still* over the cap, or no renderer exists, is it cut to the cap.
         max_files: Maximum number of source files to include in context.
         include_tests: Whether to include test files.
         exclude_patterns: Additional glob patterns to exclude.
-        redact_secrets: If True, redact secret-like patterns from file content.
+        redact_secrets: If True, redact secret-like patterns from file content
+            (after skeletonisation — docstring lines/constants can hold secrets).
+        skeleton: If True (default), replace an oversized file with its
+            tree-sitter signature skeleton — imports, class/def headers,
+            docstring first lines, short constants, bodies elided — i.e. the
+            whole API surface instead of the first class and nothing else.
+            Pass False / ``--no-skeleton`` to send the head of the file.
         max_tree_entries_per_dir: Cap on how many *listed* children (after
             excludes) any single directory contributes to the pass-1 tree.
             Beyond it, a "… N more entries not shown" marker is emitted and the
@@ -626,6 +500,11 @@ def scan_project(
     # Sort by rank, then by path for determinism
     all_files.sort(key=lambda x: (x[0], str(x[1])))
 
+    # Function-local import: graphlm.parsers.base imports FileFragment from this
+    # module at module scope, so a top-level import here would be a cycle (the
+    # same reason parsers/base.py defers its own language-module import).
+    from graphlm.parsers.base import skeleton_for
+
     # Read up to max_files
     for _rank, fpath in all_files[:max_files]:
         # Double-check the resolved path is inside project
@@ -635,18 +514,27 @@ def scan_project(
 
         try:
             content = fpath.read_text(encoding="utf-8", errors="replace")
+            # Captured before any cut so cycle scoring sees the real size.
+            line_count = content.count("\n") + 1
             truncated = False
             if len(content) > max_file_chars:
-                content = content[:max_file_chars]
+                # Prefer the signature skeleton (every symbol) over the head of
+                # the file (the first few). The cap applies only if the skeleton
+                # is *still* over it (bodies already gone) or no renderer exists.
+                skel = skeleton_for(fpath, content.encode("utf-8")) if skeleton else None
+                content = skel if skel is not None else content
+                if len(content) > max_file_chars:
+                    content = content[:max_file_chars]
                 truncated = True
 
-            # Redact secret-like patterns
+            # Redact secret-like patterns — deliberately AFTER skeletonisation,
+            # since docstring first lines / short constants survive into it.
             if redact_secrets:
                 content = _redact_secrets(content)
 
             rel = str(fpath.relative_to(project_dir))
             tokens = estimate_tokens(content)
-            file_fragments.append(FileFragment(rel, content, tokens))
+            file_fragments.append(FileFragment(rel, content, tokens, line_count))
             file_count += 1
             if truncated:
                 logger.debug("Truncated %s to %d chars", rel, max_file_chars)

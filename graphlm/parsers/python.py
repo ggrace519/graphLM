@@ -347,6 +347,234 @@ def _edge_kind(imp: _ParsedImport) -> str:
     return imp.kind
 
 
+# --- Signature skeleton --------------------------------------------------------
+#
+# Renders a module as its API surface — imports, class/def signatures with the
+# first docstring line, short constants — with every body elided. The scanner
+# sends this instead of the *head* of an oversized file (innovation #2): the
+# first max_file_chars of a 1500-line module showed the imports and one class
+# and nothing else, so the LLM's file_summaries / symbols / entry_points for big
+# files were guesses. Signatures are exact, so the model summarises what is
+# really there. Everything here walks tree.root_node directly (no queries), so
+# the output is a deterministic function of the source bytes.
+
+SKELETON_HEADER = "# [graphlm skeleton: bodies elided; {n} source lines]"
+
+_DEF_NODE_TYPES = frozenset({"class_definition", "function_definition"})
+# Clauses whose block may hold a guarded import (try/except, if/elif/else).
+_CLAUSE_NODE_TYPES = frozenset({"except_clause", "elif_clause", "else_clause"})
+# Opening bracket -> closing bracket, for the "{…}" placeholder of an elided
+# multi-line constant.
+_BRACKET_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _text(code: bytes, start: int, end: int) -> str:
+    return code[start:end].decode("utf-8", errors="replace")
+
+
+def _col(code: bytes, node) -> int:
+    """Column a node starts at: bytes since the previous newline.
+
+    Derived from byte offsets, NOT the node's ``start_point`` — py-tree-sitter
+    0.26.0's ``start_point``/``end_point`` corrupt the heap on a full-tree
+    walk (ASLR-dependent segfault, isolated with a probe that walked the
+    same tree with and without them; byte offsets were clean every run).
+    Byte and character columns agree for what this measures: the leading
+    whitespace before a statement/clause/decorator.
+    """
+    return node.start_byte - (code.rfind(b"\n", 0, node.start_byte) + 1)
+
+
+def _node_src(code: bytes, node) -> str:
+    """A node's source text, prefixed with its own column of indentation."""
+    return " " * _col(code, node) + _text(code, node.start_byte, node.end_byte)
+
+
+def _rows(code: bytes, node) -> int:
+    """Physical lines a node spans (1 for a single-line node)."""
+    return code.count(b"\n", node.start_byte, node.end_byte) + 1
+
+
+def _block_of(node):
+    return next((c for c in node.children if c.type == "block"), None)
+
+
+def _docstring_node(block):
+    """The docstring string node of a body block (or module), or None."""
+    if block is None or block.child_count == 0:
+        return None
+    first = block.child(0)
+    if first.type == "expression_statement" and first.child_count == 1:
+        inner = first.child(0)
+        if inner.type == "string":
+            return inner
+    return None
+
+
+def _docstring_head(code: bytes, string_node) -> str:
+    """First line of a docstring as a complete string literal.
+
+    A docstring of ≤3 lines is kept whole; a longer one is reduced to its
+    first non-blank content line between the original quotes, so the summary
+    sentence survives and the result is still a valid literal.
+    """
+    text = _text(code, string_node.start_byte, string_node.end_byte)
+    if text.count("\n") + 1 <= 3:
+        return text
+    quote = ""
+    content = ""
+    for child in string_node.children:
+        if child.type == "string_start":
+            quote = _text(code, child.start_byte, child.end_byte)
+        elif child.type == "string_content":
+            content = _text(code, child.start_byte, child.end_byte)
+    # The closing quote is the opening one minus any prefix (r"""/f""" etc.).
+    closing = quote.lstrip("rRbBuUfF")
+    first = next((ln.strip() for ln in content.split("\n") if ln.strip()), "")
+    return f"{quote}{first}{closing}"
+
+
+def _body_indent(code: bytes, node, body) -> int:
+    """Column for placeholder lines inside a definition's body.
+
+    A body on its own line(s) already carries the source indentation; a
+    one-liner (``def f(): return x``) has none, so indent one level past it.
+    """
+    if body is not None and code.count(b"\n", node.start_byte, body.start_byte):
+        return _col(code, body)
+    return _col(code, node) + 4
+
+
+def _emit_definition(code: bytes, node, out: list[str]) -> None:
+    """Render a class/def: header line(s), docstring head, members or ``...``."""
+    body = node.child_by_field_name("body")
+    header_end = body.start_byte if body is not None else node.end_byte
+    out.append(" " * _col(code, node) + _text(code, node.start_byte, header_end).rstrip())
+    inner = " " * _body_indent(code, node, body)
+    doc = _docstring_node(body)
+    if doc is not None:
+        out.append(inner + _docstring_head(code, doc))
+    if node.type == "class_definition" and body is not None:
+        before = len(out)
+        for child in body.children:
+            if child is not doc:
+                _emit_statement(code, child, out, nested=True)
+        if len(out) > before:
+            return
+    out.append(inner + "...")
+
+
+def _emit_elided_assignment(code: bytes, stmt, assignment, out: list[str]) -> None:
+    """``NAME = {…}  # N lines elided`` for a multi-line constant."""
+    eq = next((c for c in assignment.children if c.type == "="), None)
+    right = assignment.child_by_field_name("right")
+    if eq is None or right is None:
+        return
+    lhs = _text(code, assignment.start_byte, eq.start_byte).rstrip()
+    rhs_text = _text(code, right.start_byte, right.end_byte)
+    if right.type == "call":
+        fn = right.child_by_field_name("function")
+        placeholder = (_text(code, fn.start_byte, fn.end_byte) if fn else "") + "(…)"
+    elif rhs_text[:1] in _BRACKET_PAIRS:
+        placeholder = rhs_text[0] + "…" + _BRACKET_PAIRS[rhs_text[0]]
+    else:
+        placeholder = "…"
+    out.append(
+        f"{' ' * _col(code, stmt)}{lhs} = {placeholder}"
+        f"  # {_rows(code, stmt)} lines elided"
+    )
+
+
+def _emit_guarded_imports(code: bytes, node, out: list[str]) -> None:
+    """Keep imports under a top-level ``try:`` / ``if TYPE_CHECKING:``.
+
+    Optional-dependency and type-only imports are still real dependency
+    signal. Only the clause headers and their imports are kept; every other
+    statement in those blocks is elided (``...`` keeps a block non-empty). If
+    no clause holds an import the whole statement is dropped.
+    """
+    staged: list[str] = []
+    kept = 0
+    clauses = [node] + [c for c in node.children if c.type in _CLAUSE_NODE_TYPES]
+    for clause in clauses:
+        block = _block_of(clause)
+        if block is None:  # pragma: no cover - grammar always gives clauses a block
+            continue
+        header = _text(code, clause.start_byte, block.start_byte).rstrip()
+        staged.append(" " * _col(code, clause) + header)
+        imports = [c for c in block.children if c.type in _IMPORT_NODE_TYPES]
+        staged.extend(_node_src(code, c) for c in imports)
+        if not imports:
+            staged.append(" " * _col(code, block) + "...")
+        kept += len(imports)
+    if kept:
+        out.extend(staged)
+
+
+def _emit_statement(code: bytes, node, out: list[str], *, nested: bool = False) -> None:
+    """Render one module- or class-level statement into ``out`` (or drop it)."""
+    ntype = node.type
+    if ntype in _IMPORT_NODE_TYPES:
+        out.append(_node_src(code, node))
+    elif ntype == "decorated_definition":
+        for child in node.children:
+            if child.type == "decorator":
+                out.append(_node_src(code, child))
+            elif child.type in _DEF_NODE_TYPES:
+                _emit_definition(code, child, out)
+    elif ntype in _DEF_NODE_TYPES:
+        _emit_definition(code, node, out)
+    elif ntype == "expression_statement":
+        child = node.children[0] if node.children else None
+        if child is None or child.type != "assignment":
+            return  # bare expression (a call, a stray string) — dropped
+        if _rows(code, node) <= 2:
+            out.append(_node_src(code, node))
+        else:
+            _emit_elided_assignment(code, node, child, out)
+    elif ntype == "if_statement" and not nested:
+        cond = node.child_by_field_name("condition")
+        cond_text = _text(code, cond.start_byte, cond.end_byte) if cond is not None else ""
+        if "__name__" in cond_text and "__main__" in cond_text:
+            body = _block_of(node)
+            end = body.start_byte if body is not None else node.end_byte
+            out.append(_text(code, node.start_byte, end).rstrip())
+            out.append("    ...")
+        elif cond_text.split(".")[-1] == "TYPE_CHECKING":
+            _emit_guarded_imports(code, node, out)
+    elif ntype == "try_statement" and not nested:
+        _emit_guarded_imports(code, node, out)
+    # Everything else (loops, with, bare calls, comments, nested control flow)
+    # is a body, not API surface — dropped.
+
+
+def skeleton(code: bytes) -> str:
+    """Render a Python module as its signature skeleton.
+
+    Output is valid-looking Python: the module docstring head, imports
+    verbatim, every class/def header (decorators included, multi-line headers
+    intact) with its docstring's first line and a ``...`` body, constants that
+    fit in two lines, and ``if __name__ == "__main__":`` reduced to its header.
+    Indentation is the source's own, so class members keep their column.
+    Function bodies are elided whole — a closure defined inside a function is
+    implementation, not API, so it does not appear. The first line is the
+    marker the pass-2 prompt explains to the model.
+
+    Raises ``_GrammarUnavailable`` (from the backend) if the Python grammar is
+    not importable; ``skeleton_for`` turns that into ``None``.
+    """
+    tree = _backend.parse_source(code, PYTHON)
+    out: list[str] = [SKELETON_HEADER.format(n=code.count(b"\n") + 1)]
+    root = tree.root_node
+    doc = _docstring_node(root)
+    if doc is not None:
+        out.append(_docstring_head(code, doc))
+    for child in root.children:
+        if child is not doc:
+            _emit_statement(code, child, out)
+    return "\n".join(out) + "\n"
+
+
 _register_resolver(
     PYTHON,
     _Resolver(
@@ -355,5 +583,6 @@ _register_resolver(
         source_roots=_source_roots,
         resolve=_resolve_import,
         edge_kind=_edge_kind,
+        skeleton=skeleton,
     ),
 )

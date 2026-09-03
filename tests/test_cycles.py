@@ -219,6 +219,35 @@ class TestComputeSlocMap:
     def test_empty_fragments(self):
         assert compute_sloc_map([]) == {}
 
+    def test_uses_real_line_count_not_truncated_content(self):
+        # A file longer than max_file_chars used to score by the lines that
+        # survived the cut (skeleton or head slice), under-weighting exactly
+        # the large modules a cycle risk score should weigh most.
+        from graphlm.scanner import scan_project
+
+        project = Path(__file__).parent / "fixtures" / "skeleton_project"
+        source = (project / "big_module.py").read_text()
+        real_lines = source.count("\n") + 1
+        for skeleton in (True, False):
+            result = scan_project(project, max_file_chars=500, skeleton=skeleton)
+            (frag,) = [f for f in result.file_fragments if f.rel_path == "big_module.py"]
+            assert frag.content.count("\n") + 1 < real_lines  # it really was cut
+            assert compute_sloc_map(result.file_fragments)["big_module.py"] == real_lines
+
+    def test_risk_score_reflects_real_size_of_cut_file(self):
+        # Two-node cycle where one file is "large": with the real line count the
+        # score is log10(1000 + 1) * 2, not log10(1 + 1) * 2.
+        fragments = [
+            FileFragment("a.py", "x = 1", 1, line_count=1000),
+            FileFragment("b.py", "y = 2", 1, line_count=1),
+        ]
+        edges = [
+            ImportEdge(from_path="a.py", to_path="b.py", kind="import"),
+            ImportEdge(from_path="b.py", to_path="a.py", kind="import"),
+        ]
+        (cycle,) = detect_cycles(edges, compute_sloc_map(fragments))
+        assert cycle.risk_score == pytest.approx(math.log10(1001) * 2)
+
 
 # ---------------------------------------------------------------------------
 # Integration: CodebaseGraph includes import_cycles

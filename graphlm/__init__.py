@@ -139,6 +139,7 @@ def generate_graph(
     cycle_threshold: float = 0.0,
     include_html: bool = True,
     include_diff: bool = True,
+    skeleton: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
 
@@ -153,7 +154,9 @@ def generate_graph(
         model: Model name (falls back to GRAPHLM_MODEL env var).
         output_dir: Where to write GRAPH.md/json/html. None means do not write
             (the CLI defaults to the scanned project directory).
-        max_file_chars: Maximum characters to read per file.
+        max_file_chars: Maximum characters to send per file. A longer file is
+            sent as its tree-sitter signature skeleton (see ``skeleton``), or
+            as its head when no skeleton is available.
         max_files: Maximum files to scan initially.
         max_pass2_files: Maximum files to include in pass 2 context.
         max_context: Maximum context window in tokens. If None, falls back to
@@ -177,6 +180,12 @@ def generate_graph(
         ast: If True (default), run AST-based deterministic import detection,
             attach those edges to the graph, and pass them to the LLM as
             ground truth. Pass False / --no-ast to skip.
+        skeleton: If True (default), a file over ``max_file_chars`` is sent as
+            its signature skeleton — imports, class/def headers, docstring
+            first lines, short constants, bodies elided — so the model sees the
+            whole API surface instead of the first few hundred lines (Python
+            only today; other languages still send the head). Pass False /
+            --no-skeleton to send the head of the file instead.
         include_html: If output_dir is set, whether to also write GRAPH.html.
         include_diff: If output_dir is set, whether to also write the
             graph-vs-graph diff (GRAPH_DIFF.md/json) against the prior
@@ -251,6 +260,7 @@ def generate_graph(
         include_tests=include_tests,
         exclude_patterns=exclude_patterns,
         redact_secrets=redact_secrets,
+        skeleton=skeleton,
     )
 
     # Deterministic import edges from AST parsing (on by default)

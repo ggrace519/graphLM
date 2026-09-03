@@ -416,3 +416,41 @@ class TestCLI:
         }
         assert "Diff (md):" not in result.stderr
         assert "Diff (json):" not in result.stderr
+
+    def test_help_lists_no_skeleton(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        help_text = _plain(result.stdout)
+        assert "--no-skeleton" in help_text
+        assert "--skeleton" not in help_text.replace("--no-skeleton", "")
+
+    def test_no_skeleton_threads_through(self, small_project, tmp_path):
+        recorded: dict[str, bool] = {}
+
+        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+            dest = Path(output_dir)
+            return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
+
+        def fake_generate_graph(**kwargs):
+            recorded["skeleton"] = kwargs["skeleton"]
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(
+                app, [str(small_project), "--no-skeleton", "-o", str(tmp_path / "out")]
+            )
+            assert result.exit_code == 0, result.stdout + result.stderr
+            assert recorded == {"skeleton": False}
+
+            result = runner.invoke(app, [str(small_project), "-o", str(tmp_path / "out")])
+            assert result.exit_code == 0, result.stdout + result.stderr
+            assert recorded == {"skeleton": True}
+
+    def test_dry_run_no_skeleton(self):
+        project = Path(__file__).parent / "fixtures" / "skeleton_project"
+        result = runner.invoke(app, [str(project), "--dry-run", "--no-skeleton"])
+        assert result.exit_code == 0
+        assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
