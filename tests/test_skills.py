@@ -66,6 +66,13 @@ class TestInstallSkill:
         # Ties the egress to the configured endpoint / sending code.
         assert "send" in lower or "transmit" in lower or "export" in lower
 
+    def test_body_points_at_mcp_server_when_registered(self, tmp_path):
+        result = install_skill("claude", home=tmp_path)
+        content = result.path.read_text(encoding="utf-8")
+        assert "graphlm --serve" in content
+        assert "`neighbors`" in content and "`dependents`" in content
+        assert "claude mcp add graphlm" in content
+
     def test_codex_global_writes_guide_and_note(self, tmp_path):
         result = install_skill("codex", home=tmp_path)
         expected = tmp_path / ".codex" / "graphlm.md"

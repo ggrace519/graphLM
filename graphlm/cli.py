@@ -90,6 +90,35 @@ def _do_install_skill(
         typer.echo(result.note)
 
 
+def _do_serve(project_dir: Path | None, output_dir: str | None) -> None:
+    """Run --serve: expose the generated map to a coding agent over MCP (stdio).
+
+    The map must already exist — serving never triggers a paid LLM run (the
+    agent is the scheduler, ADR-001). The existence check runs *before* the
+    ``mcp`` import so a missing map reports the actionable problem (run
+    ``graphlm .``) rather than a missing extra.
+    """
+    from graphlm.query import MapUnavailable, load_map
+
+    project = project_dir if project_dir is not None else Path(".")
+    json_path = output_destination(project, output_dir) / "GRAPH.json"
+    try:
+        load_map(json_path)
+    except MapUnavailable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    try:
+        from graphlm.mcp_server import run_server
+    except ImportError:
+        typer.echo(
+            "Error: --serve needs the 'mcp' extra. Install with "
+            "`uv tool install 'graphlm[mcp]'` (or `pip install 'graphlm[mcp]'`).",
+            err=True,
+        )
+        raise typer.Exit(2)
+    run_server(project.resolve(), json_path.resolve())
+
+
 @app.command()
 def main(
     project_dir: Path | None = typer.Argument(
@@ -123,6 +152,15 @@ def main(
         "--skill-force",
         help="With --install-skill: overwrite an existing guide instead of "
         "skipping it.",
+    ),
+    serve: bool = typer.Option(
+        False,
+        "--serve",
+        help="Serve the generated map to a coding agent over MCP (stdio) and "
+        "exit when the client disconnects. Needs the 'mcp' extra "
+        "(graphlm[mcp]) and an existing map (run graphlm first). PROJECT_DIR "
+        "defaults to '.'; -o points at the map's directory as usual. Register "
+        "with e.g. `claude mcp add graphlm -- graphlm --serve /path/to/repo`.",
     ),
     output_dir: str = typer.Option(
         None,
@@ -253,12 +291,17 @@ def main(
         _do_install_skill(install_skill, project_dir, skill_local, skill_force)
         raise typer.Exit(0)
 
-    # project_dir is optional in the signature so --install-skill can run without
-    # it; for the analysis path it's required.
+    # --serve likewise short-circuits: no LLM, no scan — just the map over MCP.
+    if serve:
+        _do_serve(project_dir, output_dir)
+        raise typer.Exit(0)
+
+    # project_dir is optional in the signature so --install-skill / --serve can
+    # run without it; for the analysis path it's required.
     if project_dir is None:
         typer.echo(
             "Error: missing PROJECT_DIR. Pass a directory to analyze, or use "
-            "--install-skill <harness>. See 'graphlm --help'.",
+            "--install-skill <harness> / --serve. See 'graphlm --help'.",
             err=True,
         )
         raise typer.Exit(2)

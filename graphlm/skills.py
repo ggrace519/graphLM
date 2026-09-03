@@ -104,6 +104,19 @@ differ, the map may be stale — regenerate with `graphlm .` from the project ro
 `.graphlm/GRAPH_DIFF.md` lists what changed (modules, edges, cycles added/removed)
 since the previous run.
 
+### If the `graphlm` MCP server is registered, prefer its tools
+
+`graphlm --serve` exposes the same map over MCP (tools: `overview`, `find`,
+`module`, `neighbors`, `dependents`, `cycles`, `entry_points`, `staleness`).
+When those tools are available, call `overview` first and then ask targeted
+questions (`neighbors` for "who imports X?", `dependents` with
+`transitive=true` for blast radius, `find` for "where is X?") instead of
+reading the whole `GRAPH.md` — each answer costs a few hundred tokens rather
+than the entire document. `staleness` replaces the manual `git rev-parse HEAD`
+check. Register it once per repo with
+`claude mcp add graphlm -- graphlm --serve /path/to/repo` (needs
+`graphlm[mcp]`).
+
 ### Notes
 
 - The map is **advisory** and best-effort. Trust the code over the map when they
