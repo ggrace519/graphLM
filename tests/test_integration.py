@@ -636,3 +636,157 @@ def render_markdown_of(graph):
     from graphlm.render import render_markdown
 
     return render_markdown(graph)
+
+
+def _sse_with_usage(content: str, usage: dict) -> bytes:
+    """An OpenAI SSE stream: content deltas, a finish chunk, then the
+    ``stream_options.include_usage`` chunk (empty choices + usage), [DONE]."""
+    events = [
+        {"choices": [{"delta": {"content": content}, "index": 0}]},
+        {"choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}]},
+        {"choices": [], "usage": usage},
+    ]
+    body = b"".join(b"data: " + json.dumps(e).encode() + b"\n\n" for e in events)
+    return body + b"data: [DONE]\n\n"
+
+
+CYCLIC = Path(__file__).parent / "fixtures" / "cyclic_project"
+CYCLIC_FILES = ["app/main.py", "app/routes.py", "app/services.py"]
+
+
+class TestRunTelemetry:
+    """Run telemetry stamped into meta (innovation #6): real token usage from
+    the endpoint beside graphlm's estimate, and the LLM-vs-AST faithfulness
+    score — rendered into GRAPH.md and round-tripping through the diff
+    baseline reader."""
+
+    PASS1_USAGE = {"prompt_tokens": 111, "completion_tokens": 9, "total_tokens": 120}
+    PASS2_USAGE = {"prompt_tokens": 2500, "completion_tokens": 400, "total_tokens": 2900}
+
+    def _run(self, httpx_mock, tmp_path, *, graph_data=None, **kwargs):
+        # Pass 1: plain JSON body carrying usage at top level (non-SSE path).
+        httpx_mock.add_response(
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps({"requested_files": CYCLIC_FILES})}, "index": 0}
+                ],
+                "usage": self.PASS1_USAGE,
+            }
+        )
+        # Pass 2: a real SSE stream with the usage chunk (streamed path).
+        httpx_mock.add_response(
+            status_code=200,
+            content=_sse_with_usage(json.dumps(graph_data or _make_graph()), self.PASS2_USAGE),
+            headers={"content-type": "text/event-stream"},
+        )
+        return generate_graph(
+            CYCLIC,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            **kwargs,
+        )
+
+    def test_usage_stamped_from_both_passes(self, httpx_mock, tmp_path):
+        result = self._run(httpx_mock, tmp_path)
+        meta = result.graph.meta
+        assert meta is not None and meta.usage is not None
+        assert meta.usage.pass1 is not None and meta.usage.pass2 is not None
+        assert meta.usage.pass1.prompt_tokens == 111
+        assert meta.usage.pass1.completion_tokens == 9
+        assert meta.usage.pass2.prompt_tokens == 2500
+        assert meta.usage.pass2.completion_tokens == 400
+        # The estimate is graphlm's own figure for the same prompt, so the
+        # real-vs-estimated ratio is derivable from the stamp alone.
+        assert meta.usage.pass1.estimated_prompt_tokens == result.pass1_context_tokens
+        assert meta.usage.pass2.estimated_prompt_tokens == result.pass2_context_tokens
+        assert meta.usage.pass2.estimated_prompt_tokens > 0
+
+    def test_faithfulness_scored_against_ast_edges(self, httpx_mock, tmp_path):
+        # Seed the LLM's edge list with one real AST edge, one invented edge,
+        # and one non-Python edge the parser could never have seen.
+        dry = generate_graph(CYCLIC, dry_run=True)
+        ast_edges = dry.graph.deterministic_edges
+        assert ast_edges  # the cyclic fixture has parser edges
+        real = ast_edges[0]
+        llm_edges = [
+            {"from_path": real.from_path, "to_path": real.to_path, "kind": "import"},
+            {"from_path": "app/main.py", "to_path": "app/nonexistent.py", "kind": "import"},
+            {"from_path": "web/app.ts", "to_path": "web/util.ts", "kind": "import"},
+        ]
+        result = self._run(httpx_mock, tmp_path, graph_data=_make_graph(import_edges=llm_edges))
+        f = result.graph.meta.faithfulness
+        assert f is not None
+        assert f.ast_edges == len({(e.from_path, e.to_path) for e in ast_edges})
+        assert f.llm_edges == 2  # the .ts edge is excluded, not penalised
+        assert f.matched == 1
+        assert f.precision == pytest.approx(0.5)
+        assert f.recall == pytest.approx(1 / f.ast_edges)
+
+    def test_telemetry_line_rendered_in_graph_md(self, httpx_mock, tmp_path):
+        self._run(httpx_mock, tmp_path)
+        md = (tmp_path / "GRAPH.md").read_text()
+        directive_at = md.index("Provenance & refresh directive")
+        telemetry_at = md.index("**Run telemetry.**")
+        assert directive_at < telemetry_at < md.index("# Codebase Graph")
+        assert "pass 2 prompt: 2500 tokens (graphlm estimated" in md
+        assert "output: 400 tokens" in md
+        assert "LLM import edges vs parser ground truth: precision" in md
+
+    def test_graph_json_round_trips_as_normal_baseline(self, httpx_mock, tmp_path):
+        from graphlm.diff import BaselineState, load_baseline
+
+        result = self._run(httpx_mock, tmp_path)
+        graph, state = load_baseline(tmp_path / "GRAPH.json")
+        assert state is BaselineState.NORMAL
+        assert graph is not None and graph.meta is not None
+        assert graph.meta.schema_version == 1  # additive fields, no bump
+        assert graph.meta.usage == result.graph.meta.usage
+        assert graph.meta.faithfulness == result.graph.meta.faithfulness
+
+    def test_endpoint_without_usage_leaves_counts_null_but_estimate_set(
+        self, httpx_mock, small_project
+    ):
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project, base_url="http://test.local/v1", api_key="k", model="m"
+        )
+        usage = result.graph.meta.usage
+        assert usage is not None and usage.pass2 is not None
+        assert usage.pass2.prompt_tokens is None
+        assert usage.pass2.completion_tokens is None
+        assert usage.pass2.estimated_prompt_tokens == result.pass2_context_tokens
+        # Null counts render as "not reported", never as a fake number.
+        assert "pass 2 prompt: not reported by endpoint" in render_markdown_of(result.graph)
+
+    def test_malformed_usage_values_read_as_not_reported(self, httpx_mock, small_project):
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        httpx_mock.add_response(
+            json={
+                "choices": [{"message": {"content": json.dumps(_make_graph())}, "index": 0}],
+                "usage": {"prompt_tokens": "lots", "completion_tokens": True},
+            }
+        )
+        result = generate_graph(
+            small_project, base_url="http://test.local/v1", api_key="k", model="m"
+        )
+        p2 = result.graph.meta.usage.pass2
+        assert p2.prompt_tokens is None
+        assert p2.completion_tokens is None  # bool is not accepted as an int
+
+    def test_no_ast_leaves_faithfulness_none(self, httpx_mock, tmp_path):
+        result = self._run(httpx_mock, tmp_path, ast=False)
+        assert result.graph.meta.faithfulness is None
+        md = (tmp_path / "GRAPH.md").read_text()
+        # Usage still rendered; the faithfulness half is simply absent.
+        assert "**Run telemetry.**" in md
+        assert "parser ground truth" not in md
+
+    def test_dry_run_has_no_telemetry(self):
+        result = generate_graph(CYCLIC, dry_run=True)
+        assert result.graph.meta is not None
+        assert result.graph.meta.usage is None
+        assert result.graph.meta.faithfulness is None
+        assert "**Run telemetry.**" not in render_markdown_of(result.graph)

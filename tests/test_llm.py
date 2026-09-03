@@ -249,8 +249,11 @@ class TestCallLlm:
         assert "response_format" not in body
 
     def test_400_falls_back_to_prompt_only(self, httpx_mock):
-        """An endpoint that rejects response_format (HTTP 400) is retried once
-        without the constraint, so a prompt-only endpoint still works (#31)."""
+        """An endpoint that rejects response_format (HTTP 400) is retried
+        without the constraint, so a prompt-only endpoint still works (#31).
+        stream_options is shed first (it is optional telemetry), so the
+        prompt-only request is the third one."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
         httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
         httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
         result = call_llm(
@@ -262,10 +265,44 @@ class TestCallLlm:
             response_format=CodebaseGraph,
         )
         assert isinstance(result, CodebaseGraph)
-        requests = httpx_mock.get_requests()
+        requests = [json.loads(r.content) for r in httpx_mock.get_requests()]
+        assert len(requests) == 3
+        assert "response_format" in requests[0] and "stream_options" in requests[0]
+        assert "response_format" in requests[1] and "stream_options" not in requests[1]
+        assert "response_format" not in requests[2] and "stream_options" not in requests[2]
+
+    def test_400_sheds_stream_options_but_keeps_schema(self, httpx_mock):
+        """A strict endpoint that rejects only stream_options keeps the
+        load-bearing response_format constraint on the retry."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+        )
+        assert isinstance(result, CodebaseGraph)
+        requests = [json.loads(r.content) for r in httpx_mock.get_requests()]
         assert len(requests) == 2
-        assert "response_format" in json.loads(requests[0].content)  # first tried
-        assert "response_format" not in json.loads(requests[1].content)  # then dropped
+        assert "stream_options" not in requests[1] and "response_format" in requests[1]
+
+    def test_400_on_pass1_sheds_stream_options(self, httpx_mock):
+        """Pass 1 sends no response_format; a 400 there must still retry once
+        without stream_options rather than fail outright."""
+        httpx_mock.add_response(status_code=400, json=MOCK_ERROR_BODY)
+        httpx_mock.add_response(json={"choices": [{"message": {"content": '{"requested_files": []}'}}]})
+        result = call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+        )
+        assert result == '{"requested_files": []}'
+        assert len(httpx_mock.get_requests()) == 2
 
     def test_404_does_not_fall_back(self, httpx_mock):
         """A 404 (missing endpoint/model) is NOT a schema rejection — it must
@@ -469,3 +506,129 @@ class TestStreaming:
         )
         body = json.loads(httpx_mock.get_requests()[-1].content)
         assert body["max_tokens"] == 48000
+
+
+def _sse_body_with_usage(
+    content: str, usage: object, *, chunk_size: int = 7
+) -> bytes:
+    """Like ``_sse_body`` but appends the ``stream_options.include_usage`` chunk
+    (``choices: []`` + ``usage``) after the finish chunk, before [DONE] — the
+    OpenAI shape."""
+    body = _sse_body(content, chunk_size=chunk_size)
+    head, _done = body.rsplit(b"data: [DONE]\n\n", 1)
+    usage_evt = {"choices": [], "usage": usage}
+    return head + b"data: " + json.dumps(usage_evt).encode() + b"\n\ndata: [DONE]\n\n"
+
+
+class TestUsageCapture:
+    """Real token usage from the streamed response (innovation #6): the request
+    asks for it via stream_options, the final empty-choices SSE chunk carries
+    it, and it reaches the caller through ``on_usage`` — never by changing the
+    return type."""
+
+    CONTENT = '{"directory_tree": "root/", "import_edges": []}'
+
+    def _call(self, on_usage=None):
+        return call_llm(
+            base_url="http://test.local/v1",
+            api_key="k",
+            model="m",
+            system_prompt="s",
+            user_prompt="u",
+            response_format=CodebaseGraph,
+            on_usage=on_usage,
+        )
+
+    def test_stream_options_include_usage_sent(self, httpx_mock):
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        self._call()
+        body = json.loads(httpx_mock.get_requests()[-1].content)
+        assert body["stream_options"] == {"include_usage": True}
+
+    def test_sse_usage_chunk_reaches_callback(self, httpx_mock):
+        usage = {"prompt_tokens": 1234, "completion_tokens": 56, "total_tokens": 1290}
+        httpx_mock.add_response(
+            status_code=200, content=_sse_body_with_usage(self.CONTENT, usage)
+        )
+        seen: list[dict] = []
+        result = self._call(on_usage=seen.append)
+        # The usage chunk has empty choices — it must not break content reassembly.
+        assert isinstance(result, CodebaseGraph)
+        assert result.directory_tree == "root/"
+        assert seen == [usage]
+
+    def test_sse_without_usage_chunk_never_calls_back(self, httpx_mock):
+        httpx_mock.add_response(status_code=200, content=_sse_body(self.CONTENT))
+        seen: list[dict] = []
+        self._call(on_usage=seen.append)
+        assert seen == []
+
+    def test_non_sse_body_usage_captured(self, httpx_mock):
+        usage = {"prompt_tokens": 10, "completion_tokens": 20}
+        httpx_mock.add_response(json={**MOCK_SUCCESS_BODY, "usage": usage})
+        seen: list[dict] = []
+        self._call(on_usage=seen.append)
+        assert seen == [usage]
+
+    def test_non_sse_body_without_usage_never_calls_back(self, httpx_mock):
+        httpx_mock.add_response(json=MOCK_SUCCESS_BODY)
+        seen: list[dict] = []
+        self._call(on_usage=seen.append)
+        assert seen == []
+
+    @pytest.mark.parametrize("bad", ["not-a-dict", 42, ["prompt_tokens", 1], None])
+    def test_malformed_usage_ignored_not_raised(self, httpx_mock, bad):
+        httpx_mock.add_response(
+            status_code=200, content=_sse_body_with_usage(self.CONTENT, bad)
+        )
+        seen: list[dict] = []
+        result = self._call(on_usage=seen.append)
+        assert isinstance(result, CodebaseGraph)
+        assert seen == []
+
+    def test_no_callback_is_fine_with_usage_present(self, httpx_mock):
+        # Existing callers pass no on_usage; a usage chunk must be a no-op.
+        httpx_mock.add_response(
+            status_code=200,
+            content=_sse_body_with_usage(self.CONTENT, {"prompt_tokens": 1}),
+        )
+        result = self._call()
+        assert isinstance(result, CodebaseGraph)
+
+    def test_non_object_sse_chunks_are_skipped(self, httpx_mock):
+        # A `data:` line that decodes to a list/string/number is not a chunk;
+        # it must neither crash usage capture nor content reassembly.
+        body = (
+            b"data: [1, 2]\n\n"
+            b'data: "just a string"\n\n'
+            b"data: 42\n\n"
+            + _sse_body_with_usage(self.CONTENT, {"prompt_tokens": 3})
+        )
+        httpx_mock.add_response(status_code=200, content=body)
+        seen: list[dict] = []
+        result = self._call(on_usage=seen.append)
+        assert isinstance(result, CodebaseGraph)
+        assert seen == [{"prompt_tokens": 3}]
+
+    def test_usage_from_chunk_rejects_non_dict_input(self):
+        from graphlm.llm import _usage_from_chunk
+
+        assert _usage_from_chunk(["usage"]) is None
+        assert _usage_from_chunk({"usage": "x"}) is None
+        assert _usage_from_chunk({"usage": {"prompt_tokens": 1}}) == {"prompt_tokens": 1}
+
+    def test_read_streamed_completion_returns_stream_result(self):
+        from httpx import Request
+
+        from graphlm.llm import StreamResult, _read_streamed_completion
+
+        usage = {"prompt_tokens": 7, "completion_tokens": 3}
+        resp = Response(
+            200,
+            content=_sse_body_with_usage("hello", usage, chunk_size=2),
+            request=Request("POST", "http://test.local/v1/chat/completions"),
+        )
+        out = _read_streamed_completion(resp)
+        assert isinstance(out, StreamResult)
+        assert out.content == "hello"
+        assert out.usage == usage

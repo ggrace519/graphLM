@@ -354,8 +354,14 @@ def main(
         typer.echo(
             f"Pass 2 context: ~{result.pass2_context_tokens} tokens", err=True
         )
+        # A dry run makes no LLM call, so `import_edges` (the LLM's field) is
+        # always empty — printing it as "0 import edges" misread as "no
+        # imports found". The edges a dry run *does* have are the AST's.
+        det = result.graph.deterministic_edges
+        ast_edges = "AST off" if det is None else f"{len(det)}"
+        typer.echo(f"AST import edges: {ast_edges}", err=True)
         typer.echo(
-            f"Graph sections: tree, {len(result.graph.import_edges)} import edges, "
+            f"Graph sections: tree, "
             f"{len(result.graph.modules)} modules, "
             f"{len(result.graph.data_flow)} data flows, "
             f"{len(result.graph.file_summaries)} file summaries, "
@@ -389,6 +395,18 @@ def main(
         f"Lookups: {len(result.graph.quick_reference)}",
         err=True,
     )
+    # Run telemetry (innovation #6) — same wording as the GRAPH.md line, one
+    # fact per line. Each is omitted when it wasn't measured (no usage from
+    # the endpoint / AST off).
+    if result.graph.meta is not None:
+        from graphlm.render import faithfulness_summary, usage_summary
+
+        usage_line = usage_summary(result.graph.meta)
+        if usage_line:
+            typer.echo(f"Usage: {usage_line}", err=True)
+        faith_line = faithfulness_summary(result.graph.meta)
+        if faith_line:
+            typer.echo(f"Faithfulness: {faith_line}", err=True)
     typer.echo("Done.", err=True)
 
 

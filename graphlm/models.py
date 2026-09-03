@@ -129,6 +129,56 @@ class Cycle:
 GRAPH_META_SCHEMA_VERSION = 1
 
 
+class PassUsage(BaseModel):
+    """Token accounting for one LLM pass: what the server billed vs our guess.
+
+    ``prompt_tokens`` / ``completion_tokens`` come from the endpoint's
+    ``usage`` object (via ``stream_options.include_usage``) and are ``None``
+    when the endpoint sent none. ``estimated_prompt_tokens`` is graphlm's own
+    ``estimate_tokens`` figure for the same prompt, so the real-vs-estimated
+    ratio — the number that calibrates the ``* 2 // 5`` heuristic (#17) — is
+    derivable from the stamp later without re-running anything.
+    """
+
+    prompt_tokens: Optional[int] = Field(
+        default=None, description="Prompt tokens as counted by the server, or null."
+    )
+    completion_tokens: Optional[int] = Field(
+        default=None, description="Output tokens as counted by the server, or null."
+    )
+    estimated_prompt_tokens: int = Field(
+        description="graphlm's own estimate_tokens() figure for the same prompt."
+    )
+
+
+class RunUsage(BaseModel):
+    """Per-pass token usage for one run (both passes optional)."""
+
+    pass1: Optional[PassUsage] = Field(default=None, description="Pass 1 (tree only).")
+    pass2: Optional[PassUsage] = Field(default=None, description="Pass 2 (full graph).")
+
+
+class Faithfulness(BaseModel):
+    """How well the LLM's ``import_edges`` agree with the AST ground truth.
+
+    Computed locally by ``graphlm.faithfulness.score`` over ``(from, to)``
+    pairs. ``precision`` = matched / LLM edges the parser could have seen;
+    ``recall`` = matched / AST edges. Either is ``None`` when its denominator
+    is zero. Absent (``meta.faithfulness`` null) when AST was off or on a
+    dry run (no LLM edges to score).
+    """
+
+    precision: Optional[float] = Field(
+        default=None, description="matched / comparable LLM edges, or null if none."
+    )
+    recall: Optional[float] = Field(
+        default=None, description="matched / AST edges, or null if none."
+    )
+    llm_edges: int = Field(description="LLM import edges the AST could have seen.")
+    ast_edges: int = Field(description="AST (deterministic) edges.")
+    matched: int = Field(description="Edges present on both sides.")
+
+
 class GraphMeta(BaseModel):
     """Provenance stamp: when the graph was generated and against which commit.
 
@@ -156,6 +206,20 @@ class GraphMeta(BaseModel):
     )
     graphlm_version: Optional[str] = Field(
         default=None, description="graphlm package version that generated the graph."
+    )
+    # Run telemetry (innovation #6). Both are ADDITIVE and optional: an older
+    # GRAPH.json without them still validates (defaults to None) and the
+    # meaning of the existing fields is unchanged, so GRAPH_META_SCHEMA_VERSION
+    # stays at 1 — ADR-001 bumps it only when the *meaning* changes.
+    usage: Optional[RunUsage] = Field(
+        default=None,
+        description="Real vs estimated token usage per pass. Null on a dry run "
+        "or when the endpoint reported no usage.",
+    )
+    faithfulness: Optional[Faithfulness] = Field(
+        default=None,
+        description="LLM import_edges vs AST deterministic_edges agreement. "
+        "Null when AST was off or on a dry run.",
     )
 
 

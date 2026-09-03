@@ -207,6 +207,28 @@ and rides the refresh nudge along in the loop an agent already uses to read
   uncommitted changes, so a graph can be SHA-fresh yet not match the working
   tree.
 
+### Run telemetry
+
+The stamp also records what the run actually cost and how far to trust the
+LLM's edge table. Directly under the refresh directive, `GRAPH.md` carries one
+line like:
+
+> **Run telemetry.** pass 2 prompt: 41,920 tokens (graphlm estimated 47,300); output: 9,812 tokens. LLM import edges vs parser ground truth: precision 0.93, recall 0.81 (n=15 LLM / 16 AST, 14 matched).
+
+- **Usage** is the endpoint's own token count (requested via
+  `stream_options.include_usage`), shown beside graphlm's estimate for the same
+  prompt so you can see how the built-in estimator tracks *your* model. An
+  endpoint that reports no usage shows "not reported by endpoint".
+- **Faithfulness** scores the model's `import_edges` against the parser's
+  deterministic edges: precision is the share of the model's Python import
+  edges the parser confirms, recall the share of the parser's edges the model
+  reproduced. Low precision means invented dependencies. Absent under
+  `--no-ast` (no ground truth) and on `--dry-run` (no LLM edges).
+
+Both live in `GRAPH.json` under `meta.usage` / `meta.faithfulness` as additive,
+optional fields — older graphs without them still diff normally — and the CLI
+echoes them as `Usage:` / `Faithfulness:` lines.
+
 **Adoption — one line for an `AGENTS.md` / rules file** (or just run `graphlm --install-skill claude` / `--install-skill codex`, below):
 
 > A codebase map lives at `.graphlm/GRAPH.md` — read it before exploring the

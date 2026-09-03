@@ -331,6 +331,15 @@ and a directive that prompts regeneration when the code has changed.
 - `--dry-run` fills the stamp on the graph object but the CLI still prints stats
   and does not write files (unchanged contract); the stamp is exercised on any
   real run and via the library `write()` path.
+- **Additive fields, no bump (2026-09-02, innovation #6).** `meta` gained two
+  optional fields — `usage` (real vs estimated tokens per pass) and
+  `faithfulness` (LLM `import_edges` vs AST `deterministic_edges`) — and
+  `schema_version` stayed at **1**. The rule above is "bump if the *meaning*
+  changes": these are purely additive, default to `null`, and change nothing
+  about how the existing fields are read, so an old graph without them still
+  loads as a `NORMAL` baseline and a new graph read by an older graphlm simply
+  ignores them (Pydantic drops unknown keys). Bumping for an additive field
+  would make every prior graph `UNCOMPARABLE` for no safety gain.
 
 ### Fast-follow
 
