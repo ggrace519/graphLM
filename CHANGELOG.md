@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning.
 
 - `GRAPH.html` showed only the LLM's edges and never highlighted cycles. The map's *verified* structure — the Tree-sitter import edges and the Tarjan import cycles with risk scores — was computed and written to `GRAPH.md`/`GRAPH.json` but never reached the picture, so the interactive view could contradict the ground-truth table beneath it and gave no visual cue for the cycles the report called out. Both now render (see Added above)
 
+### Fixed
+
+- Nested git checkouts inside the scanned project — a worktree, a submodule, or a vendored clone (anything whose directory holds a `.git` file or directory) — were scanned as if they were part of the project, so every module and import edge under them was duplicated into the map under a second path prefix (observed with agent worktrees under `.claude/worktrees/`). The scanner now treats such a subtree as a separate project and leaves it out of both the pass-1 tree and the file walk; the scan root itself is unaffected.
+
 ## [0.1.3] - 2026-08-31
 
 ### Fixed
