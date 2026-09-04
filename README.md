@@ -40,7 +40,7 @@ uv tool install graphlm      # via uv (https://github.com/astral-sh/uv)
 pipx install graphlm         # via pipx
 ```
 
-Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs.
+Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs. Later, `graphlm --upgrade` bumps that install to the latest PyPI release and keeps extras.
 
 Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. Parser edges for languages other than Python are opt-in extras — see [Language packs](#language-packs).
 
@@ -120,6 +120,9 @@ graphlm /path/to/project -o ./output --no-html
 
 # Skip writing the GRAPH_DIFF.* graph-vs-graph diff
 graphlm /path/to/project --no-diff
+
+# Upgrade this install to the latest PyPI release (keeps extras)
+graphlm --upgrade
 ```
 
 ### Library API
@@ -384,6 +387,7 @@ Patterns are merged with the built-in exclude set and any `--exclude` flags (uni
 | `--no-diff` | Do not write `GRAPH_DIFF.*` | Diff on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |
 | `--cycle-threshold` | Minimum cycle risk score | 0.0 |
+| `--upgrade` | Upgrade this graphlm install to the latest PyPI release (keeps extras) | — |
 | `--serve` | Serve the existing map to a coding agent over MCP (stdio); needs `graphlm[mcp]` | — |
 | `--install-skill <harness>` | Install an agent guide (`claude` / `codex`) and exit | — |
 | `--skill-local` | With `--install-skill`: write into the project, not user-global | User-global |
@@ -424,7 +428,8 @@ graphlm/
 ├── redact.py             # Sensitive-file skip + secret redaction
 ├── render.py             # Markdown + JSON + HTML output rendering
 ├── scanner.py            # Project directory scanner
-└── skills.py             # --install-skill: agent-guide installer
+├── skills.py             # --install-skill: agent-guide installer
+└── upgrade.py            # --upgrade: uv tool / pipx / pip detector
 tests/
 ├── conftest.py
 ├── test_*.py
