@@ -1,0 +1,3 @@
+package toomany
+
+func A() {}

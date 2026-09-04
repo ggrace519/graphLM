@@ -64,6 +64,12 @@ def cpp_project() -> Path:
 
 
 @pytest.fixture(scope="session")
+def go_project() -> Path:
+    """Path to the Go fixture project (Go pack)."""
+    return FIXTURES_DIR / "go_project"
+
+
+@pytest.fixture(scope="session")
 def ignore_project() -> Path:
     """Path to the ``.graphlmignore`` fixture project (#38)."""
     return FIXTURES_DIR / "ignore_project"

@@ -36,9 +36,10 @@ RUST = "rust"
 CSHARP = "csharp"
 C = "c"
 CPP = "cpp"
+GO = "go"
 
 SUPPORTED_LANGUAGES = {
-    PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST, CSHARP, C, CPP,
+    PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST, CSHARP, C, CPP, GO,
 }
 
 # Mapping from file extension to language name
@@ -59,6 +60,7 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".hpp": CPP,
     ".hh": CPP,
     ".hxx": CPP,
+    ".go": GO,
 }
 
 
@@ -112,6 +114,7 @@ _GRAMMARS: dict[str, _GrammarEntry] = {
     "csharp": _GrammarSpec("tree_sitter_c_sharp", "language"),
     "c": _GrammarSpec("tree_sitter_c", "language"),
     "cpp": _GrammarSpec("tree_sitter_cpp", "language"),
+    "go": _GrammarSpec("tree_sitter_go", "language"),
 }
 
 
@@ -346,6 +349,7 @@ def _ensure_resolvers() -> None:
     from graphlm.parsers import rust as _rust  # noqa: F401
     from graphlm.parsers import csharp as _csharp  # noqa: F401
     from graphlm.parsers import cpp as _cpp  # noqa: F401
+    from graphlm.parsers import go as _go  # noqa: F401
 
     _resolvers_loaded = True
 

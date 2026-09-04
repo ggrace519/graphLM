@@ -49,7 +49,7 @@ jobs:
   # Default `test` job above runs without language extras, so the
   # grammar-absent degradation path is what CI exercises on every PR. This
   # job installs every language pack (`graphlm[all]`) plus mcp and runs the
-  # enabled-path JS/TS/Java/Rust/C#/C/C++ tests (they skip without their extra).
+  # enabled-path language-pack tests (they skip without their extra).
   test-packs:
     runs-on: ubuntu-latest
     steps:
