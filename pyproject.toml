@@ -63,8 +63,10 @@ cpp = [
     "tree-sitter-c>=0.23,<0.25",
     "tree-sitter-cpp>=0.23,<0.24",
 ]
+# Go Tree-sitter grammar. Resolver in `graphlm/parsers/go.py`.
+go = ["tree-sitter-go>=0.23,<0.24"]
 # Every language pack. Does not include `mcp`.
-all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]", "graphlm[cpp]"]
+all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]", "graphlm[cpp]", "graphlm[go]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"

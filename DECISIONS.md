@@ -4,6 +4,36 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-010 — Go pack: unique-file package dirs, suffix-stripped import paths
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/go.py`, extra `go`)
+
+### Context
+
+Go is in the GitHub top 10. `import "a/b"` names a *package directory*, not a
+file. Fanning out to every `.go` in the directory would churn GRAPH_DIFF when
+a file is added (ADR-005/007). `go.mod` is often not in the scan (not a
+source ext), so the module prefix cannot be required.
+
+### Decisions
+
+1. **Unique non-test `.go` in the package directory, else drop.** Two or more
+   files mark known-partial. `_test.go` is ignored. `kind` is `"import"`.
+
+2. **Import path tried longest-first, then suffixes.** `example.com/mod/pkg`
+   tries `example.com/mod/pkg/`, then `mod/pkg/`, then `pkg/`. First unique
+   hit wins. `import "fmt"` misses and is third-party, not partial.
+
+3. **`import "./rel"` is path-relative** to the importing file.
+
+### Consequences
+
+- One-file packages (common in small modules) get real edges. Multi-file
+  packages trip the non-exhaustive framing.
+
+---
+
 ## ADR-009 — LLM config from the environment and user-level `.env` only
 
 **Date:** 2026-09-04
