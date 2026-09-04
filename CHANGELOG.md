@@ -7,6 +7,8 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-04
+
 This release adds opt-in Tree-sitter language packs so JavaScript/TypeScript, Java, and Rust repos get the same parser-proven import edges Python already had — without pulling grammar wheels into the base install.
 
 ### Added
@@ -181,7 +183,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ggrace519/graphLM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggrace519/graphLM/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/ggrace519/graphLM/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ggrace519/graphLM/compare/v0.1.1...v0.1.2
