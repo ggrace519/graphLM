@@ -31,6 +31,7 @@ _ALWAYS_EXCLUDE = {
     ".env",
     ".gitignore",
     ".gitkeep",
+    ".graphlmignore",  # the ignore file itself — never sent to the LLM (#38)
     # Build / dist / cache output. These match on any path component, so a
     # legitimately-named source dir called "build"/"dist"/"target" anywhere in
     # the tree is also excluded — an accepted trade-off (precedent: bare "env"
@@ -245,6 +246,34 @@ def _path_is_inside(project_dir: Path, target: Path) -> bool:
         return False
 
 
+def load_graphlmignore(project_dir: Path) -> tuple[str, ...]:
+    """Patterns from ``.graphlmignore`` (gitignore-lite). Missing → ``()``.
+
+    One glob per line; ``#`` comments and blanks skipped; trailing ``/``
+    stripped so ``.godot/`` matches the ``.godot`` path component. Never
+    raises — unreadable / non-UTF-8 / escaping-symlink files are skipped.
+    """
+    path = project_dir / ".graphlmignore"
+    try:
+        if path.is_symlink() and not _path_is_inside(project_dir, path):
+            return ()
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ()
+    except (OSError, UnicodeDecodeError):
+        logger.warning("Could not read %s; ignoring it", path)
+        return ()
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.rstrip("/")
+        if line:
+            out.append(line)
+    return tuple(out)
+
+
 def scan_project(
     project_dir: Path,
     *,
@@ -255,6 +284,7 @@ def scan_project(
     redact_secrets: bool = True,
     max_tree_entries_per_dir: int = _MAX_TREE_ENTRIES_PER_DIR,
     skeleton: bool = True,
+    use_graphlmignore: bool = True,
 ) -> ScanResult:
     """Walk project directory, build annotated tree, read file contents.
 
@@ -267,6 +297,9 @@ def scan_project(
         max_files: Maximum number of source files to include in context.
         include_tests: Whether to include test files.
         exclude_patterns: Additional glob patterns to exclude.
+        use_graphlmignore: If True (default), merge patterns from a
+            ``.graphlmignore`` at the project root into the exclude set.
+            Pass False / ``--no-graphlmignore`` to ignore the file.
         redact_secrets: If True, redact secret-like patterns from file content
             (after skeletonisation — docstring lines/constants can hold secrets).
         skeleton: If True (default), replace an oversized file with its
@@ -294,8 +327,8 @@ def scan_project(
     if not project_dir.is_dir():
         raise FileNotFoundError(f"Project directory not found: {project_dir}")
 
-    # Combine always-excluded with user patterns
-    all_exclude = tuple(_ALWAYS_EXCLUDE | set(exclude_patterns))
+    ignore_pats = load_graphlmignore(project_dir) if use_graphlmignore else ()
+    all_exclude = tuple(_ALWAYS_EXCLUDE | set(exclude_patterns) | set(ignore_pats))
 
     # Phase 1: Build the directory tree
     tree_lines = [str(project_dir.name) + "/"]

@@ -234,6 +234,11 @@ def main(
         "--exclude",
         help="Exclude pattern (repeatable). e.g. __pycache__ .git",
     ),
+    no_graphlmignore: bool = typer.Option(
+        False,
+        "--no-graphlmignore",
+        help="Do not read .graphlmignore from the project root.",
+    ),
     no_redact: bool = typer.Option(
         False,
         "--no-redact",
@@ -323,6 +328,7 @@ def main(
             max_output_tokens=max_output_tokens,
             include_tests=not no_tests,
             exclude_patterns=tuple(exclude),
+            use_graphlmignore=not no_graphlmignore,
             dry_run=dry_run,
             redact_secrets=not no_redact,
             skeleton=not no_skeleton,

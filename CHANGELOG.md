@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`.graphlmignore`** — a project-level ignore file (gitignore-lite: one glob per line, `#` comments, blanks skipped) read from the scanned project root and merged into the scanner's exclude set, so a repo can record "always skip this worktree / cache / generated tree" instead of passing `--exclude` on every run. `--no-graphlmignore` opts out. The file itself is never sent to the model. Absent file is a no-op (#38).
+
 ## [0.3.0] - 2026-09-04
 
 This release adds opt-in Tree-sitter language packs so JavaScript/TypeScript, Java, and Rust repos get the same parser-proven import edges Python already had — without pulling grammar wheels into the base install.

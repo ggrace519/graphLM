@@ -12,6 +12,7 @@ from graphlm.scanner import (
     _redact_secrets,
     _should_exclude,
     estimate_tokens,
+    load_graphlmignore,
     scan_project,
 )
 
@@ -502,3 +503,79 @@ class TestNestedCheckouts:
         (tmp_path / "a.py").write_text("x = 1\n")
         result = scan_project(tmp_path)
         assert {f.rel_path for f in result.file_fragments} == {"a.py"}
+
+
+class TestGraphlmignore:
+    """Project-level ``.graphlmignore`` (#38)."""
+
+    def test_load_skips_comments_blanks_and_trailing_slash(self, tmp_path):
+        (tmp_path / ".graphlmignore").write_text(
+            "# a comment\n"
+            "\n"
+            "  vendor/  \n"
+            ".godot/\n"
+            "*.generated.py\n"
+        )
+        assert load_graphlmignore(tmp_path) == (
+            "vendor",
+            ".godot",
+            "*.generated.py",
+        )
+
+    def test_load_missing_file_is_empty(self, tmp_path):
+        assert load_graphlmignore(tmp_path) == ()
+
+    def test_load_skips_escaping_symlink(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "keep.py").write_text("x = 1\n")
+        outside = tmp_path / "outside.ignore"
+        outside.write_text("keep.py\n")
+        (project / ".graphlmignore").symlink_to(outside)
+        assert load_graphlmignore(project) == ()
+        paths = {f.rel_path for f in scan_project(project).file_fragments}
+        assert "keep.py" in paths
+
+    def test_load_skips_non_utf8(self, tmp_path, caplog):
+        (tmp_path / ".graphlmignore").write_bytes(b"\xff\xfe\x00vendor\n")
+        (tmp_path / "app.py").write_text("x = 1\n")
+        with caplog.at_level("WARNING"):
+            assert load_graphlmignore(tmp_path) == ()
+        assert "Could not read" in caplog.text
+        paths = {f.rel_path for f in scan_project(tmp_path).file_fragments}
+        assert "app.py" in paths
+
+    def test_fixture_omits_ignored_from_tree_and_fragments(self, ignore_project):
+        result = scan_project(ignore_project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "app.py" in paths
+        assert "keep.py" in paths
+        assert "vendor/lib.py" not in paths
+        assert "tmp.generated.py" not in paths
+        assert "notes.txt" not in paths
+        assert ".godot/cache.py" not in paths
+        assert ".graphlmignore" not in paths
+        assert "vendor/" not in result.tree
+        assert ".godot/" not in result.tree
+        assert "notes.txt" not in result.tree
+        assert "tmp.generated.py" not in result.tree
+        assert "app.py" in result.tree
+        assert "keep.py" in result.tree
+
+    def test_opt_out_reads_ignored_paths(self, ignore_project):
+        result = scan_project(ignore_project, use_graphlmignore=False)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "vendor/lib.py" in paths
+        assert "tmp.generated.py" in paths
+        assert "notes.txt" in paths
+        assert "vendor/" in result.tree
+        # The ignore file itself is still always-excluded, like .gitignore.
+        assert ".graphlmignore" not in paths
+        assert ".graphlmignore" not in result.tree
+
+    def test_unions_with_exclude_patterns(self, ignore_project):
+        result = scan_project(ignore_project, exclude_patterns=("keep.py",))
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "app.py" in paths
+        assert "keep.py" not in paths
+        assert "vendor/lib.py" not in paths

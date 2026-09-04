@@ -132,6 +132,7 @@ def generate_graph(
     max_output_tokens: int | None = None,
     include_tests: bool = True,
     exclude_patterns: tuple[str, ...] = (),
+    use_graphlmignore: bool = True,
     dry_run: bool = False,
     redact_secrets: bool = True,
     ast: bool = True,
@@ -175,6 +176,9 @@ def generate_graph(
             GraphLLErrorTruncated.
         include_tests: Whether to include test files in the analysis.
         exclude_patterns: Additional glob patterns to exclude.
+        use_graphlmignore: If True (default), merge patterns from a
+            ``.graphlmignore`` at the project root. Pass False /
+            ``--no-graphlmignore`` to skip the file.
         dry_run: If True, return the scan context without calling the LLM.
         redact_secrets: If True, redact secret-like patterns from file content.
         ast: If True (default), run AST-based deterministic import detection,
@@ -259,6 +263,7 @@ def generate_graph(
         max_files=max_files,
         include_tests=include_tests,
         exclude_patterns=exclude_patterns,
+        use_graphlmignore=use_graphlmignore,
         redact_secrets=redact_secrets,
         skeleton=skeleton,
     )
