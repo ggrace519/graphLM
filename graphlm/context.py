@@ -276,7 +276,8 @@ def _edge_block(
             f"NOTE: showing {len(rows)} of {total} parser-extracted import edges "
             "(truncated to fit the context budget). The list is also not exhaustive "
             "by design for some languages (JS/TS resolve relative specifiers only; "
-            "Java omits package wildcards; bare packages are omitted). Treat the "
+            "Java omits package wildcards; Rust omits inline/#[path] modules; "
+            "bare packages are omitted). Treat the "
             "listed edges as ground truth for "
             '"import_edges" and DO infer additional edges from the files — this '
             "list is NOT exhaustive."
@@ -293,8 +294,9 @@ def _edge_block(
             "These edges were extracted from source by a parser and are ground "
             "truth, but the list is NOT exhaustive: some languages only resolve a "
             "subset of import forms (JS/TS: relative specifiers only; Java: "
-            "package wildcards are omitted; bare packages like 'react' are "
-            "omitted). Infer additional edges from the "
+            "package wildcards are omitted; Rust: inline/#[path] modules are "
+            "omitted; bare packages like 'react' are omitted). Infer additional "
+            "edges from the "
             "files; do not contradict or omit the listed ones."
         )
     else:

@@ -4,6 +4,47 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-006 — Rust pack: `mod` include + `use crate/super/self` against a filesystem module tree
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/rust.py`, extra `rust`; Phase 3 of #42)
+
+### Context
+
+Rust is not FQN→file (Java) or path-relative (JS). `mod foo;` *includes* a
+child file; `use crate::foo::bar` then names a module path that has to be
+looked up in the crate's module tree. External crates (`use serde::…`) are
+the stdlib/third-party analog. Inline `mod foo { … }` and `#[path]` modules
+are real but not a 1:1 file mapping.
+
+### Decisions
+
+1. **Two edge kinds.** `mod foo;` → kind `"include"` (parent file →
+   `foo.rs` / `foo/mod.rs`). `use crate::` / `super::` / `self::` → kind
+   `"import"`. Unprefixed `use foo` and `extern crate` are dropped as
+   external (not partial). `(from,to,kind)` remains the diff identity.
+
+2. **Filesystem module tree from the scan.** `lib.rs` / `main.rs` (lib wins
+   in the same directory) and `bin/*.rs` are crate roots. Files under the
+   crate directory map to module paths (`src/foo.rs` → `foo`,
+   `src/foo/mod.rs` → `foo`, `src/foo/bar.rs` → `foo::bar`). `use` of an
+   *item* (`use crate::foo::helper`) resolves to the longest matching
+   module file (`foo.rs`), not a phantom `helper.rs`.
+
+3. **Under-resolve inline and `#[path]` modules.** They mark the language
+   known-partial rather than guessing a file. Glob `use crate::foo::*`
+   resolves to `foo`'s file (one module, not a fan-out).
+
+### Consequences
+
+- A Rust repo on a base install still gets an LLM map; parser edges appear
+  after `graphlm[rust]`.
+- 2015-edition relative `use foo` without `self::`/`super::`/`crate::` is
+  dropped as external — missing intra-crate edges, never a false ones (#19).
+- This is the last planned pack. Further languages only on demand.
+
+---
+
 ## ADR-005 — Java pack: drop package wildcards, `static` kind, Maven source roots
 
 **Date:** 2026-09-04

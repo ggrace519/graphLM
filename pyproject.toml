@@ -51,8 +51,11 @@ js = [
 # degradation contract as [js]: missing extra → zero Java edges, one log
 # line, Python/JS edges intact.
 java = ["tree-sitter-java>=0.23,<0.24"]
-# Every language pack. Grows as Rust lands; does not include `mcp`.
-all = ["graphlm[js]", "graphlm[java]"]
+# Rust Tree-sitter grammar. Resolver in `graphlm/parsers/rust.py`. Same
+# degradation contract: missing extra → zero Rust edges, one log line.
+rust = ["tree-sitter-rust>=0.24,<0.25"]
+# Every language pack. Does not include `mcp`.
+all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"

@@ -64,14 +64,21 @@ class TestScore:
         llm = [
             _e("a.py", "b.py", kind="import"),
             _e("a.py", "x.py", kind="register"),
-            _e("a.py", "y.py", kind="include"),
             _e("a.py", "z.py", kind="uses"),
         ]
         f = score(llm, ast)
         assert f is not None
-        # Only the import edge is comparable; the rest are kinds the AST never claims.
+        # register/uses are kinds the AST never claims; include is now a
+        # parser kind (Rust mod) so an LLM include on .py *is* comparable.
         assert f.llm_edges == 1
         assert f.precision == 1.0
+
+    def test_include_kind_is_comparable(self):
+        ast = [_e("lib.rs", "foo.rs", kind="include")]
+        llm = [_e("lib.rs", "foo.rs", kind="include")]
+        f = score(llm, ast)
+        assert f is not None
+        assert f.matched == 1
 
     def test_kind_ignored_in_matching(self):
         # The parser and model may disagree on import-vs-from for one statement.
