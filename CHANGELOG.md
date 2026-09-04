@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
+This release finishes the GitHub top-10 language packs (C#, C/C++, Go, PHP), adds a project `.graphlmignore` and `graphlm --upgrade`, and fixes the pass-2 edge table dropping on deep monorepos.
+
 ### Added
 
 - **`graphlm --upgrade`.** Detects whether this binary came from `uv tool`, pipx, or pip, preserves extras (`mcp`, language packs), and upgrades to the latest PyPI release. A source checkout is refused (pull/`uv sync`, or install a release). Flag, not a subcommand, so `graphlm <project>` is unchanged (ADR-012).
@@ -204,7 +208,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ggrace519/graphLM/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ggrace519/graphLM/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ggrace519/graphLM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggrace519/graphLM/compare/v0.1.3...v0.2.0
