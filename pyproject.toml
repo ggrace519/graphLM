@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "graphlm"
-version = "0.3.0"
+version = "0.3.1"
 description = "Generate codebase graphs (Markdown + JSON + interactive HTML) from any project directory using an OpenAI-compatible LLM"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -97,7 +97,7 @@ packages = ["graphlm"]
 # (bump-my-version does not) and `git push --follow-tags` to publish.
 # NOTE: keep current_version in step with project.version above.
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.3.1"
 commit = true
 tag = true
 sign_tags = true

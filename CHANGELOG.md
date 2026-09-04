@@ -13,9 +13,13 @@ and this project adheres to Semantic Versioning.
 - **C/C++ `#include` edges via `graphlm[cpp]`.** Quoted `#include "foo.h"` resolves relative to the importing file (with an extension probe). Angle-bracket system headers (`#include <stdio.h>`) are dropped as third-party; macro includes (`#include FOO`) mark the list not exhaustive. One extra pulls both `tree-sitter-c` and `tree-sitter-cpp` (``.c``/``.h`` vs ``.cpp``/``.hpp``/…). `kind` is `include`. Without the extra: zero C/C++ edges, one log line per language, never a crash.
 - **C# import edges via `graphlm[csharp]`.** `using static Ns.Type` / `using Alias = Ns.Type` resolve to `Ns/Type.cs`. A namespace `using Ns;` resolves only when exactly one scanned file lives in that namespace directory — two or more files are dropped (same GRAPH_DIFF fan-out reason as Java wildcards) and mark the list not exhaustive. `using System;` and other misses are third-party, not partial. Without the extra: zero C# edges, one log line, never a crash.
 
-### Changed
+## [0.3.1] - 2026-09-04
 
-- **LLM config no longer reads a project or working-directory `.env`.** graphlm used to search from cwd upward for a `.env` (#45) so an installed binary could pick up a per-project file. That also meant `graphlm .` inside a repo would load *that repo's* dotenv into the process — including any `GRAPHLM_*` keys it happened to define, and every other secret in the file. Settings now come only from the exported environment and `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`). A scanned project's `.env` stays a never-read sensitive file, not graphlm's own config. If you configured graphlm via a project `.env`, move those values to the user-level file or export them.
+This patch stops graphlm from loading a scanned project's `.env` as its own LLM config.
+
+### Fixed
+
+- **LLM config no longer reads a project or working-directory `.env`.** graphlm used to search from cwd upward for a `.env` (#45) so an installed binary could pick up a per-project file. That also meant `graphlm .` inside a repo would load *that repo's* dotenv into the process — including any `GRAPHLM_*` keys it happened to define, and every other secret in the file. Settings now come only from the exported environment and `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`). A scanned project's `.env` stays a never-read sensitive file, not graphlm's own config. If you configured graphlm via a project `.env`, move those values to the user-level file or export them (#65).
 
 ## [0.3.0] - 2026-09-04
 
@@ -193,7 +197,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ggrace519/graphLM/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ggrace519/graphLM/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ggrace519/graphLM/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/ggrace519/graphLM/compare/v0.1.2...v0.1.3
