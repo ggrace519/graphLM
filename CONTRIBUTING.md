@@ -9,8 +9,8 @@ invariants that must not be weakened.
 
 ```bash
 git clone https://github.com/ggrace519/graphLM && cd graphLM
-uv sync --group dev            # install deps + pytest, pytest-cov, pytest-httpx, mypy
-uv run pytest -q               # full suite — no network, the LLM is mocked
+uv sync --group dev --extra mcp --extra all   # deps + pytest + MCP SDK + language-pack grammars
+uv run pytest -q                              # full suite — no network, the LLM is mocked
 uv run mypy graphlm --ignore-missing-imports
 ```
 
@@ -22,12 +22,13 @@ entry, and open a PR. Details below.
 graphLM is Python 3.11+ managed with [uv](https://github.com/astral-sh/uv).
 
 ```bash
-uv sync --group dev
+uv sync --group dev --extra mcp --extra all
 ```
 
 That's the whole setup — no services, no Docker, no API keys needed for the test
 suite. (You only need an LLM endpoint to run graphlm against a *real* project;
-the tests mock it.)
+the tests mock it.) Without `--extra mcp` / `--extra all`, the MCP and
+language-pack enabled-path tests skip rather than fail.
 
 ## Running the checks
 
@@ -42,9 +43,10 @@ uv run pytest --cov=graphlm --cov-report=term-missing   # with coverage
 uv run mypy graphlm --ignore-missing-imports       # type check
 ```
 
-CI runs the suite on Python 3.11 / 3.12 / 3.13 and mypy on 3.12 (see
-`.github/workflows/ci.yml`). There is **no linter or formatter** configured —
-match the style of the surrounding code.
+CI runs the suite on Python 3.11 / 3.12 / 3.13 (base + `mcp` extra — language-pack
+enabled-path tests skip), a separate `test-packs` job with `graphlm[all]` on 3.12,
+and mypy on 3.12 (see `.github/workflows/ci.yml`). There is **no linter or
+formatter** configured — match the style of the surrounding code.
 
 `graphlm <project> --dry-run` is a handy no-network smoke test: it exercises the
 scan, AST parse, and context packing without any LLM call.

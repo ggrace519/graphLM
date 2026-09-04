@@ -246,7 +246,7 @@ def call_llm(
     """Call an OpenAI-compatible LLM endpoint and parse the response.
 
     Args:
-        base_url: The API base URL (e.g. https://studio.gracebkp.cloud/v1).
+        base_url: The API base URL (e.g. https://your-endpoint/v1).
         api_key: The API key for authentication.
         model: The model name to use.
         system_prompt: The system message.
