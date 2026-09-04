@@ -136,7 +136,7 @@ _SECRET_NAME_PATTERNS = {
 _ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
 
 # Source-code extensions exempt from the name patterns above (token.py is code).
-_SOURCE_EXTS_FOR_SECRET_NAMES = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx", ".hh", ".hxx"}
+_SOURCE_EXTS_FOR_SECRET_NAMES = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx", ".hh", ".hxx", ".php"}
 
 
 def _is_sensitive_file(path: Path) -> bool:

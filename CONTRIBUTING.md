@@ -110,9 +110,10 @@ If a change would relax one of these, say so explicitly in the PR and explain wh
 
 Python is the only **core** language (grammar in the base install). JS/TS ship
 as `graphlm[js]`, Java as `graphlm[java]`, Rust as `graphlm[rust]`, C# as
-`graphlm[csharp]`, C/C++ as `graphlm[cpp]`, Go as `graphlm[go]`; a missing extra
-degrades to zero edges for that language, never a crash. Further languages
-follow the same pack model (see ADR-004–008, ADR-010 and
+`graphlm[csharp]`, C/C++ as `graphlm[cpp]`, Go as `graphlm[go]`, PHP as
+`graphlm[php]`; a missing extra degrades to zero edges for that language, never
+a crash. Further languages follow the same pack model (see ADR-004–008,
+ADR-010–011 and
 `docs/plans/multi-language-implementation.md`).
 Adding a language means an in-tree resolver, a pip extra for the grammar wheel,
 a fixture under `tests/fixtures/`, and tests for both the enabled path and the

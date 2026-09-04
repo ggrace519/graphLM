@@ -59,6 +59,10 @@ class TestDetectLanguage:
         assert detect_language(Path("main.go")) == "go"
         assert detect_language(Path("FOO.GO")) == "go"
 
+    def test_php(self):
+        assert detect_language(Path("index.php")) == "php"
+        assert detect_language(Path("FOO.PHP")) == "php"
+
     def test_unsupported(self):
         assert detect_language(Path("foo.txt")) is None
         assert detect_language(Path("foo.md")) is None
