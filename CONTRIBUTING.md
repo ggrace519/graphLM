@@ -109,9 +109,9 @@ If a change would relax one of these, say so explicitly in the PR and explain wh
 ## Adding language support
 
 Python is the only **core** language (grammar in the base install). JS/TS ship
-as `graphlm[js]`, Java as `graphlm[java]`, Rust as `graphlm[rust]`; a missing
-extra degrades to zero edges for that language, never a crash. Further
-languages follow the same pack model (see ADR-004–006 and
+as `graphlm[js]`, Java as `graphlm[java]`, Rust as `graphlm[rust]`, C# as
+`graphlm[csharp]`; a missing extra degrades to zero edges for that language,
+never a crash. Further languages follow the same pack model (see ADR-004–007 and
 `docs/plans/multi-language-implementation.md`).
 Adding a language means an in-tree resolver, a pip extra for the grammar wheel,
 a fixture under `tests/fixtures/`, and tests for both the enabled path and the

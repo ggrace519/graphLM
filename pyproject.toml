@@ -54,8 +54,11 @@ java = ["tree-sitter-java>=0.23,<0.24"]
 # Rust Tree-sitter grammar. Resolver in `graphlm/parsers/rust.py`. Same
 # degradation contract: missing extra → zero Rust edges, one log line.
 rust = ["tree-sitter-rust>=0.24,<0.25"]
+# C# Tree-sitter grammar. Resolver in `graphlm/parsers/csharp.py`. Same
+# degradation contract: missing extra → zero C# edges, one log line.
+csharp = ["tree-sitter-c-sharp>=0.23,<0.24"]
 # Every language pack. Does not include `mcp`.
-all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]"]
+all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"

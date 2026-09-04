@@ -9,7 +9,7 @@ modules (``graphlm.parsers.python``, ``graphlm.parsers.javascript``,
 ``graphlm.parsers.java``, ``graphlm.parsers.rust``), which register themselves
 through the resolver registry (see ``_ensure_resolvers``). Python is the only
 core language (grammar in the base install). Other languages ship as extras
-(``graphlm[js]`` / ``graphlm[java]`` / ``graphlm[rust]``): resolvers are always
+(``graphlm[js]`` / ``graphlm[java]`` / ``graphlm[rust]`` / ``graphlm[csharp]``): resolvers are always
 registered, grammar wheels are optional, and a missing extra degrades to zero
 edges for that language.
 """
@@ -33,8 +33,9 @@ JAVASCRIPT = "javascript"
 TYPESCRIPT = "typescript"
 JAVA = "java"
 RUST = "rust"
+CSHARP = "csharp"
 
-SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST}
+SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST, CSHARP}
 
 # Mapping from file extension to language name
 EXT_TO_LANGUAGE: dict[str, str] = {
@@ -45,6 +46,7 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".tsx": TYPESCRIPT,
     ".java": JAVA,
     ".rs": RUST,
+    ".cs": CSHARP,
 }
 
 
@@ -95,6 +97,7 @@ _GRAMMARS: dict[str, _GrammarEntry] = {
     ),
     "java": _GrammarSpec("tree_sitter_java", "language"),
     "rust": _GrammarSpec("tree_sitter_rust", "language"),
+    "csharp": _GrammarSpec("tree_sitter_c_sharp", "language"),
 }
 
 
@@ -327,6 +330,7 @@ def _ensure_resolvers() -> None:
     from graphlm.parsers import javascript as _javascript  # noqa: F401
     from graphlm.parsers import java as _java  # noqa: F401
     from graphlm.parsers import rust as _rust  # noqa: F401
+    from graphlm.parsers import csharp as _csharp  # noqa: F401
 
     _resolvers_loaded = True
 
