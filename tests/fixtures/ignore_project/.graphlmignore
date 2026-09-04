@@ -1,0 +1,8 @@
+# comments and blanks must be ignored
+vendor/
+
+# Godot shader cache (trailing slash)
+.godot/
+
+*.generated.py
+notes.txt

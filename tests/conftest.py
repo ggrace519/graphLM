@@ -49,3 +49,9 @@ def java_project() -> Path:
 def rust_project() -> Path:
     """Path to the Rust fixture project (Rust pack)."""
     return FIXTURES_DIR / "rust_project"
+
+
+@pytest.fixture(scope="session")
+def ignore_project() -> Path:
+    """Path to the ``.graphlmignore`` fixture project (#38)."""
+    return FIXTURES_DIR / "ignore_project"

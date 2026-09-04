@@ -105,6 +105,9 @@ graphlm /path/to/project -b https://api.example.com/v1 -k sk-xxx -m my-model
 # Exclude test files and custom patterns
 graphlm /path/to/project --no-tests --exclude __pycache__ --exclude .git
 
+# Skip a project-level .graphlmignore
+graphlm /path/to/project --no-graphlmignore
+
 # Skip Tree-sitter AST import edges
 graphlm /path/to/project -o ./output --no-ast
 
@@ -337,6 +340,19 @@ Settings are resolved in this order (first non-empty wins):
 
 CLI flags (`-b`, `-k`, `-m`, `--max-context`, `--max-output-tokens`, `--timeout`) and the matching `generate_graph(...)` arguments override the env var.
 
+### Project ignore file
+
+Drop a **`.graphlmignore`** at the project root to record patterns that should stay out of every scan — a big sibling worktree, a game-engine cache, generated files — without passing `--exclude` on every run.
+
+```
+# one glob per line; # comments and blanks are skipped
+.worktrees/
+.godot/
+*.generated.py
+```
+
+Patterns are merged with the built-in exclude set and any `--exclude` flags (union). Matching is the same as `--exclude`: the full relative path **or** any path component. A trailing slash is stripped, so `.godot/` matches a directory named `.godot`. The file itself is never sent to the model (same as `.gitignore`). Missing file → no change. `--no-graphlmignore` opts out.
+
 ## Options
 
 | Flag | Description | Default |
@@ -354,6 +370,7 @@ CLI flags (`-b`, `-k`, `-m`, `--max-context`, `--max-output-tokens`, `--timeout`
 | `--timeout` | LLM request timeout in seconds | `GRAPHLM_TIMEOUT` env var, else 300 |
 | `--no-tests` | Exclude test files | Tests included by default |
 | `--exclude` | Exclude pattern (repeatable) | — |
+| `--no-graphlmignore` | Do not read `.graphlmignore` from the project root | File is read |
 | `--no-redact` | Skip secret redaction | Redaction on |
 | `--dry-run` | Show stats without calling LLM | Disabled |
 | `--no-ast` | Skip Tree-sitter AST import edges | AST on |
