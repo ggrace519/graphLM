@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning.
 - **C/C++ `#include` edges via `graphlm[cpp]`.** Quoted `#include "foo.h"` resolves relative to the importing file (with an extension probe). Angle-bracket system headers (`#include <stdio.h>`) are dropped as third-party; macro includes (`#include FOO`) mark the list not exhaustive. One extra pulls both `tree-sitter-c` and `tree-sitter-cpp` (``.c``/``.h`` vs ``.cpp``/``.hpp``/…). `kind` is `include`. Without the extra: zero C/C++ edges, one log line per language, never a crash.
 - **C# import edges via `graphlm[csharp]`.** `using static Ns.Type` / `using Alias = Ns.Type` resolve to `Ns/Type.cs`. A namespace `using Ns;` resolves only when exactly one scanned file lives in that namespace directory — two or more files are dropped (same GRAPH_DIFF fan-out reason as Java wildcards) and mark the list not exhaustive. `using System;` and other misses are third-party, not partial. Without the extra: zero C# edges, one log line, never a crash.
 
+### Fixed
+
+- **Directory tree no longer restates the full relative path on every line.** The pass-1/pass-2 tree is an indented listing (`indent + basename`, directories end with `/`). Previously each line repeated the whole path *and* indented, so the 5000-line cap still overflowed `max_context` on deep monorepos — n8n's tree was ~151k tokens against a 131k window, every pass-2 file was truncated, and the AST edge table was dropped with `edge table dropped: header does not fit the 0-token edge budget`. The same tree is now ~72k tokens, the edge table fits, and if a tree still fills the budget the warning names that cause (parser edges still used for cycle detection). Pass 1 is told to reconstruct full paths from the indent when requesting files (#69).
+
 ## [0.3.1] - 2026-09-04
 
 This patch stops graphlm from loading a scanned project's `.env` as its own LLM config.

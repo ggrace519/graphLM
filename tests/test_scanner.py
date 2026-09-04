@@ -230,7 +230,10 @@ class TestTreeBounds:
         result = scan_project(project, max_tree_entries_per_dir=200)
         lines = result.tree.split("\n")
         # Exactly 200 of the 300 files are listed, plus one marker.
-        listed = [ln for ln in lines if ln.strip().startswith("many/f")]
+        # Tree lines are basename-only (indent encodes the parent `many/`).
+        listed = [
+            ln for ln in lines if ln.strip().startswith("f") and ln.strip().endswith(".py")
+        ]
         assert len(listed) == 200
         marker = [ln for ln in lines if "more entries not shown" in ln]
         assert len(marker) == 1
@@ -248,7 +251,38 @@ class TestTreeBounds:
         (project / "top.py").write_text("a = 1\n")
 
         result = scan_project(project, max_tree_entries_per_dir=200)
-        assert "pkg/deep.py" in result.tree
+        assert "pkg/" in result.tree
+        assert "deep.py" in result.tree
+        # Ancestry is indent, not a restated relative path (#69).
+        assert "pkg/deep.py" not in result.tree
+        lines = result.tree.split("\n")
+        pkg = next(ln for ln in lines if ln.strip() == "pkg/")
+        deep = next(ln for ln in lines if ln.strip() == "deep.py")
+        assert pkg.startswith("  ")
+        assert deep.startswith("    ")
+
+    def test_tree_uses_basename_and_indent_not_full_path(self, tmp_path):
+        # Regression for #69: restating the full relative path on every line
+        # (indent *and* `pkg/sub/deep.py`) doubled the tree's token cost, so a
+        # 5000-line cap still overflowed max_context on deep monorepos.
+        project = tmp_path / "proj"
+        (project / "pkg" / "sub").mkdir(parents=True)
+        (project / "pkg" / "sub" / "deep.py").write_text("z = 1\n")
+        (project / "top.py").write_text("a = 1\n")
+
+        result = scan_project(project)
+        assert "pkg/sub/deep.py" not in result.tree
+        lines = [ln for ln in result.tree.split("\n") if ln.strip()]
+        names = [ln.strip() for ln in lines]
+        assert "pkg/" in names
+        assert "sub/" in names
+        assert "deep.py" in names
+        assert "top.py" in names
+        pkg = next(ln for ln in lines if ln.strip() == "pkg/")
+        sub = next(ln for ln in lines if ln.strip() == "sub/")
+        deep = next(ln for ln in lines if ln.strip() == "deep.py")
+        assert len(pkg) - len(pkg.lstrip(" ")) < len(sub) - len(sub.lstrip(" "))
+        assert len(sub) - len(sub.lstrip(" ")) < len(deep) - len(deep.lstrip(" "))
 
     def test_build_and_cache_dirs_excluded_from_tree(self, tmp_path):
         # Regression for #17: Rust target/, hypothesis caches, etc. must never

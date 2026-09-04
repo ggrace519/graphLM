@@ -411,12 +411,16 @@ def scan_project(
             if len(tree_lines) >= max_tree_lines:
                 tree_stopped = True
                 return
-            rel_str = str(entry.relative_to(project_dir))
+            # Basename + indent, not the full relative path. Restating
+            # `pkg/sub/deep.py` on every line (on top of indent that already
+            # encodes ancestry) made the 5000-line cap still overflow
+            # max_context on deep monorepos — n8n's tree was ~151k tokens
+            # and zeroed the pass-2 edge budget (#69).
             if entry.is_dir():
-                tree_lines.append(f"{indent}{rel_str}/")
+                tree_lines.append(f"{indent}{entry.name}/")
                 _walk_dir(entry, indent + "  ")
             else:
-                tree_lines.append(f"{indent}{rel_str}")
+                tree_lines.append(f"{indent}{entry.name}")
         if omitted:
             tree_lines.append(
                 f"{indent}… {omitted} more entries not shown "
