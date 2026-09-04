@@ -4,6 +4,42 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-008 — C/C++ pack: quoted `#include` only, one extra two grammars
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/cpp.py`, extra `cpp`)
+
+### Context
+
+C++ is in GitHub's "80% of new repos" six; C sits beside it in the top 10.
+Both languages' file-level dependency is `#include`. Angle-bracket includes
+are the stdlib/SDK. Quoted includes are project files. Macro includes
+(`#include FOO`) are not statically resolvable. C and C++ need different
+Tree-sitter grammars (``.h`` is parsed as C).
+
+### Decisions
+
+1. **One extra, two grammars.** `graphlm[cpp]` pulls `tree-sitter-c` and
+   `tree-sitter-cpp`. ``.c``/``.h`` → language `c`; ``.cpp``/``.cc``/``.cxx``/
+   ``.hpp``/``.hh``/``.hxx`` → `cpp`. Same resolver, like JS/TS.
+
+2. **Quoted includes only.** `#include "foo.h"` resolves relative to the
+   importing file, then an extension probe (``.h``.c``.hpp``.cpp``…).
+   `#include <stdio.h>` is dropped as third-party, not partial. A macro
+   include marks known-partial. `kind` is `"include"` (already a diff-contract
+   value from Rust `mod`).
+
+3. **`source_roots` is `("",)`.** Includes are path-relative, not module-root
+   relative. `-I` search paths are out of scope (under-resolve, #19).
+
+### Consequences
+
+- A C/C++ repo on a base install still gets an LLM map; parser edges appear
+  after `graphlm[cpp]`.
+- Compiler `-I` / generated headers are missed by design.
+
+---
+
 ## ADR-007 — C# pack: unique-file namespace usings, no fan-out
 
 **Date:** 2026-09-04

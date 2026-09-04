@@ -46,6 +46,15 @@ class TestDetectLanguage:
         assert detect_language(Path("Program.cs")) == "csharp"
         assert detect_language(Path("FOO.CS")) == "csharp"
 
+    def test_c(self):
+        assert detect_language(Path("foo.c")) == "c"
+        assert detect_language(Path("foo.h")) == "c"
+
+    def test_cpp(self):
+        assert detect_language(Path("foo.cpp")) == "cpp"
+        assert detect_language(Path("foo.hpp")) == "cpp"
+        assert detect_language(Path("foo.cc")) == "cpp"
+
     def test_unsupported(self):
         assert detect_language(Path("foo.txt")) is None
         assert detect_language(Path("foo.md")) is None
