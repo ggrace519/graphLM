@@ -42,7 +42,7 @@ pipx install graphlm         # via pipx
 
 Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs.
 
-Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. For verified JavaScript/TypeScript import edges, install the `js` extra: `uv tool install 'graphlm[js]'` (or `graphlm[all]` for every language pack). Python edges are in the base install.
+Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. For verified JavaScript/TypeScript import edges, `uv tool install 'graphlm[js]'`; for Java, `graphlm[java]`; `graphlm[all]` pulls every language pack. Python edges are in the base install.
 
 **No PyPI, no problem.** Every release also ships the wheel and sdist on its [GitHub Release](https://github.com/ggrace519/graphLM/releases). Install straight from a release asset:
 
@@ -146,7 +146,7 @@ graphLM uses a **two-pass LLM strategy** to stay within context windows while st
 
 This keeps the first pass lightweight (~tree tokens) and ensures the second pass only includes files that matter.
 
-A Tree-sitter pass runs by default (Python imports always; JavaScript/TypeScript too if you install `graphlm[js]`). It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip. Without the extra, JS/TS files are still sent to the model but contribute no parser edges.
+A Tree-sitter pass runs by default (Python imports always; JavaScript/TypeScript with `graphlm[js]`; Java with `graphlm[java]`). It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip. Without a language extra, those files are still sent to the model but contribute no parser edges.
 
 Big files are sent as **signature skeletons**, not heads. A file longer than `--max-file-chars` (default 4000) used to be cut at the cap, so the model saw the imports and the first class of a large module and guessed the rest. Now a Python file over the cap is rendered with Tree-sitter as its API surface — every import, every class/def signature (decorators and multi-line headers intact), the first line of each docstring, short constants — with bodies elided to `...`. That is exact where the head was partial, and usually smaller. The skeleton starts with a `# [graphlm skeleton: …]` marker, and the pass-2 prompt tells the model to summarize the API from it rather than invent behaviour for the elided bodies. Secret redaction runs on the skeleton too. Python only for now (other languages still send the head); `--no-skeleton` restores head-truncation.
 

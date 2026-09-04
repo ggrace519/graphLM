@@ -17,9 +17,9 @@ Only edges the parser could have seen are scored on the LLM side:
   of those edges). A correct LLM edge between two ``.ts`` files is therefore
   *not* a false positive on a JS-only run with the extra absent, and *is*
   scored once the pack is installed; and
-* ``kind`` must be ``import``, ``from``, or ``require`` — the model's
-  ``register`` / ``include`` / ``uses`` kinds describe relationships the
-  parser never claims.
+* ``kind`` must be ``import``, ``from``, ``require``, or ``static`` — the
+  model's ``register`` / ``include`` / ``uses`` kinds describe relationships
+  the parser never claims.
 
 Comparison is on ``(from_path, to_path)`` only; ``kind`` is ignored because
 the parser and the model don't always agree on ``import`` vs ``from`` for the
@@ -34,7 +34,7 @@ from graphlm.models import Faithfulness, ImportEdge
 
 # LLM edge kinds that assert a plain module dependency — the kinds the AST
 # parser emits, so the only kinds it can confirm or deny.
-_COMPARABLE_KINDS = frozenset({"import", "from", "require"})
+_COMPARABLE_KINDS = frozenset({"import", "from", "require", "static"})
 _PY_EXT = ".py"
 
 

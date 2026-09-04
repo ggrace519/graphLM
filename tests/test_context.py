@@ -118,6 +118,7 @@ class TestPass2Prompt:
     def test_instruction_block_lists_require_kind(self):
         prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])
         assert '"require"' in prompt
+        assert '"static"' in prompt
 
     def test_prompt_omits_deterministic_edges_when_absent(self):
         prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])

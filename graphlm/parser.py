@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from graphlm.parsers import (  # noqa: F401
     EXT_TO_LANGUAGE,
+    JAVA,
     JAVASCRIPT,
     PYTHON,
     SUPPORTED_LANGUAGES,
@@ -30,6 +31,7 @@ from graphlm.parsers.python import _source_roots  # noqa: F401
 
 __all__ = [
     "EXT_TO_LANGUAGE",
+    "JAVA",
     "JAVASCRIPT",
     "PYTHON",
     "SUPPORTED_LANGUAGES",

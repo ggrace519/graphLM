@@ -37,3 +37,9 @@ def fixtures_dir() -> Path:
 def ts_project() -> Path:
     """Path to the TypeScript fixture project (JS/TS pack)."""
     return FIXTURES_DIR / "ts_project"
+
+
+@pytest.fixture(scope="session")
+def java_project() -> Path:
+    """Path to the Java fixture project (Java pack)."""
+    return FIXTURES_DIR / "java_project"
