@@ -6,11 +6,12 @@ registry (``_GRAMMARS``), the resolver registry (``_RESOLVERS``), the
 group-by-language dispatch in ``build_dependency_graph`` / ``parse_file``, and
 the cycle detector. Language-specific extraction/resolution lives in per-language
 modules (``graphlm.parsers.python``, ``graphlm.parsers.javascript``,
-``graphlm.parsers.java``), which register themselves through the resolver
-registry (see ``_ensure_resolvers``). Python is the only core language (grammar
-in the base install). JS/TS and Java ship as ``graphlm[js]`` / ``graphlm[java]``
-extras: resolvers are always registered, grammar wheels are optional, and a
-missing extra degrades to zero edges for that language.
+``graphlm.parsers.java``, ``graphlm.parsers.rust``), which register themselves
+through the resolver registry (see ``_ensure_resolvers``). Python is the only
+core language (grammar in the base install). Other languages ship as extras
+(``graphlm[js]`` / ``graphlm[java]`` / ``graphlm[rust]``): resolvers are always
+registered, grammar wheels are optional, and a missing extra degrades to zero
+edges for that language.
 """
 
 from __future__ import annotations
@@ -31,8 +32,9 @@ PYTHON = "python"
 JAVASCRIPT = "javascript"
 TYPESCRIPT = "typescript"
 JAVA = "java"
+RUST = "rust"
 
-SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA}
+SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST}
 
 # Mapping from file extension to language name
 EXT_TO_LANGUAGE: dict[str, str] = {
@@ -42,6 +44,7 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".jsx": JAVASCRIPT,
     ".tsx": TYPESCRIPT,
     ".java": JAVA,
+    ".rs": RUST,
 }
 
 
@@ -91,6 +94,7 @@ _GRAMMARS: dict[str, _GrammarEntry] = {
         "language_tsx" if suffix.lower() == ".tsx" else "language_typescript",
     ),
     "java": _GrammarSpec("tree_sitter_java", "language"),
+    "rust": _GrammarSpec("tree_sitter_rust", "language"),
 }
 
 
@@ -208,6 +212,8 @@ def _module_to_path(module_str: str, language: str) -> str:
         return "/".join(parts)
     if language == JAVA:
         return "/".join(parts) + ".java"
+    if language == RUST:
+        return "/".join(parts) + ".rs"
     return ""
 
 
@@ -320,6 +326,7 @@ def _ensure_resolvers() -> None:
     from graphlm.parsers import python as _python  # noqa: F401
     from graphlm.parsers import javascript as _javascript  # noqa: F401
     from graphlm.parsers import java as _java  # noqa: F401
+    from graphlm.parsers import rust as _rust  # noqa: F401
 
     _resolvers_loaded = True
 

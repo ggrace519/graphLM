@@ -7,7 +7,8 @@ The package is registry-driven: ``base`` owns the shared machinery (the single
 Tree-sitter backend, the grammar/resolver registries, the group-by-language
 dispatch, cycle detection) and each ``<lang>`` module registers a resolver.
 Python is the core language (always registered). JS/TS register from
-``javascript`` (``graphlm[js]``); Java from ``java`` (``graphlm[java]``).
+``javascript`` (``graphlm[js]``); Java from ``java`` (``graphlm[java]``);
+Rust from ``rust`` (``graphlm[rust]``).
 
 Importing this package eagerly loads the language modules so their resolvers are
 registered and ``build_dependency_graph`` / ``parse_file`` work immediately.
@@ -20,6 +21,7 @@ from graphlm.parsers.base import (
     JAVA,
     JAVASCRIPT,
     PYTHON,
+    RUST,
     SUPPORTED_LANGUAGES,
     TYPESCRIPT,
     ParsedFile,
@@ -36,12 +38,14 @@ from graphlm.parsers.base import (
 from graphlm.parsers import python as _python  # noqa: F401,E402
 from graphlm.parsers import javascript as _javascript  # noqa: F401,E402
 from graphlm.parsers import java as _java  # noqa: F401,E402
+from graphlm.parsers import rust as _rust  # noqa: F401,E402
 
 __all__ = [
     "EXT_TO_LANGUAGE",
     "JAVA",
     "JAVASCRIPT",
     "PYTHON",
+    "RUST",
     "SUPPORTED_LANGUAGES",
     "TYPESCRIPT",
     "ParsedFile",

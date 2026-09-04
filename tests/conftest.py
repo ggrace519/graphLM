@@ -43,3 +43,9 @@ def ts_project() -> Path:
 def java_project() -> Path:
     """Path to the Java fixture project (Java pack)."""
     return FIXTURES_DIR / "java_project"
+
+
+@pytest.fixture(scope="session")
+def rust_project() -> Path:
+    """Path to the Rust fixture project (Rust pack)."""
+    return FIXTURES_DIR / "rust_project"
