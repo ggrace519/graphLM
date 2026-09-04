@@ -4,6 +4,49 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-005 — Java pack: drop package wildcards, `static` kind, Maven source roots
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/java.py`, extra `java`; Phase 2 of #42)
+
+### Context
+
+Phase 1 proved the extra/degradation machinery. Java is FQN → file (`import
+com.acme.User` → `<root>/com/acme/User.java`), the Python analog. Two Java
+forms are not a 1:1 file: `import pkg.*;` (a package = a directory of
+`.java` files) and `import static Type.member;` (a member of a type).
+`(from,to,kind)` is the GRAPH_DIFF identity key (ADR-002 decision 3).
+
+### Decisions
+
+1. **Drop package wildcards** (`import com.acme.util.*;`). Fanning out to
+   every `.java` in the package means adding one file mutates the edge set of
+   every wildcard importer — structurally correct, noisy diffs. A dropped
+   wildcard marks the language known-partial (same framing as JS/TS bare
+   packages). **Static star-imports** (`import static Type.*;`) still resolve
+   to `Type.java`: the class is known, it is not a package fan-out.
+
+2. **`kind` values:** `"import"` for a type import, `"static"` for
+   `import static`. Changing either is a diff-contract change.
+
+3. **Source roots** are `src/main/java`, `src/test/java`, and a bare `src/`
+   (not `src/main` or `src/test` without `/java`). Computed from path shape
+   only (grammar-free). The file's `package` declaration is a disambiguator:
+   a mismatch with the path does not invent a root (#19).
+
+4. **Nested types** (`import com.acme.Foo.Bar`) try `Foo/Bar.java` then
+   `Foo.java`. One extra candidate, only emitted if that file is in the scan.
+
+### Consequences
+
+- A Java repo on a base install still gets an LLM map; the parser contributes
+  no edges until `graphlm[java]` is installed.
+- Wildcard-heavy code (some generated sources) will under-count edges and
+  trip the non-exhaustive prompt framing — accepted, same honesty rule as #19.
+- Rust (Phase 3) copies this extra + in-tree resolver + degradation template.
+
+---
+
 ## ADR-004 — Python-core language packs: opt-in extras, bundled resolvers, relative-only JS/TS
 
 **Date:** 2026-09-04

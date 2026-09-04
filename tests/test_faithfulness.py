@@ -104,6 +104,14 @@ class TestScore:
         assert f.matched == 2
         assert f.precision == pytest.approx(2 / 3)
 
+    def test_static_kind_is_comparable(self):
+        ast = [_e("A.java", "B.java", kind="static")]
+        llm = [_e("A.java", "B.java", kind="static")]
+        f = score(llm, ast)
+        assert f is not None
+        assert f.matched == 1
+        assert f.precision == 1.0
+
     def test_require_kind_is_comparable(self):
         ast = [_e("a.js", "b.js", kind="require")]
         llm = [_e("a.js", "b.js", kind="require")]

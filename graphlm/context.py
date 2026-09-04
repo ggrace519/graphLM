@@ -163,9 +163,9 @@ def assemble_pass2_prompt(
             ground truth for import_edges. Only the *prompt* copy is budget-capped;
             callers keep the full list for the graph and cycle detection.
         edges_partial: True when a resolver dropped specifiers by policy (JS/TS
-            bare packages). Flips the edge-table framing to non-exhaustive even
-            when the table was not size-capped, so a known-partial list is never
-            presented as complete ground truth.
+            bare packages, Java package wildcards). Flips the edge-table framing
+            to non-exhaustive even when the table was not size-capped, so a
+            known-partial list is never presented as complete ground truth.
 
     Returns:
         Tuple of (prompt text, estimated total tokens, list of truncated file paths).
@@ -276,7 +276,8 @@ def _edge_block(
             f"NOTE: showing {len(rows)} of {total} parser-extracted import edges "
             "(truncated to fit the context budget). The list is also not exhaustive "
             "by design for some languages (JS/TS resolve relative specifiers only; "
-            "bare packages are omitted). Treat the listed edges as ground truth for "
+            "Java omits package wildcards; bare packages are omitted). Treat the "
+            "listed edges as ground truth for "
             '"import_edges" and DO infer additional edges from the files — this '
             "list is NOT exhaustive."
         )
@@ -291,8 +292,9 @@ def _edge_block(
         framing = (
             "These edges were extracted from source by a parser and are ground "
             "truth, but the list is NOT exhaustive: some languages only resolve a "
-            "subset of import forms (JS/TS: relative specifiers only; bare "
-            "packages like 'react' are omitted). Infer additional edges from the "
+            "subset of import forms (JS/TS: relative specifiers only; Java: "
+            "package wildcards are omitted; bare packages like 'react' are "
+            "omitted). Infer additional edges from the "
             "files; do not contradict or omit the listed ones."
         )
     else:
@@ -378,8 +380,8 @@ def _build_instruction_block() -> list[str]:
         "   back — the tool already has it and fills it in itself. Echoing it"
         "   wastes the entire output budget on a large project (#18).",
         '2. "import_edges" - List of {"from_path", "to_path", "kind"} for import/dependency',
-        '   relationships between files. Use kinds: "import", "from", "require", "register",',
-        '   "include", "uses".',
+        '   relationships between files. Use kinds: "import", "from", "require", "static",',
+        '   "register", "include", "uses".',
         '3. "modules" - List of {"path", "name", "description"} for each significant module',
         "   or component.",
         '4. "data_flow" - List of {"source", "destination", "description"} showing how data',

@@ -34,6 +34,10 @@ class TestDetectLanguage:
     def test_tsx(self):
         assert detect_language(Path("foo.tsx")) == "typescript"
 
+    def test_java(self):
+        assert detect_language(Path("Foo.java")) == "java"
+        assert detect_language(Path("FOO.JAVA")) == "java"
+
     def test_unsupported(self):
         assert detect_language(Path("foo.txt")) is None
         assert detect_language(Path("foo.md")) is None
@@ -489,6 +493,50 @@ class TestMissingGrammarDegrades:
         ]
         assert len(ts_warnings) == 1
 
+    def test_mixed_python_and_java_missing_java_grammar_keeps_python_edges(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        import logging
+
+        from graphlm.parsers import base as parser_base
+        from graphlm.scanner import FileFragment
+
+        missing = parser_base._GrammarSpec("tree_sitter_nonexistent_java", "language")
+        monkeypatch.setitem(parser_base._GRAMMARS, "java", missing)
+        parser_base._backend._language_cache.clear()
+        monkeypatch.setattr(parser_base, "_WARNED_GRAMMARS", set())
+
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "a.py").write_text("x = 1\n")
+        (tmp_path / "main.py").write_text("from pkg.a import x\n")
+        (tmp_path / "App.java").write_text("import com.Foo;\n")
+        (tmp_path / "Foo.java").write_text("class Foo {}\n")
+
+        python_frags = [
+            FileFragment("pkg/__init__.py", "", 1),
+            FileFragment("pkg/a.py", "x = 1\n", 1),
+            FileFragment("main.py", "from pkg.a import x\n", 1),
+        ]
+        java_frags = [
+            FileFragment("App.java", "import com.Foo;\n", 1),
+            FileFragment("Foo.java", "class Foo {}\n", 1),
+        ]
+        python_only = build_dependency_graph(python_frags, project_dir=tmp_path)
+        with caplog.at_level(logging.WARNING, logger=parser_base.logger.name):
+            edges = build_dependency_graph(
+                python_frags + java_frags, project_dir=tmp_path
+            )
+        assert edges is not None
+        assert edges == python_only
+        java_warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "java" in r.getMessage()
+        ]
+        assert len(java_warnings) == 1
+
 
 class TestGrammarSpecSelection:
     def test_tsx_uses_language_tsx_accessor(self):
@@ -516,6 +564,13 @@ class TestGrammarSpecSelection:
 
         spec = _spec_for("python", ".py")
         assert spec.pip_module == "tree_sitter_python"
+        assert spec.accessor == "language"
+
+    def test_java(self):
+        from graphlm.parsers.base import _spec_for
+
+        spec = _spec_for("java", ".java")
+        assert spec.pip_module == "tree_sitter_java"
         assert spec.accessor == "language"
 
 
