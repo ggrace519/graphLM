@@ -4,6 +4,38 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-011 — PHP pack: `use` FQN→file plus quoted require/include
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/php.py`, extra `php`)
+
+### Context
+
+PHP is the last GitHub-Octoverse top-10 language without a pack. It has two
+dependency forms: `use App\Models\User` (FQN, like Java) and
+`require`/`include` of a path (like C). Concatenated `__DIR__ . "/x.php"` is
+the common form and is not a static string.
+
+### Decisions
+
+1. **`use` is FQN→`.php`.** `App\Models\User` → `App/Models/User.php` under
+   grammar-free `src/` roots plus `""`. `use function` / `use const` strip
+   the last segment and try the parent file. `kind` is `"import"`.
+
+2. **Quoted `require`/`include`/`require_once`/`include_once` of a string
+   literal** resolve relative to the importer. `kind` is `"include"`.
+   Concatenated paths are a policy drop and mark known-partial.
+
+3. **Grammar accessor is `language_php`**, not `language()` — the wheel also
+   ships `language_php_only`.
+
+### Consequences
+
+- PSR-4 vendor prefixes that do not match the on-disk path miss (under-resolve).
+- `vendor/autoload.php` only becomes an edge if that file is in the scan.
+
+---
+
 ## ADR-010 — Go pack: unique-file package dirs, suffix-stripped import paths
 
 **Date:** 2026-09-04

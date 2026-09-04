@@ -65,8 +65,11 @@ cpp = [
 ]
 # Go Tree-sitter grammar. Resolver in `graphlm/parsers/go.py`.
 go = ["tree-sitter-go>=0.23,<0.24"]
+# PHP Tree-sitter grammar. Resolver in `graphlm/parsers/php.py`.
+# language_php() (not language()) — the wheel also ships php_only.
+php = ["tree-sitter-php>=0.23,<0.25"]
 # Every language pack. Does not include `mcp`.
-all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]", "graphlm[cpp]", "graphlm[go]"]
+all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]", "graphlm[cpp]", "graphlm[go]", "graphlm[php]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"
