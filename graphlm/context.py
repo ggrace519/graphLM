@@ -89,6 +89,9 @@ Rules:
 - Request any migration/schema files
 - Request files that appear to be central to the project architecture
 - Do NOT request binary files, generated files, or cache directories
+- The tree is indented (basename only; directories end with /). Reconstruct
+  each file's full relative path from its parent directories when requesting
+  it — request "pkg/deep.py", not "deep.py".
 - Limit to the most important ~50-100 files max
 - Return ONLY valid JSON, no explanation text
 """
@@ -192,9 +195,24 @@ def assemble_pass2_prompt(
         0, max_context - overhead_reserve - tree_tokens - instruction_tokens
     )
     edge_budget = int(room_for_files_and_edges * EDGE_SHARE)
-    edge_block = _build_edge_block(
-        deterministic_edges, max_tokens=edge_budget, partial=edges_partial
-    )
+    # A 0-token budget means the tree (plus the small instruction/overhead
+    # floor) already filled max_context — not that the table header is
+    # mysteriously too big. Name that cause; the full parser list still
+    # reaches the graph and cycle detection (#69).
+    if deterministic_edges and edge_budget == 0:
+        logger.warning(
+            "edge table dropped: directory tree already fills the context "
+            "budget (tree ~%d tokens, max_context=%d); %d parser edges still "
+            "used for cycle detection, omitted from the prompt",
+            tree_tokens,
+            max_context,
+            len(deterministic_edges),
+        )
+        edge_block = []
+    else:
+        edge_block = _build_edge_block(
+            deterministic_edges, max_tokens=edge_budget, partial=edges_partial
+        )
     edge_tokens = estimate_tokens("\n".join(edge_block)) if edge_block else 0
 
     # total_tokens starts already carrying every fixed reserve (output, tree,

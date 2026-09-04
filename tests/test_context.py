@@ -1,5 +1,7 @@
 """Tests for context packing and prompt assembly."""
 
+import logging
+
 from graphlm.context import (
     MESSAGE_OVERHEAD_TOKENS,
     assemble_pass1_prompt,
@@ -38,6 +40,13 @@ class TestPass1Prompt:
         prompt = assemble_pass1_prompt("root/\n")
         assert "JSON object" in prompt
         assert "Rules:" in prompt
+
+    def test_prompt_asks_to_reconstruct_full_paths_from_indent(self):
+        # Basename-only tree (#69): pass 1 must request pkg/deep.py, not deep.py.
+        prompt = assemble_pass1_prompt("root/\n")
+        assert "reconstruct" in prompt.lower()
+        assert "pkg/deep.py" in prompt
+        assert "basename" in prompt.lower()
 
 
 class TestPass2Prompt:
@@ -381,6 +390,26 @@ class TestMaxContext:
         assert reported == estimate_tokens(prompt) + MESSAGE_OVERHEAD_TOKENS
         # Sanity: a large budget admits every file (nothing reserved for output).
         assert _trunc == []
+
+    def test_zero_edge_budget_names_tree_as_cause(self, caplog):
+        # When the directory tree already fills max_context, the drop must
+        # name that cause — not "header does not fit the 0-token edge budget"
+        # (#69). Parser edges are omitted from the prompt only.
+        tree = "proj/\n" + "\n".join("  " + ("x" * 80) for _ in range(400))
+        edges = [
+            ImportEdge(from_path="a.py", to_path="b.py", kind="import"),
+            ImportEdge(from_path="b.py", to_path="c.py", kind="import"),
+        ]
+        with caplog.at_level(logging.WARNING):
+            prompt, _tokens, _truncated = assemble_pass2_prompt(
+                tree, [], max_context=5000, deterministic_edges=edges
+            )
+        assert "Deterministic import edges" not in prompt
+        assert "directory tree already fills the context budget" in caplog.text
+        assert "2 parser edges still used for cycle detection" in caplog.text
+        assert "0-token" not in caplog.text
+        assert str(estimate_tokens(tree)) in caplog.text
+        assert "max_context=5000" in caplog.text
 
     def test_small_edge_table_keeps_exhaustive_framing(self):
         """A small edge table that fits must keep the strong 'do not omit'
