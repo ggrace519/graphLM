@@ -4,6 +4,43 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-009 — LLM config from the environment and user-level `.env` only
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/config.py`)
+
+### Context
+
+#45 taught graphlm to load a project `.env` from the working directory upward so
+an installed binary would see the user's project config. That also meant
+`graphlm /path/to/untrusted-repo` (or `cd that-repo && graphlm .`) loaded that
+repo's `.env` into the process — injecting whatever secrets it holds, and using
+any `GRAPHLM_*` keys it happens to define as the LLM endpoint. The scanned tree
+is hostile input; its dotenv files are already never sent to the model
+(`_is_sensitive_file`). They should not become graphlm's own configuration
+either.
+
+### Decisions
+
+1. **Only two config sources.** Exported `GRAPHLM_*` (highest) and
+   `~/.config/graphlm/.env` / `$XDG_CONFIG_HOME/graphlm/.env`. Built-in defaults
+   for numeric budgets and timeout only.
+2. **Never search cwd, ancestors, or the scanned project** for a `.env`.
+   `find_dotenv` is gone. The user file is loaded only when `is_file()`.
+3. **`load_dotenv(..., override=False)`** still, so a real shell env wins over
+   the user file.
+
+### Consequences
+
+- A project `.env` that used to configure graphlm (the #45 cwd walk) is ignored.
+  Move those values to the user-level file or export them.
+- Scanning a third-party repo cannot redirect the LLM call or dump its secrets
+  into graphlm's environment.
+- Developers hacking on graphlm itself must use the user-level file or exported
+  vars, not a repo-root `.env`.
+
+---
+
 ## ADR-008 — C/C++ pack: quoted `#include` only, one extra two grammars
 
 **Date:** 2026-09-04

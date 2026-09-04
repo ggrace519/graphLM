@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from dataclasses import dataclass
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import load_dotenv
 
 from graphlm.llm import LLM_MAX_OUTPUT_TOKENS
 
@@ -23,31 +23,22 @@ def _user_config_path() -> Path:
 
 
 def _load_env_files() -> None:
-    """Populate ``os.environ`` from .env files without clobbering real env vars.
+    """Populate ``os.environ`` from the user-level .env without clobbering
+    real env vars.
 
     Resolution precedence (first non-empty wins), highest to lowest:
 
     1. the real shell environment (already in ``os.environ`` — never touched);
-    2. the project ``.env`` (searched from the CURRENT WORKING DIRECTORY
-       upward — ``usecwd=True``, so an *installed* graphlm sees the user's
-       project, not its own site-packages tree — #45);
-    3. the user-level ``~/.config/graphlm/.env`` (or
-       ``$XDG_CONFIG_HOME/graphlm/.env``) — a global fallback for a
-       ``uv tool install`` where no project ``.env`` is on the path (#45);
-    4. the built-in defaults in :class:`Settings`.
+    2. the user-level ``~/.config/graphlm/.env`` (or
+       ``$XDG_CONFIG_HOME/graphlm/.env``);
+    3. the built-in defaults in :class:`Settings`.
 
-    ``load_dotenv(override=False)`` never overwrites a variable already present,
-    so loading the lower-precedence source second yields exactly the order
-    above. Bare ``load_dotenv()`` / ``find_dotenv()`` (no ``usecwd``) searches
-    upward from *this module's* directory, so an installed graphlm would miss
-    the user's project ``.env`` entirely — that is why we pass ``usecwd=True``
-    and guard the empty ("not found") result: ``load_dotenv("")`` would fall
-    back to that broken frame-based search.
+    A ``.env`` in the working directory, any ancestor, or the scanned project
+    is never loaded (ADR-009). ``load_dotenv(override=False)`` never overwrites
+    a variable already present, so an exported ``GRAPHLM_*`` always wins.
+    The user file is loaded only when it exists: ``load_dotenv("")`` would
+    fall back to a frame-based search from *this module's* directory.
     """
-    project_env = find_dotenv(usecwd=True)  # "" when none found on the path
-    if project_env:
-        load_dotenv(project_env, override=False)
-
     user_env = _user_config_path()
     if user_env.is_file():
         load_dotenv(user_env, override=False)
@@ -95,18 +86,18 @@ class Settings:
 
         if not base_url:
             raise ValueError(
-                "GRAPHLM_BASE_URL not set. Export it, set it in a project "
-                ".env or ~/.config/graphlm/.env, or pass --base-url."
+                "GRAPHLM_BASE_URL not set. Export it, set it in "
+                "~/.config/graphlm/.env, or pass --base-url."
             )
         if not api_key:
             raise ValueError(
-                "GRAPHLM_API_KEY not set. Export it, set it in a project "
-                ".env or ~/.config/graphlm/.env, or pass --api-key."
+                "GRAPHLM_API_KEY not set. Export it, set it in "
+                "~/.config/graphlm/.env, or pass --api-key."
             )
         if not model:
             raise ValueError(
-                "GRAPHLM_MODEL not set. Export it, set it in a project "
-                ".env or ~/.config/graphlm/.env, or pass --model."
+                "GRAPHLM_MODEL not set. Export it, set it in "
+                "~/.config/graphlm/.env, or pass --model."
             )
 
         return cls(
