@@ -42,20 +42,33 @@ pipx install graphlm         # via pipx
 
 Either one gives you a global `graphlm` command. Prefer plain pip? `pip install graphlm` works too — just mind your virtualenvs.
 
-Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. Language packs: `graphlm[js]`, `graphlm[java]`, `graphlm[rust]`, or `graphlm[all]`. Python edges are in the base install.
+Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. Parser edges for languages other than Python are opt-in extras — see [Language packs](#language-packs).
 
-**No PyPI, no problem.** Every release also ships the wheel and sdist on its [GitHub Release](https://github.com/ggrace519/graphLM/releases). Install straight from a release asset:
+**No PyPI, no problem.** Every release also ships the wheel and sdist as [GitHub Release](https://github.com/ggrace519/graphLM/releases/latest) assets. Grab the latest `graphlm-*.whl` from that page and `pipx install` the file (or its URL).
 
-```bash
-pipx install https://github.com/ggrace519/graphLM/releases/download/v0.1.0/graphlm-0.1.0-py3-none-any.whl
-```
-
-**Hacking on graphLM itself?** Clone it and let `uv` sync the dev deps:
+**Hacking on graphLM itself?** Clone it and let `uv` sync the dev deps. Add the extras if you want the MCP and language-pack tests to run rather than skip:
 
 ```bash
 git clone https://github.com/ggrace519/graphLM && cd graphLM
-uv sync --group dev
+uv sync --group dev --extra mcp --extra all
 uv run graphlm --version
+```
+
+## Language packs
+
+Python import edges ship in the base install. JavaScript/TypeScript, Java, and Rust are **opt-in extras** that pull only the Tree-sitter grammar wheel; the resolver is in-tree. Without the extra, those files still go to the model but contribute no parser edges (one log line per language, never a crash). `graphlm[all]` installs every language pack; it does **not** include `mcp`.
+
+| Extra | Languages | What the parser resolves |
+|---|---|---|
+| *(base)* | Python | `import` / `from … import` against files in the scan |
+| `graphlm[js]` | JavaScript, TypeScript (`.js` / `.jsx` / `.ts` / `.tsx`) | relative `import` / `export … from` / `require()` / dynamic `import()` (bare packages like `react` are dropped) |
+| `graphlm[java]` | Java | fully-qualified `import` against Maven/Gradle source roots; `import static` as kind `static`; package wildcards are dropped |
+| `graphlm[rust]` | Rust | `mod foo;` as an `include` edge; `use crate::` / `super::` / `self::` against the filesystem module tree (external crates dropped) |
+| `graphlm[all]` | all of the above | |
+
+```bash
+uv tool install 'graphlm[js]'         # or [java], [rust], [all]
+uv tool install 'graphlm[mcp,all]'    # MCP server + every language pack
 ```
 
 ## Quick start
@@ -123,7 +136,7 @@ result = generate_graph(
     "/path/to/project",
     base_url="https://api.example.com/v1",
     api_key="sk-xxx",
-    model="Qwen3.6-35B",
+    model="your-model-name",
     output_dir="./output",
     ast=True,              # Tree-sitter import edges + SLOC cycle scores (default)
     include_html=True,     # skip GRAPH.html when False (default: write it)
@@ -221,10 +234,13 @@ line like:
   prompt so you can see how the built-in estimator tracks *your* model. An
   endpoint that reports no usage shows "not reported by endpoint".
 - **Faithfulness** scores the model's `import_edges` against the parser's
-  deterministic edges: precision is the share of the model's Python import
+  deterministic edges: precision is the share of the model's comparable import
   edges the parser confirms, recall the share of the parser's edges the model
-  reproduced. Low precision means invented dependencies. Absent under
-  `--no-ast` (no ground truth) and on `--dry-run` (no LLM edges).
+  reproduced. Comparable means kinds the parser emits (`import` / `from` /
+  `require` / `static` / `include`) between files whose extensions the parser
+  actually produced edges for on this run (`.py` always; `.js`/`.ts`/… when
+  `graphlm[js]` ran, and so on). Low precision means invented dependencies.
+  Absent under `--no-ast` (no ground truth) and on `--dry-run` (no LLM edges).
 
 Both live in `GRAPH.json` under `meta.usage` / `meta.faithfulness` as additive,
 optional fields — older graphs without them still diff normally — and the CLI
@@ -297,7 +313,7 @@ keep the graph in the project it describes for the staleness check to work.
 
 ## Configuration
 
-graphLM reads its LLM settings from environment variables. Copy `.env.example` to `.env` and fill in your values:
+graphLM reads its LLM settings from environment variables. Copy `.env.example` to `.env` and fill in **your** endpoint, key, and model — those three have no built-in defaults:
 
 ```bash
 cp .env.example .env
@@ -308,15 +324,18 @@ Settings are resolved in this order (first non-empty wins):
 1. **Exported shell environment** — `export GRAPHLM_BASE_URL=…` etc.
 2. **Project `.env`** — searched from the current working directory upward, so it works whether graphLM is run from a source checkout or `uv tool install`ed.
 3. **User-level `.env`** at `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`) — a global config for an installed graphLM, so you don't need a `.env` in every project.
-4. Built-in defaults.
+4. Built-in defaults for the numeric budgets and timeout only.
 
 | Variable | Description | Default |
 |---|---|---|
-| `GRAPHLM_BASE_URL` | OpenAI-compatible API endpoint | `https://openrouter.ai/api/v1` |
+| `GRAPHLM_BASE_URL` | OpenAI-compatible API endpoint | *(required)* |
 | `GRAPHLM_API_KEY` | API key for authentication | *(required)* |
-| `GRAPHLM_MODEL` | Model name to use | `openai/gpt-4o` |
+| `GRAPHLM_MODEL` | Model name the endpoint serves | *(required)* |
+| `GRAPHLM_MAX_CONTEXT` | Pass-2 **input** token budget (tree + files) | `120000` |
+| `GRAPHLM_MAX_OUTPUT_TOKENS` | Graph **output** token ceiling; independent of the input budget | `128000` |
+| `GRAPHLM_TIMEOUT` | LLM request timeout in seconds (pass 2 is streamed) | `300` |
 
-Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library arguments.
+CLI flags (`-b`, `-k`, `-m`, `--max-context`, `--max-output-tokens`, `--timeout`) and the matching `generate_graph(...)` arguments override the env var.
 
 ## Options
 
@@ -331,12 +350,15 @@ Settings can also be passed directly via CLI flags (`-b`, `-k`, `-m`) or library
 | `--no-skeleton` | Send the head of an oversized file instead of its Tree-sitter signature skeleton | Skeletons on |
 | `--max-pass2-files` | Max files in pass 2 context | 80 |
 | `--max-context` | Token budget for pass-2 context | `GRAPHLM_MAX_CONTEXT` env var, else 120000 |
+| `--max-output-tokens` | Graph output-token ceiling (independent of input) | `GRAPHLM_MAX_OUTPUT_TOKENS` env var, else 128000 |
+| `--timeout` | LLM request timeout in seconds | `GRAPHLM_TIMEOUT` env var, else 300 |
 | `--no-tests` | Exclude test files | Tests included by default |
 | `--exclude` | Exclude pattern (repeatable) | — |
 | `--no-redact` | Skip secret redaction | Redaction on |
 | `--dry-run` | Show stats without calling LLM | Disabled |
 | `--no-ast` | Skip Tree-sitter AST import edges | AST on |
 | `--no-html` | Do not write `GRAPH.html` | HTML on |
+| `--no-diff` | Do not write `GRAPH_DIFF.*` | Diff on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |
 | `--cycle-threshold` | Minimum cycle risk score | 0.0 |
 | `--serve` | Serve the existing map to a coding agent over MCP (stdio); needs `graphlm[mcp]` | — |
@@ -355,31 +377,31 @@ graphlm/
 ├── config.py             # Settings from environment variables
 ├── context.py            # Two-pass prompt assembly
 ├── cycles.py             # Import cycle detection (Tarjan + SLOC risk)
+├── diff.py               # Graph-vs-graph diff (GRAPH_DIFF.*)
+├── faithfulness.py       # LLM-vs-parser edge score in the stamp
 ├── html_render.py        # Interactive D3 HTML visualization
 ├── llm.py                # LLM client with retry and JSON recovery
+├── mcp_server.py         # --serve: thin MCP wrapper over query.py
+├── mermaid.py            # Directory-level Mermaid flowchart for GRAPH.md
 ├── models.py             # Pydantic v2 data models
-├── parser.py             # Tree-sitter AST import parser
+├── parser.py             # Thin shim re-exporting parsers.base
+├── parsers/              # Tree-sitter registry + per-language resolvers
+│   ├── base.py
+│   ├── python.py         # core (always on)
+│   ├── javascript.py     # graphlm[js]
+│   ├── java.py           # graphlm[java]
+│   └── rust.py           # graphlm[rust]
 ├── prompts.py            # System prompt (injection guard)
 ├── provenance.py         # Git SHA / timestamp / version capture for the stamp
+├── query.py              # Map-query helpers used by --serve
+├── redact.py             # Sensitive-file skip + secret redaction
 ├── render.py             # Markdown + JSON + HTML output rendering
 ├── scanner.py            # Project directory scanner
 └── skills.py             # --install-skill: agent-guide installer
 tests/
 ├── conftest.py
-├── test_cli.py
-├── test_config.py
-├── test_context.py
-├── test_cycles.py
-├── test_html_render.py
-├── test_integration.py
-├── test_llm.py
-├── test_models.py
-├── test_parser.py
-├── test_prompts.py
-├── test_provenance.py
-├── test_render.py
-├── test_scanner.py
-└── fixtures/             # Small, medium, large test projects
+├── test_*.py
+└── fixtures/             # small, medium, large, cyclic, skeleton, ts, java, rust
 ```
 
 ## Requirements
