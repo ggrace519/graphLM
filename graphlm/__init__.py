@@ -265,10 +265,14 @@ def generate_graph(
 
     # Deterministic import edges from AST parsing (on by default)
     deterministic_edges: list[ImportEdge] | None = None
+    partial_languages: set[str] = set()
     if ast:
         try:
             deterministic_edges = build_dependency_graph(
-                scan.file_fragments, project_dir=project_path, max_files=max_files,
+                scan.file_fragments,
+                project_dir=project_path,
+                max_files=max_files,
+                partial_languages=partial_languages,
             )
         except Exception as e:
             logging.warning("AST parsing failed, continuing without it: %s", e)
@@ -284,6 +288,7 @@ def generate_graph(
             pass2_files,
             max_context=max_context,
             deterministic_edges=deterministic_edges,
+            edges_partial=bool(partial_languages),
         )
         graph = CodebaseGraph(
             directory_tree=scan.tree,
@@ -353,6 +358,7 @@ def generate_graph(
         pass2_files,
         max_context=max_context,
         deterministic_edges=deterministic_edges,
+        edges_partial=bool(partial_languages),
     )
 
     # Phase 2: LLM produces the final graph

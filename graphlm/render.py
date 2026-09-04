@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from graphlm.mermaid import render_mermaid
-from graphlm.models import CodebaseGraph, GraphMeta
+from graphlm.models import CodebaseGraph, Cycle, GraphMeta
 
 
 def _render_directive(meta: GraphMeta) -> str:
@@ -112,6 +112,30 @@ def _render_html(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a self-contained HTML visualization."""
     from graphlm.html_render import render_html as _render_html_impl
     return _render_html_impl(graph)
+
+
+_JS_CYCLE_EXTS = frozenset({".js", ".jsx", ".ts", ".tsx"})
+
+
+def _cycle_language_note(cycles: list[Cycle]) -> str | None:
+    """One-line qualifier: JS/TS cycles are often benign, Python cycles less so."""
+    exts = {Path(node).suffix.lower() for cycle in cycles for node in cycle.nodes}
+    js = bool(exts & _JS_CYCLE_EXTS)
+    py = ".py" in exts
+    if js and py:
+        return (
+            "> Note: a Python import cycle is usually a design smell; a "
+            "JavaScript/TypeScript cycle is often benign (circular "
+            "`import`/`require` is common). The risk score still reflects "
+            "size × length."
+        )
+    if js:
+        return (
+            "> Note: import cycles among JavaScript/TypeScript modules are "
+            "often benign (circular `import`/`require` is common); the risk "
+            "score still reflects size × length."
+        )
+    return None
 
 
 def render_markdown(graph: CodebaseGraph) -> str:
@@ -238,6 +262,10 @@ def render_markdown(graph: CodebaseGraph) -> str:
     # Import cycles
     if graph.import_cycles:
         lines.append("## Import Cycles\n")
+        cycle_note = _cycle_language_note(graph.import_cycles)
+        if cycle_note:
+            lines.append(cycle_note)
+            lines.append("")
         for i, cycle in enumerate(
             sorted(graph.import_cycles, key=lambda c: c.risk_score, reverse=True)
         ):

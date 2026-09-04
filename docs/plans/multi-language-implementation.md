@@ -1,6 +1,6 @@
 # Implementation plan: Multi-language AST support
 
-**Status:** Ready to build. Written for a fresh agent-loop to implement cold.
+**Status:** Phase 0 and Phase 1 implemented (JS/TS pack: `graphlm[js]`). Phase 2 (Java) is next; do not start it until Phase 1 is merged and green.
 **Tracking issue:** [#42](https://github.com/ggrace519/graphLM/issues/42).
 **Design baseline:** `docs/plans/multi-language-support.md` (approved 2026-08-30).
 **Repo state at write time:** `main` @ `e5ebf92`.

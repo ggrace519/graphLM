@@ -5,8 +5,12 @@ instance, the ``ParsedFile`` / ``_ParsedImport`` data carriers, the grammar
 registry (``_GRAMMARS``), the resolver registry (``_RESOLVERS``), the
 group-by-language dispatch in ``build_dependency_graph`` / ``parse_file``, and
 the cycle detector. Language-specific extraction/resolution lives in per-language
-modules (``graphlm.parsers.python``), which register themselves through the
-resolver registry (see ``_ensure_resolvers``).
+modules (``graphlm.parsers.python``, ``graphlm.parsers.javascript``), which
+register themselves through the resolver registry (see ``_ensure_resolvers``).
+Python is the only core language (grammar in the base install). JS/TS ship as
+the ``graphlm[js]`` extra: the resolver is always registered, the grammar
+wheels are optional, and a missing extra degrades to zero edges for that
+language.
 """
 
 from __future__ import annotations
@@ -70,9 +74,29 @@ class _GrammarSpec:
     accessor: str  # e.g. "language"
 
 
-_GRAMMARS: dict[str, _GrammarSpec] = {
+# Grammar selection is (language, suffix) -> spec. ``detect_language`` maps
+# both ``.ts`` and ``.tsx`` to ``"typescript"``, so a registry keyed by
+# language name alone cannot pick ``language_tsx()`` vs ``language_typescript()``.
+# A callable entry receives the file suffix; a plain spec ignores it.
+# Cache key is ``(language, accessor)`` so TS and TSX stay distinct.
+_GrammarEntry = _GrammarSpec | Callable[[str], _GrammarSpec]
+
+_GRAMMARS: dict[str, _GrammarEntry] = {
     "python": _GrammarSpec("tree_sitter_python", "language"),
+    "javascript": _GrammarSpec("tree_sitter_javascript", "language"),
+    "typescript": lambda suffix: _GrammarSpec(
+        "tree_sitter_typescript",
+        "language_tsx" if suffix.lower() == ".tsx" else "language_typescript",
+    ),
 }
+
+
+def _spec_for(language: str, suffix: str = "") -> _GrammarSpec:
+    """Resolve the grammar spec for a language, using suffix when the entry is suffix-sensitive."""
+    entry = _GRAMMARS.get(language)
+    if entry is None:
+        raise ValueError(f"Unsupported language: {language}")
+    return entry(suffix) if callable(entry) else entry
 
 
 class _GrammarUnavailable(Exception):
@@ -88,7 +112,7 @@ class _GrammarUnavailable(Exception):
 class _TreeSitterBackend:
     """Thin wrapper around tree-sitter parsing. Lazy-imports on first use."""
 
-    _language_cache: dict[str, object] = {}
+    _language_cache: dict[tuple[str, str], object] = {}
     _ts: object | None = None
 
     def _import_ts(self):
@@ -98,31 +122,30 @@ class _TreeSitterBackend:
             self._ts = ts
         return self._ts
 
-    def _get_language(self, language: str):
-        if language in self._language_cache:
-            return self._language_cache[language]
+    def _get_language(self, language: str, suffix: str = ""):
+        spec = _spec_for(language, suffix)
+        cache_key = (language, spec.accessor)
+        if cache_key in self._language_cache:
+            return self._language_cache[cache_key]
 
-        spec = _GRAMMARS.get(language)
-        if spec is None:
-            raise ValueError(f"Unsupported language: {language}")
         try:
             mod = importlib.import_module(spec.pip_module)
         except ImportError:
             raise _GrammarUnavailable(language)
         ts = self._import_ts()
         lang = ts.Language(getattr(mod, spec.accessor)())
-        self._language_cache[language] = lang
+        self._language_cache[cache_key] = lang
         return lang
 
-    def parse_source(self, code: bytes, language: str):
+    def parse_source(self, code: bytes, language: str, suffix: str = ""):
         ts = self._import_ts()
-        lang = self._get_language(language)
+        lang = self._get_language(language, suffix)
         parser = ts.Parser(lang)
         return parser.parse(code)
 
-    def build_query(self, language: str, query_str: str):
+    def build_query(self, language: str, query_str: str, suffix: str = ""):
         ts = self._import_ts()
-        lang = self._get_language(language)
+        lang = self._get_language(language, suffix)
         return ts.Query(lang, query_str)
 
     def run_query(self, tree, query):
@@ -290,6 +313,7 @@ def _ensure_resolvers() -> None:
     if _resolvers_loaded:
         return
     from graphlm.parsers import python as _python  # noqa: F401
+    from graphlm.parsers import javascript as _javascript  # noqa: F401
 
     _resolvers_loaded = True
 
@@ -343,8 +367,8 @@ def parse_file(path: Path, language: str | None = None) -> ParsedFile | None:
 
     resolver = _RESOLVERS.get(language)
     if resolver is None:
-        # A supported language with no resolver (JS/TS today): empty ParsedFile,
-        # matching the prior facade behavior — not None.
+        # A supported language with no resolver yet (a future pack before it
+        # registers): empty ParsedFile, matching the historic facade — not None.
         logger.debug(
             "Parsing %s with language %s not yet fully implemented",
             path,
@@ -377,6 +401,8 @@ def build_dependency_graph(
     fragments: list[FileFragment],
     max_files: int = 200,
     project_dir: Path | None = None,
+    *,
+    partial_languages: set[str] | None = None,
 ) -> list[ImportEdge]:
     """Build a deterministic dependency graph from file fragments.
 
@@ -390,6 +416,11 @@ def build_dependency_graph(
         fragments: File fragments from a scan.
         max_files: Maximum number of files to parse as import sources.
         project_dir: Base directory for resolving relative file paths.
+        partial_languages: Optional set the dispatcher fills with language
+            names whose resolver dropped a specifier by policy (JS/TS bare
+            packages, not a failed relative lookup). Callers pass this through
+            to the pass-2 edge-table framing so a known-partial list is never
+            presented as exhaustive ground truth.
 
     Returns:
         List of ImportEdge instances (never None when called).
@@ -421,7 +452,15 @@ def build_dependency_graph(
         try:
             imports = resolver.imports_from_source(code, Path(rel_path))
             for imp in imports:
-                for to_path in resolver.resolve(imp, rel_path, known_files, roots):
+                targets = resolver.resolve(imp, rel_path, known_files, roots)
+                if (
+                    not targets
+                    and partial_languages is not None
+                    and not getattr(imp, "is_relative", True)
+                ):
+                    # Policy drop (bare/aliased specifier), not a missed file.
+                    partial_languages.add(language)
+                for to_path in targets:
                     all_edges.append(
                         ImportEdge(
                             from_path=rel_path,

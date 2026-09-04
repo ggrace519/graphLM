@@ -39,6 +39,16 @@ dependencies = [
 # Opt-in so the base install stays lean; the CLI prints an install hint if the
 # flag is used without it.
 mcp = ["mcp>=2,<3"]
+# JS/TS Tree-sitter grammars for deterministic import edges. The resolver lives
+# in-tree (`graphlm/parsers/javascript.py`); this extra only pulls the wheels.
+# Without it, JS/TS files contribute zero edges and one log line per language, never a crash.
+# Python stays in the base install. See ADR-004.
+js = [
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+]
+# Every language pack. Grows as Java/Rust land; does not include `mcp`.
+all = ["graphlm[js]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"

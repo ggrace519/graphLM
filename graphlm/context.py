@@ -140,6 +140,7 @@ def assemble_pass2_prompt(
     *,
     max_context: int = _DEFAULT_MAX_CONTEXT,
     deterministic_edges: list[ImportEdge] | None = None,
+    edges_partial: bool = False,
 ) -> tuple[str, int, list[str]]:
     """Assemble the user prompt for pass 2 (full analysis).
 
@@ -161,6 +162,10 @@ def assemble_pass2_prompt(
         deterministic_edges: Optional AST-extracted import edges to treat as
             ground truth for import_edges. Only the *prompt* copy is budget-capped;
             callers keep the full list for the graph and cycle detection.
+        edges_partial: True when a resolver dropped specifiers by policy (JS/TS
+            bare packages). Flips the edge-table framing to non-exhaustive even
+            when the table was not size-capped, so a known-partial list is never
+            presented as complete ground truth.
 
     Returns:
         Tuple of (prompt text, estimated total tokens, list of truncated file paths).
@@ -187,7 +192,9 @@ def assemble_pass2_prompt(
         0, max_context - overhead_reserve - tree_tokens - instruction_tokens
     )
     edge_budget = int(room_for_files_and_edges * EDGE_SHARE)
-    edge_block = _build_edge_block(deterministic_edges, max_tokens=edge_budget)
+    edge_block = _build_edge_block(
+        deterministic_edges, max_tokens=edge_budget, partial=edges_partial
+    )
     edge_tokens = estimate_tokens("\n".join(edge_block)) if edge_block else 0
 
     # total_tokens starts already carrying every fixed reserve (output, tree,
@@ -255,19 +262,38 @@ def assemble_pass2_prompt(
     return prompt, total_tokens, truncated_paths
 
 
-def _edge_block(rows: list[str], *, truncated: bool, total: int) -> list[str]:
+def _edge_block(
+    rows: list[str], *, truncated: bool, total: int, partial: bool = False
+) -> list[str]:
     """Assemble the edge-table block from pre-rendered rows.
 
-    ``truncated`` selects the framing: the strong "do not omit" wording for a
-    complete table, or a "showing N of M — not exhaustive, infer the rest"
-    note when only a subset of rows is included.
+    Framing is complete (do not omit), size-capped (showing N of M),
+    known-partial (resolver under-resolves by design), or both of the last two.
+    A known-partial table must never use the complete-table wording.
     """
-    if truncated:
+    if truncated and partial:
+        framing = (
+            f"NOTE: showing {len(rows)} of {total} parser-extracted import edges "
+            "(truncated to fit the context budget). The list is also not exhaustive "
+            "by design for some languages (JS/TS resolve relative specifiers only; "
+            "bare packages are omitted). Treat the listed edges as ground truth for "
+            '"import_edges" and DO infer additional edges from the files — this '
+            "list is NOT exhaustive."
+        )
+    elif truncated:
         framing = (
             f"NOTE: showing {len(rows)} of {total} parser-extracted import edges "
             "(truncated to fit the context budget). Treat the listed edges as "
             'ground truth for "import_edges" and DO infer additional edges from '
             "the files — this list is NOT exhaustive."
+        )
+    elif partial:
+        framing = (
+            "These edges were extracted from source by a parser and are ground "
+            "truth, but the list is NOT exhaustive: some languages only resolve a "
+            "subset of import forms (JS/TS: relative specifiers only; bare "
+            "packages like 'react' are omitted). Infer additional edges from the "
+            "files; do not contradict or omit the listed ones."
         )
     else:
         framing = (
@@ -292,6 +318,7 @@ def _build_edge_block(
     deterministic_edges: list[ImportEdge] | None,
     *,
     max_tokens: int,
+    partial: bool = False,
 ) -> list[str]:
     """Render the AST ground-truth edge table within ``max_tokens``.
 
@@ -312,7 +339,9 @@ def _build_edge_block(
 
     # Fixed cost of the block shell, measured with the (longer) truncated
     # framing so the running budget check is conservative in either case.
-    shell_tokens = estimate_tokens("\n".join(_edge_block([], truncated=True, total=total)))
+    shell_tokens = estimate_tokens(
+        "\n".join(_edge_block([], truncated=True, total=total, partial=partial))
+    )
     if shell_tokens > max_tokens:
         logger.warning(
             "edge table dropped: header does not fit the %d-token edge budget",
@@ -331,11 +360,11 @@ def _build_edge_block(
         used += row_cost
 
     if len(kept) == total:
-        return _edge_block(kept, truncated=False, total=total)
+        return _edge_block(kept, truncated=False, total=total, partial=partial)
     logger.warning(
         "edge table truncated to fit context: kept %d of %d rows", len(kept), total
     )
-    return _edge_block(kept, truncated=True, total=total)
+    return _edge_block(kept, truncated=True, total=total, partial=partial)
 
 
 def _build_instruction_block() -> list[str]:
@@ -349,8 +378,8 @@ def _build_instruction_block() -> list[str]:
         "   back — the tool already has it and fills it in itself. Echoing it"
         "   wastes the entire output budget on a large project (#18).",
         '2. "import_edges" - List of {"from_path", "to_path", "kind"} for import/dependency',
-        '   relationships between files. Use kinds: "import", "from", "register", "include",',
-        '   "uses".',
+        '   relationships between files. Use kinds: "import", "from", "require", "register",',
+        '   "include", "uses".',
         '3. "modules" - List of {"path", "name", "description"} for each significant module',
         "   or component.",
         '4. "data_flow" - List of {"source", "destination", "description"} showing how data',

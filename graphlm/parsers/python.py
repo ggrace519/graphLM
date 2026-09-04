@@ -18,6 +18,7 @@ from graphlm.parsers.base import (
     _backend,
     _field_nodes,
     _first_known_rooted,
+    _GrammarUnavailable,
     _module_to_path,
     _node_text,
     _ParsedImport,
@@ -311,6 +312,8 @@ def _parse_file_python(code: bytes, path: Path) -> ParsedFile:
     """
     try:
         tree = _backend.parse_source(code, PYTHON)
+    except _GrammarUnavailable:
+        raise
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", path, e)
         return ParsedFile()
@@ -337,6 +340,8 @@ def _parse_file_python(code: bytes, path: Path) -> ParsedFile:
 def _imports_from_source(code: bytes, path: Path) -> list[_ParsedImport]:
     try:
         tree = _backend.parse_source(code, PYTHON)
+    except _GrammarUnavailable:
+        raise
     except Exception as e:
         logger.warning("Tree-sitter parse failed for %s: %s", path, e)
         return []

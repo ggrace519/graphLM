@@ -402,12 +402,14 @@ class TestMissingGrammarDegrades:
         (pkg / "a.py").write_text("x = 1\n")
         (tmp_path / "main.py").write_text("from pkg.a import x\n")
         (tmp_path / "widget.fake").write_text("import whatever from './other'\n")
+        (tmp_path / "gadget.fake").write_text("import other from './else'\n")
 
         frags = [
             FileFragment("pkg/__init__.py", "", 1),
             FileFragment("pkg/a.py", "x = 1\n", 1),
             FileFragment("main.py", "from pkg.a import x\n", 1),
             FileFragment("widget.fake", "import whatever from './other'\n", 1),
+            FileFragment("gadget.fake", "import other from './else'\n", 1),
         ]
 
         # Python-only baseline (no .fake fragment).
@@ -422,15 +424,99 @@ class TestMissingGrammarDegrades:
         assert edges == python_only
         edge_set = {(e.from_path, e.to_path) for e in edges}
         assert ("main.py", "pkg/a.py") in edge_set
-        assert not any(e.from_path == "widget.fake" for e in edges)
+        assert not any(e.from_path.endswith(".fake") for e in edges)
 
-        # Exactly one warning line for the missing grammar (dedupe held).
+        # Exactly one warning line for the missing grammar (dedupe held) even
+        # though TWO fragments of that language were parsed — once-per-language,
+        # not once-per-file.
         grammar_warnings = [
             r
             for r in caplog.records
             if r.levelno == logging.WARNING and fake_lang in r.getMessage()
         ]
         assert len(grammar_warnings) == 1
+
+    def test_mixed_python_and_ts_missing_js_grammar_keeps_python_edges(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Never-escapes invariant with teeth: two .ts files + Python, JS
+        grammars uninstalled (or monkeypatched so). Python edges survive,
+        ``deterministic_edges`` is a list, one warning for typescript.
+        """
+        import logging
+
+        from graphlm.parsers import base as parser_base
+        from graphlm.scanner import FileFragment
+
+        missing = parser_base._GrammarSpec("tree_sitter_nonexistent_js", "language")
+        monkeypatch.setitem(parser_base._GRAMMARS, "javascript", missing)
+        monkeypatch.setitem(parser_base._GRAMMARS, "typescript", missing)
+        parser_base._backend._language_cache.clear()
+        monkeypatch.setattr(parser_base, "_WARNED_GRAMMARS", set())
+
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "a.py").write_text("x = 1\n")
+        (tmp_path / "main.py").write_text("from pkg.a import x\n")
+        (tmp_path / "app.ts").write_text('import { x } from "./util";\n')
+        (tmp_path / "util.ts").write_text("export const x = 1;\n")
+
+        python_frags = [
+            FileFragment("pkg/__init__.py", "", 1),
+            FileFragment("pkg/a.py", "x = 1\n", 1),
+            FileFragment("main.py", "from pkg.a import x\n", 1),
+        ]
+        ts_frags = [
+            FileFragment("app.ts", 'import { x } from "./util";\n', 1),
+            FileFragment("util.ts", "export const x = 1;\n", 1),
+        ]
+        python_only = build_dependency_graph(python_frags, project_dir=tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger=parser_base.logger.name):
+            edges = build_dependency_graph(
+                python_frags + ts_frags, project_dir=tmp_path
+            )
+
+        assert edges is not None
+        assert edges == python_only
+        assert ("main.py", "pkg/a.py") in {(e.from_path, e.to_path) for e in edges}
+        assert not any(e.from_path.endswith(".ts") for e in edges)
+        ts_warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "typescript" in r.getMessage()
+        ]
+        assert len(ts_warnings) == 1
+
+
+class TestGrammarSpecSelection:
+    def test_tsx_uses_language_tsx_accessor(self):
+        from graphlm.parsers.base import _spec_for
+
+        assert _spec_for("typescript", ".tsx").accessor == "language_tsx"
+        assert _spec_for("typescript", ".TSX").accessor == "language_tsx"
+
+    def test_ts_uses_language_typescript_accessor(self):
+        from graphlm.parsers.base import _spec_for
+
+        assert _spec_for("typescript", ".ts").accessor == "language_typescript"
+        assert _spec_for("typescript", "").accessor == "language_typescript"
+
+    def test_javascript_ignores_suffix(self):
+        from graphlm.parsers.base import _spec_for
+
+        spec_js = _spec_for("javascript", ".js")
+        spec_jsx = _spec_for("javascript", ".jsx")
+        assert spec_js.accessor == spec_jsx.accessor == "language"
+        assert spec_js.pip_module == "tree_sitter_javascript"
+
+    def test_python_unchanged(self):
+        from graphlm.parsers.base import _spec_for
+
+        spec = _spec_for("python", ".py")
+        assert spec.pip_module == "tree_sitter_python"
+        assert spec.accessor == "language"
 
 
 class TestImportCycles:

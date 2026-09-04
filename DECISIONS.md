@@ -4,6 +4,73 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-004 — Python-core language packs: opt-in extras, bundled resolvers, relative-only JS/TS
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/javascript.py`, `pyproject.toml` extras `js`/`all`; Phase 1 of #42)
+
+### Context
+
+The scanner already ingested `.js`/`.ts`/`.jsx`/`.tsx` and packed them into the
+pass-2 prompt, but the Tree-sitter pass only extracted Python imports. The LLM
+was guessing JS/TS edges with no ground truth. A runtime plugin API was
+considered and rejected (locked-forever public contract, untrusted code). Putting
+every grammar in the base install would bloat a Python-only user's install.
+
+`(from_path, to_path, kind)` is the GRAPH_DIFF identity key (ADR-002 decision 3),
+so new `kind` values are a contract, not a comment.
+
+### Decisions
+
+1. **Python is the only core language.** Its grammar is a base dependency. Every
+   other language is an opt-in pip extra (`graphlm[js]`, later `java`/`rust`,
+   aggregated as `graphlm[all]`) whose extra only pulls the grammar *wheel*.
+   The resolver is graphlm-authored, in-tree, always registered. No plugin API.
+
+2. **A missing extra degrades that language to zero edges, never the run.**
+   `_GrammarUnavailable` is caught inside `build_dependency_graph` /
+   `parse_file`, logged once per language, and Python edges on a mixed repo
+   stay intact. `deterministic_edges` remains a list (not `None`) so the diff
+   does not read the run as `ast=False` (ADR-002 decision 5). Resolvers must
+   re-raise `_GrammarUnavailable` before a generic `except Exception`.
+
+3. **JS/TS v1 resolves relative specifiers only.** `./foo` / `../bar`, with
+   probe order `<spec>`, `<spec>.{ext}`, `<spec>/index.{ext}`. Extension order
+   follows the importer: a `.js` file prefers `.js/.jsx/.mjs/.cjs` then
+   `.ts/.tsx`; a `.ts` file prefers `.ts/.tsx` then the JS set. (A global
+   TS-first list would make `require("./b")` from `a.js` hit `b.ts` over
+   `b.js`.) Bare specifiers (`react`, `@scope/pkg`) and tsconfig
+   `paths`/`baseUrl` aliases are dropped. A dropped bare specifier marks the
+   language known-partial so the pass-2 edge table uses the non-exhaustive
+   framing even when it was not size-capped.
+
+4. **`kind` values for JS/TS:** `"import"` for `import` / `export … from` /
+   dynamic `import()`; `"require"` for `require()` and TypeScript
+   `import x = require(…)`. Changing a kind later is a diff-contract change.
+
+5. **Grammar selection is `(language, suffix)`.** `detect_language` maps both
+   `.ts` and `.tsx` to `"typescript"`, so a name-only registry cannot pick
+   `language_tsx()` vs `language_typescript()`. Cache key is
+   `(language, accessor)`. `.jsx` uses the javascript grammar (it handles JSX).
+
+6. **JS/TS `source_roots()` is grammar-free** and returns `("",)`. Relative
+   paths resolve from the importing file. This keeps a missing extra from
+   escaping into `generate_graph`'s `except Exception → deterministic_edges=None`.
+
+### Consequences
+
+- A TypeScript repo on a base install still gets an LLM map; the parser just
+  contributes no edges. Installing `[js]` turns those edges on with no other
+  config.
+- Under-resolving is load-bearing: a false edge in the do-not-contradict table
+  is worse than a missing one (#19). Aliases stay out of scope until a later
+  phase that can do them honestly.
+- Java/Rust packs copy this template (extra + in-tree resolver + degradation
+  tests with two fragments of the missing language). Do not start Phase 2
+  until this one is merged and green.
+
+---
+
 ## ADR-003 — Distribution: PyPI + GitHub Releases from one tag, no distro packages
 
 **Date:** 2026-08-30

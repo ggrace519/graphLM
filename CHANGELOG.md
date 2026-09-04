@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **JavaScript/TypeScript import edges via `graphlm[js]`.** Until now the scanner already packed `.js`/`.ts`/`.jsx`/`.tsx` files into the pass-2 prompt, but the Tree-sitter pass only extracted Python imports — so the model's claims about a TypeScript repo had no parser ground truth to check against. Installing the optional extra (`uv tool install 'graphlm[js]'`, or `graphlm[all]`) pulls the `tree-sitter-javascript` and `tree-sitter-typescript` wheels; graphlm then extracts `import` / `export … from` / `require()` / dynamic `import()` and resolves **relative** specifiers (`./foo`, `../bar`, including `index.*` barrels) against files that exist in the scan. Bare packages (`react`) are dropped, same rule as Python stdlib, and the pass-2 edge table is labelled *not exhaustive* so the model still infers them. The base install is unchanged: without the extra, a JS/TS repo yields zero parser edges and one log line per language, never a crash, and Python edges on a mixed repo stay intact. `.tsx` files use the TSX grammar (JSX in a `.ts` file is the wrong tree). `require()` edges use kind `require` so they stay distinct from ESM `import` in the graph-vs-graph diff.
+
 ### Infrastructure
 
 - `ci.yml` now sets an explicit read-only `permissions: contents: read` at the workflow level. Neither the test nor typecheck job writes anything (no releases, no PR comments, no checks API calls), so this is least-privilege, not a behavior change; addresses CodeQL's `actions/missing-workflow-permissions` finding.

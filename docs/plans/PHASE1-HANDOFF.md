@@ -1,6 +1,8 @@
 # Handoff: start Phase 1 (JavaScript / TypeScript pack)
 
 **Written:** 2026-08-31, end of the session that shipped Phase 0.
+**Status:** Implemented on `feat/js-ts-pack` (Phase 1 of #42). Keep as the
+rationale for the pack; do not re-run as a greenfield handoff.
 **Baseline:** `main` @ `e0024e6` (Phase 0 merged). Everything below assumes a
 fresh session starting from a clean, synced `main`.
 **Epic:** #42. **Plan of record:** `docs/plans/multi-language-implementation.md`

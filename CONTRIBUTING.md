@@ -106,12 +106,13 @@ If a change would relax one of these, say so explicitly in the PR and explain wh
 
 ## Adding language support
 
-The Tree-sitter parser (`graphlm/parser.py`) fully implements **Python** import
-resolution today; JS/TS are recognized by extension but return an empty parse.
-Adding a language means wiring its Tree-sitter grammar, an import-edge extractor,
-and edge resolution against the scanned file set — plus a fixture project under
-`tests/fixtures/` and tests. This is a great, well-scoped contribution; open an
-issue first so we can talk through the approach.
+Python is the only **core** language (grammar in the base install). JS/TS ship
+as the optional `graphlm[js]` extra (`graphlm/parsers/javascript.py`); a missing
+extra degrades to zero edges for that language, never a crash. Further languages
+follow the same pack model (see ADR-004 and `docs/plans/multi-language-implementation.md`).
+Adding a language means an in-tree resolver, a pip extra for the grammar wheel,
+a fixture under `tests/fixtures/`, and tests for both the enabled path and the
+grammar-absent degradation. Open an issue first so we can talk through the approach.
 
 ## Releasing (maintainers)
 
