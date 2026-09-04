@@ -132,7 +132,7 @@ _BINARY_EXTS = {
 
 # Source-code extensions that should NOT be excluded by name patterns
 # to avoid false positives (e.g. token.py, credentials.py).
-_SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp"}
+_SOURCE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx", ".hh", ".hxx"}
 
 
 class FileFragment:

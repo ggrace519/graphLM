@@ -56,7 +56,7 @@ uv run graphlm --version
 
 ## Language packs
 
-Python import edges ship in the base install. JavaScript/TypeScript, Java, Rust, and C# are **opt-in extras** that pull only the Tree-sitter grammar wheel; the resolver is in-tree. Without the extra, those files still go to the model but contribute no parser edges (one log line per language, never a crash). `graphlm[all]` installs every language pack; it does **not** include `mcp`.
+Python import edges ship in the base install. JavaScript/TypeScript, Java, Rust, C#, and C/C++ are **opt-in extras** that pull only the Tree-sitter grammar wheel; the resolver is in-tree. Without the extra, those files still go to the model but contribute no parser edges (one log line per language, never a crash). `graphlm[all]` installs every language pack; it does **not** include `mcp`.
 
 | Extra | Languages | What the parser resolves |
 |---|---|---|
@@ -65,10 +65,11 @@ Python import edges ship in the base install. JavaScript/TypeScript, Java, Rust,
 | `graphlm[java]` | Java | fully-qualified `import` against Maven/Gradle source roots; `import static` as kind `static`; package wildcards are dropped |
 | `graphlm[rust]` | Rust | `mod foo;` as an `include` edge; `use crate::` / `super::` / `self::` against the filesystem module tree (external crates dropped) |
 | `graphlm[csharp]` | C# | `using static` / type aliases to `Type.cs`; a namespace `using` only when exactly one scanned file lives in that namespace directory (multi-file namespaces dropped) |
+| `graphlm[cpp]` | C, C++ | quoted `#include "foo.h"` relative to the importer (angle-bracket system headers dropped) |
 | `graphlm[all]` | all of the above | |
 
 ```bash
-uv tool install 'graphlm[js]'         # or [java], [rust], [csharp], [all]
+uv tool install 'graphlm[js]'         # or [java], [rust], [csharp], [cpp], [all]
 uv tool install 'graphlm[mcp,all]'    # MCP server + every language pack
 ```
 
@@ -163,7 +164,7 @@ graphLM uses a **two-pass LLM strategy** to stay within context windows while st
 
 This keeps the first pass lightweight (~tree tokens) and ensures the second pass only includes files that matter.
 
-A Tree-sitter pass runs by default (Python imports always; JavaScript/TypeScript with `graphlm[js]`; Java with `graphlm[java]`; Rust with `graphlm[rust]`; C# with `graphlm[csharp]`). It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip. Without a language extra, those files are still sent to the model but contribute no parser edges.
+A Tree-sitter pass runs by default (Python imports always; JavaScript/TypeScript with `graphlm[js]`; Java with `graphlm[java]`; Rust with `graphlm[rust]`; C# with `graphlm[csharp]`; C/C++ with `graphlm[cpp]`). It does not replace the LLM: the two-pass analysis still runs, and AST edges are extra ground truth plus cycle detection. Pass `--no-ast` to skip. Without a language extra, those files are still sent to the model but contribute no parser edges.
 
 Big files are sent as **signature skeletons**, not heads. A file longer than `--max-file-chars` (default 4000) used to be cut at the cap, so the model saw the imports and the first class of a large module and guessed the rest. Now a Python file over the cap is rendered with Tree-sitter as its API surface — every import, every class/def signature (decorators and multi-line headers intact), the first line of each docstring, short constants — with bodies elided to `...`. That is exact where the head was partial, and usually smaller. The skeleton starts with a `# [graphlm skeleton: …]` marker, and the pass-2 prompt tells the model to summarize the API from it rather than invent behaviour for the elided bodies. Secret redaction runs on the skeleton too. Python only for now (other languages still send the head); `--no-skeleton` restores head-truncation.
 
@@ -409,7 +410,8 @@ graphlm/
 │   ├── javascript.py     # graphlm[js]
 │   ├── java.py           # graphlm[java]
 │   ├── rust.py           # graphlm[rust]
-│   └── csharp.py         # graphlm[csharp]
+│   ├── csharp.py         # graphlm[csharp]
+│   └── cpp.py            # graphlm[cpp]
 ├── prompts.py            # System prompt (injection guard)
 ├── provenance.py         # Git SHA / timestamp / version capture for the stamp
 ├── query.py              # Map-query helpers used by --serve
@@ -420,7 +422,7 @@ graphlm/
 tests/
 ├── conftest.py
 ├── test_*.py
-└── fixtures/             # small, medium, large, cyclic, skeleton, ts, java, rust, csharp, ignore
+└── fixtures/             # small, medium, large, cyclic, skeleton, ts, java, rust, csharp, cpp, ignore
 ```
 
 ## Requirements

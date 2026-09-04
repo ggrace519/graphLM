@@ -9,7 +9,7 @@ dispatch, cycle detection) and each ``<lang>`` module registers a resolver.
 Python is the core language (always registered). JS/TS register from
 ``javascript`` (``graphlm[js]``); Java from ``java`` (``graphlm[java]``);
 Rust from ``rust`` (``graphlm[rust]``); C# from ``csharp``
-(``graphlm[csharp]``).
+(``graphlm[csharp]``); C/C++ from ``cpp`` (``graphlm[cpp]``).
 
 Importing this package eagerly loads the language modules so their resolvers are
 registered and ``build_dependency_graph`` / ``parse_file`` work immediately.
@@ -18,6 +18,8 @@ registered and ``build_dependency_graph`` / ``parse_file`` work immediately.
 from __future__ import annotations
 
 from graphlm.parsers.base import (
+    C,
+    CPP,
     CSHARP,
     EXT_TO_LANGUAGE,
     JAVA,
@@ -42,8 +44,11 @@ from graphlm.parsers import javascript as _javascript  # noqa: F401,E402
 from graphlm.parsers import java as _java  # noqa: F401,E402
 from graphlm.parsers import rust as _rust  # noqa: F401,E402
 from graphlm.parsers import csharp as _csharp  # noqa: F401,E402
+from graphlm.parsers import cpp as _cpp  # noqa: F401,E402
 
 __all__ = [
+    "C",
+    "CPP",
     "CSHARP",
     "EXT_TO_LANGUAGE",
     "JAVA",

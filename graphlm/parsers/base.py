@@ -34,8 +34,12 @@ TYPESCRIPT = "typescript"
 JAVA = "java"
 RUST = "rust"
 CSHARP = "csharp"
+C = "c"
+CPP = "cpp"
 
-SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST, CSHARP}
+SUPPORTED_LANGUAGES = {
+    PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA, RUST, CSHARP, C, CPP,
+}
 
 # Mapping from file extension to language name
 EXT_TO_LANGUAGE: dict[str, str] = {
@@ -47,6 +51,14 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".java": JAVA,
     ".rs": RUST,
     ".cs": CSHARP,
+    ".c": C,
+    ".h": C,
+    ".cpp": CPP,
+    ".cc": CPP,
+    ".cxx": CPP,
+    ".hpp": CPP,
+    ".hh": CPP,
+    ".hxx": CPP,
 }
 
 
@@ -98,6 +110,8 @@ _GRAMMARS: dict[str, _GrammarEntry] = {
     "java": _GrammarSpec("tree_sitter_java", "language"),
     "rust": _GrammarSpec("tree_sitter_rust", "language"),
     "csharp": _GrammarSpec("tree_sitter_c_sharp", "language"),
+    "c": _GrammarSpec("tree_sitter_c", "language"),
+    "cpp": _GrammarSpec("tree_sitter_cpp", "language"),
 }
 
 
@@ -331,6 +345,7 @@ def _ensure_resolvers() -> None:
     from graphlm.parsers import java as _java  # noqa: F401
     from graphlm.parsers import rust as _rust  # noqa: F401
     from graphlm.parsers import csharp as _csharp  # noqa: F401
+    from graphlm.parsers import cpp as _cpp  # noqa: F401
 
     _resolvers_loaded = True
 

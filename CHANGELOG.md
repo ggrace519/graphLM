@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning.
 ### Added
 
 - **`.graphlmignore`** — a project-level ignore file (gitignore-lite: one glob per line, `#` comments, blanks skipped) read from the scanned project root and merged into the scanner's exclude set, so a repo can record "always skip this worktree / cache / generated tree" instead of passing `--exclude` on every run. `--no-graphlmignore` opts out. The file itself is never sent to the model. Absent file is a no-op (#38).
+- **C/C++ `#include` edges via `graphlm[cpp]`.** Quoted `#include "foo.h"` resolves relative to the importing file (with an extension probe). Angle-bracket system headers (`#include <stdio.h>`) are dropped as third-party; macro includes (`#include FOO`) mark the list not exhaustive. One extra pulls both `tree-sitter-c` and `tree-sitter-cpp` (``.c``/``.h`` vs ``.cpp``/``.hpp``/…). `kind` is `include`. Without the extra: zero C/C++ edges, one log line per language, never a crash.
 - **C# import edges via `graphlm[csharp]`.** `using static Ns.Type` / `using Alias = Ns.Type` resolve to `Ns/Type.cs`. A namespace `using Ns;` resolves only when exactly one scanned file lives in that namespace directory — two or more files are dropped (same GRAPH_DIFF fan-out reason as Java wildcards) and mark the list not exhaustive. `using System;` and other misses are third-party, not partial. Without the extra: zero C# edges, one log line, never a crash.
 
 ## [0.3.0] - 2026-09-04
