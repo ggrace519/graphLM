@@ -14,9 +14,9 @@ Only edges the parser could have seen are scored on the LLM side:
 * both endpoints must share an extension the AST actually produced edges
   for (``.py`` is always eligible — it is the core language; ``.js`` /
   ``.jsx`` / ``.ts`` / ``.tsx`` join in when the ``[js]`` pack emitted any
-  of those edges). A correct LLM edge between two ``.ts`` files is therefore
-  *not* a false positive on a JS-only run with the extra absent, and *is*
-  scored once the pack is installed; and
+  of those edges; ``.cs`` when ``[csharp]`` did). A correct LLM edge between
+  two ``.ts`` files is therefore *not* a false positive on a JS-only run
+  with the extra absent, and *is* scored once the pack is installed; and
 * ``kind`` must be ``import``, ``from``, ``require``, ``static``, or
   ``include`` — the model's ``register`` / ``uses`` kinds describe
   relationships the parser never claims.

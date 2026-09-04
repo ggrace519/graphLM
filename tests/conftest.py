@@ -52,6 +52,12 @@ def rust_project() -> Path:
 
 
 @pytest.fixture(scope="session")
+def csharp_project() -> Path:
+    """Path to the C# fixture project (C# pack)."""
+    return FIXTURES_DIR / "csharp_project"
+
+
+@pytest.fixture(scope="session")
 def ignore_project() -> Path:
     """Path to the ``.graphlmignore`` fixture project (#38)."""
     return FIXTURES_DIR / "ignore_project"

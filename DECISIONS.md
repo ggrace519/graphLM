@@ -4,6 +4,46 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-007 — C# pack: unique-file namespace usings, no fan-out
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/parsers/csharp.py`, extra `csharp`)
+
+### Context
+
+C# is the next GitHub-Octoverse language after the shipped packs (TypeScript,
+Python, JavaScript, Java, then C#). `using MyApp.Models;` names a *namespace*,
+not a file. Fanning it out to every `.cs` in that namespace would mutate every
+importer's edge set when a file is added — the same GRAPH_DIFF churn that
+made Java package wildcards a policy drop (ADR-005). `using static Type` and
+`using Alias = Type` do name a type.
+
+### Decisions
+
+1. **`using static Ns.Type` and `using Alias = Ns.Type` resolve to a file.**
+   Probe `Ns/Type.cs` then `Ns.cs` (nested type) under grammar-free `src/`
+   roots plus `""`. `kind` is `"static"` for `using static`, `"import"`
+   otherwise. `(from,to,kind)` remains the diff identity.
+
+2. **A namespace `using Ns;` / `global using Ns;` resolves only when exactly
+   one scanned `.cs` lives in the `Ns/` directory (or `Ns.cs` itself).** Two
+   or more files in that directory are a policy drop and mark the language
+   known-partial. Zero files is third-party / stdlib (`using System;`) and
+   is *not* partial.
+
+3. **No namespace→every-file fan-out.** A missing intra-project edge is
+   preferred to a false or churny one (#19).
+
+### Consequences
+
+- A C# repo on a base install still gets an LLM map; parser edges appear
+  after `graphlm[csharp]`.
+- Small one-file-per-namespace projects get real edges. Folders with several
+  types under one namespace trip the non-exhaustive framing; the model still
+  infers them.
+
+---
+
 ## ADR-006 — Rust pack: `mod` include + `use crate/super/self` against a filesystem module tree
 
 **Date:** 2026-09-04
