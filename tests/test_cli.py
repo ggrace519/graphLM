@@ -60,6 +60,20 @@ class TestCLI:
         result = runner.invoke(app, ["--help"])
         assert "--serve" in _plain(result.stdout)
 
+    def test_upgrade_flag_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert "--upgrade" in _plain(result.stdout)
+
+    def test_upgrade_without_project_dir(self, monkeypatch):
+        monkeypatch.setattr("graphlm.upgrade.run_upgrade", lambda **k: 0)
+        result = runner.invoke(app, ["--upgrade"])
+        assert result.exit_code == 0, result.stdout + result.stderr
+
+    def test_upgrade_failure_exit_code(self, monkeypatch):
+        monkeypatch.setattr("graphlm.upgrade.run_upgrade", lambda **k: 2)
+        result = runner.invoke(app, ["--upgrade"])
+        assert result.exit_code == 2
+
     def test_serve_without_map_exits_2_before_needing_mcp(self, tmp_path, monkeypatch):
         # The map check runs first, so a user without the extra still gets the
         # actionable message (run graphlm) rather than an install hint.

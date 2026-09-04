@@ -1,0 +1,277 @@
+"""Upgrade this graphlm install to the latest PyPI release.
+
+``graphlm --upgrade`` (a flag, not a subcommand — ADR-003) detects whether the
+running binary came from ``uv tool``, pipx, or pip, preserves extras (mcp +
+language packs), and shells out to that installer. A source checkout is
+refused: there is no PyPI install to bump.
+
+This module never uses a shell. The installer argv is a fixed list.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+# Language extras that ``graphlm[all]`` aggregates. ``mcp`` is separate.
+_LANG_EXTRAS = ("js", "java", "rust", "csharp", "cpp", "go", "php")
+_EXTRA_MODULES = {
+    "mcp": "mcp",
+    "js": "tree_sitter_javascript",
+    "java": "tree_sitter_java",
+    "rust": "tree_sitter_rust",
+    "csharp": "tree_sitter_c_sharp",
+    "cpp": "tree_sitter_c",
+    "go": "tree_sitter_go",
+    "php": "tree_sitter_php",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class UpgradePlan:
+    """What ``--upgrade`` will run. ``argv`` is empty for a source checkout."""
+
+    installer: str  # "uv-tool" | "pipx" | "pip" | "source"
+    extras: tuple[str, ...]
+    argv: tuple[str, ...]
+    current_version: str
+    message: str
+
+
+def _posix(path: Path) -> str:
+    return path.as_posix()
+
+
+def _uv_tools_root() -> Path:
+    env = os.environ.get("UV_TOOL_DIR")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "uv" / "tools"
+    return Path.home() / ".local" / "share" / "uv" / "tools"
+
+
+def _pipx_venvs_root() -> Path:
+    env = os.environ.get("PIPX_HOME")
+    if env:
+        return Path(env) / "venvs"
+    return Path.home() / ".local" / "pipx" / "venvs"
+
+
+def detect_installer(executable: Path) -> str:
+    """Classify the running interpreter as uv-tool, pipx, pip, or source."""
+    exe = executable.resolve()
+    posix = _posix(exe)
+    try:
+        exe.relative_to(_uv_tools_root().resolve() / "graphlm")
+        return "uv-tool"
+    except ValueError:
+        pass
+    if "/uv/tools/graphlm/" in posix or posix.endswith("/uv/tools/graphlm"):
+        return "uv-tool"
+    try:
+        exe.relative_to(_pipx_venvs_root().resolve() / "graphlm")
+        return "pipx"
+    except ValueError:
+        pass
+    if "/pipx/venvs/graphlm/" in posix:
+        return "pipx"
+    # Installed into a venv/site-packages vs an editable source tree.
+    try:
+        import graphlm as pkg
+    except ImportError:
+        return "pip"
+    pkg_path = Path(pkg.__file__).resolve().as_posix()
+    if "site-packages" in pkg_path or "dist-packages" in pkg_path:
+        return "pip"
+    return "source"
+
+
+def _extras_from_uv_receipt(receipt: Path) -> tuple[str, ...] | None:
+    try:
+        data = tomllib.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    for req in data.get("tool", {}).get("requirements", []):
+        if req.get("name") == "graphlm":
+            extras = req.get("extras") or []
+            return tuple(str(e) for e in extras)
+    return None
+
+
+def _extras_from_pipx_metadata(meta: Path) -> tuple[str, ...] | None:
+    import json
+
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    main = data.get("main_package") or {}
+    extras = main.get("extras")
+    if extras:
+        return tuple(str(e) for e in extras)
+    spec = str(main.get("package_or_url") or "")
+    if "[" in spec and "]" in spec:
+        inner = spec[spec.index("[") + 1 : spec.index("]")]
+        return tuple(p.strip() for p in inner.split(",") if p.strip())
+    return None
+
+
+def _probe_extras() -> tuple[str, ...]:
+    found: list[str] = []
+    for extra, module in _EXTRA_MODULES.items():
+        if importlib.util.find_spec(module) is not None:
+            found.append(extra)
+    return _collapse_extras(tuple(found))
+
+
+def _collapse_extras(extras: tuple[str, ...]) -> tuple[str, ...]:
+    """Prefer ``all`` over listing every language extra; keep ``mcp`` separate."""
+    have = set(extras)
+    if "all" in have or have.issuperset(_LANG_EXTRAS):
+        have -= set(_LANG_EXTRAS)
+        have.add("all")
+    order = ("mcp", "all", *_LANG_EXTRAS)
+    return tuple(e for e in order if e in have)
+
+
+def installed_extras(
+    *,
+    installer: str,
+    uv_tools_root: Path | None = None,
+    pipx_venvs_root: Path | None = None,
+) -> tuple[str, ...]:
+    """Extras this install was created with. Receipt first, then import probes."""
+    if installer == "uv-tool":
+        root = uv_tools_root if uv_tools_root is not None else _uv_tools_root()
+        from_receipt = _extras_from_uv_receipt(root / "graphlm" / "uv-receipt.toml")
+        if from_receipt is not None:
+            return _collapse_extras(from_receipt)
+    if installer == "pipx":
+        root = pipx_venvs_root if pipx_venvs_root is not None else _pipx_venvs_root()
+        from_meta = _extras_from_pipx_metadata(
+            root / "graphlm" / "pipx_metadata.json"
+        )
+        if from_meta is not None:
+            return _collapse_extras(from_meta)
+    return _probe_extras()
+
+
+def _spec(extras: tuple[str, ...]) -> str:
+    if not extras:
+        return "graphlm"
+    return "graphlm[" + ",".join(extras) + "]"
+
+
+def _current_version() -> str:
+    from graphlm.provenance import graphlm_version
+
+    return graphlm_version() or "unknown"
+
+
+def make_plan(
+    *,
+    executable: Path | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+    uv_tools_root: Path | None = None,
+    pipx_venvs_root: Path | None = None,
+) -> UpgradePlan:
+    """Build the installer argv. Never shells out."""
+    exe = Path(executable) if executable is not None else Path(sys.executable)
+    installer = detect_installer(exe)
+    version = _current_version()
+    extras = () if installer == "source" else installed_extras(
+        installer=installer,
+        uv_tools_root=uv_tools_root,
+        pipx_venvs_root=pipx_venvs_root,
+    )
+    spec = _spec(extras)
+
+    if installer == "source":
+        return UpgradePlan(
+            installer=installer,
+            extras=extras,
+            argv=(),
+            current_version=version,
+            message=(
+                "This graphlm is a source checkout, not a PyPI install. "
+                "Pull and `uv sync`, or install a release with "
+                "`uv tool install --upgrade 'graphlm[all]'`."
+            ),
+        )
+    if installer == "uv-tool":
+        uv = which("uv")
+        if uv is None:
+            return UpgradePlan(
+                installer=installer,
+                extras=extras,
+                argv=(),
+                current_version=version,
+                message=(
+                    "graphlm looks like a uv-tool install, but `uv` is not on "
+                    f"PATH. Install uv, then run: uv tool upgrade graphlm"
+                ),
+            )
+        # uv retains extras from the tool receipt (docs: "retain the settings
+        # provided when installing"). `uv tool upgrade graphlm` is enough.
+        return UpgradePlan(
+            installer=installer,
+            extras=extras,
+            argv=(uv, "tool", "upgrade", "graphlm"),
+            current_version=version,
+            message=f"Upgrading graphlm {version} via uv tool (keeps extras: {spec}).",
+        )
+    if installer == "pipx":
+        pipx = which("pipx")
+        if pipx is None:
+            return UpgradePlan(
+                installer=installer,
+                extras=extras,
+                argv=(),
+                current_version=version,
+                message=(
+                    "graphlm looks like a pipx install, but `pipx` is not on "
+                    "PATH. Install pipx, then run: pipx upgrade graphlm"
+                ),
+            )
+        return UpgradePlan(
+            installer=installer,
+            extras=extras,
+            argv=(pipx, "upgrade", "graphlm"),
+            current_version=version,
+            message=f"Upgrading graphlm {version} via pipx (keeps extras: {spec}).",
+        )
+    # pip / venv: extras must be restated on the spec.
+    return UpgradePlan(
+        installer="pip",
+        extras=extras,
+        argv=(str(exe), "-m", "pip", "install", "--upgrade", spec),
+        current_version=version,
+        message=f"Upgrading graphlm {version} via pip ({spec}).",
+    )
+
+
+def run_upgrade(
+    *,
+    executable: Path | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    echo: Callable[[str], None] | None = None,
+) -> int:
+    """Print the plan and run it. Returns the installer exit code (2 if refused)."""
+    _echo = echo or (lambda s: print(s, file=sys.stderr))
+    plan = make_plan(executable=executable, which=which)
+    _echo(plan.message)
+    if not plan.argv:
+        return 2
+    _echo("+ " + " ".join(plan.argv))
+    result = runner(list(plan.argv))
+    return int(result.returncode)

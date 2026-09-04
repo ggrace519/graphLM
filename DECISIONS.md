@@ -4,6 +4,40 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-012 — `graphlm --upgrade` is a flag, not a subcommand
+
+**Date:** 2026-09-04
+**Status:** Accepted — implemented (`graphlm/upgrade.py`, `--upgrade` on the CLI)
+
+### Context
+
+Users install graphlm with `uv tool install`, pipx, or pip, often with extras
+(`graphlm[all]`, `graphlm[mcp]`). Asking them to remember the original installer
+and extra set to get a new release is friction. A `graphlm upgrade` *subcommand*
+would flip the Typer app into subcommand mode and break `graphlm <project>`
+(ADR-003).
+
+### Decisions
+
+1. **`--upgrade` flag**, same shape as `--serve` / `--install-skill`. No
+   `PROJECT_DIR`. Not eager (so `--help` still lists it).
+2. **Detect the installer from the running interpreter** (`uv/tools/graphlm`,
+   `pipx/venvs/graphlm`, site-packages, else source). uv-tool and pipx keep
+   extras via their own upgrade (`uv tool upgrade graphlm` / `pipx upgrade
+   graphlm`). pip restates extras on the spec. A source checkout is refused
+   (tell the user to pull/`uv sync`, or `uv tool install`).
+3. **No shell.** Argv list only. Extras from the uv receipt / pipx metadata
+   when present, else by probing the optional extra modules.
+
+### Consequences
+
+- `graphlm --upgrade` on a `uv tool install 'graphlm[all]'` install becomes
+  `uv tool upgrade graphlm` and keeps `[all]`.
+- `graphlm upgrade` (no dashes) still means "analyze a directory named
+  `upgrade`".
+
+---
+
 ## ADR-011 — PHP pack: `use` FQN→file plus quoted require/include
 
 **Date:** 2026-09-04

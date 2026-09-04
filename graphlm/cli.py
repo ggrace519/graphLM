@@ -133,6 +133,13 @@ def main(
         callback=_version_callback,
         is_eager=True,
     ),
+    upgrade: bool = typer.Option(
+        False,
+        "--upgrade",
+        help="Upgrade this graphlm install to the latest PyPI release and exit. "
+        "Detects uv tool / pipx / pip and keeps extras (mcp, language packs). "
+        "A source checkout is refused.",
+    ),
     install_skill: str | None = typer.Option(
         None,
         "--install-skill",
@@ -290,6 +297,16 @@ def main(
     """
     from graphlm import generate_graph, GraphLLError
 
+    # --upgrade short-circuits: no LLM, no scan — bump the install and exit.
+    # Flag, not a subcommand, so `graphlm <project>` stays the primary interface
+    # (ADR-003). project_dir is unused.
+    if upgrade:
+        from graphlm.upgrade import run_upgrade
+
+        raise typer.Exit(
+            run_upgrade(echo=lambda s: typer.echo(s, err=True))
+        )
+
     # --install-skill short-circuits the analysis pipeline: drop the agent guide
     # and exit. It does not need (or use) an LLM, so it runs before any config.
     if install_skill is not None:
@@ -306,7 +323,7 @@ def main(
     if project_dir is None:
         typer.echo(
             "Error: missing PROJECT_DIR. Pass a directory to analyze, or use "
-            "--install-skill <harness> / --serve. See 'graphlm --help'.",
+            "--install-skill <harness> / --serve / --upgrade. See 'graphlm --help'.",
             err=True,
         )
         raise typer.Exit(2)
