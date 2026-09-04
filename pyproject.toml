@@ -47,8 +47,12 @@ js = [
     "tree-sitter-javascript>=0.25,<0.26",
     "tree-sitter-typescript>=0.23,<0.24",
 ]
-# Every language pack. Grows as Java/Rust land; does not include `mcp`.
-all = ["graphlm[js]"]
+# Java Tree-sitter grammar. Resolver in `graphlm/parsers/java.py`. Same
+# degradation contract as [js]: missing extra → zero Java edges, one log
+# line, Python/JS edges intact.
+java = ["tree-sitter-java>=0.23,<0.24"]
+# Every language pack. Grows as Rust lands; does not include `mcp`.
+all = ["graphlm[js]", "graphlm[java]"]
 
 [project.urls]
 Homepage = "https://github.com/ggrace519/graphLM"

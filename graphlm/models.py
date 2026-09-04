@@ -15,7 +15,8 @@ class ImportEdge(BaseModel):
     to_path: str = Field(description="Target file path (relative to project root)")
     kind: str = Field(
         description=(
-            "Type of edge: 'import', 'from', 'require', 'register', 'include', or 'uses'"
+            "Type of edge: 'import', 'from', 'require', 'static', 'register', "
+            "'include', or 'uses'"
         )
     )
 

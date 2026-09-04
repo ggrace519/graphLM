@@ -5,12 +5,12 @@ instance, the ``ParsedFile`` / ``_ParsedImport`` data carriers, the grammar
 registry (``_GRAMMARS``), the resolver registry (``_RESOLVERS``), the
 group-by-language dispatch in ``build_dependency_graph`` / ``parse_file``, and
 the cycle detector. Language-specific extraction/resolution lives in per-language
-modules (``graphlm.parsers.python``, ``graphlm.parsers.javascript``), which
-register themselves through the resolver registry (see ``_ensure_resolvers``).
-Python is the only core language (grammar in the base install). JS/TS ship as
-the ``graphlm[js]`` extra: the resolver is always registered, the grammar
-wheels are optional, and a missing extra degrades to zero edges for that
-language.
+modules (``graphlm.parsers.python``, ``graphlm.parsers.javascript``,
+``graphlm.parsers.java``), which register themselves through the resolver
+registry (see ``_ensure_resolvers``). Python is the only core language (grammar
+in the base install). JS/TS and Java ship as ``graphlm[js]`` / ``graphlm[java]``
+extras: resolvers are always registered, grammar wheels are optional, and a
+missing extra degrades to zero edges for that language.
 """
 
 from __future__ import annotations
@@ -30,8 +30,9 @@ logger = logging.getLogger(__name__)
 PYTHON = "python"
 JAVASCRIPT = "javascript"
 TYPESCRIPT = "typescript"
+JAVA = "java"
 
-SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT}
+SUPPORTED_LANGUAGES = {PYTHON, JAVASCRIPT, TYPESCRIPT, JAVA}
 
 # Mapping from file extension to language name
 EXT_TO_LANGUAGE: dict[str, str] = {
@@ -40,6 +41,7 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     ".ts": TYPESCRIPT,
     ".jsx": JAVASCRIPT,
     ".tsx": TYPESCRIPT,
+    ".java": JAVA,
 }
 
 
@@ -88,6 +90,7 @@ _GRAMMARS: dict[str, _GrammarEntry] = {
         "tree_sitter_typescript",
         "language_tsx" if suffix.lower() == ".tsx" else "language_typescript",
     ),
+    "java": _GrammarSpec("tree_sitter_java", "language"),
 }
 
 
@@ -203,6 +206,8 @@ def _module_to_path(module_str: str, language: str) -> str:
         return "/".join(parts) + ".py"
     if language in (JAVASCRIPT, TYPESCRIPT):
         return "/".join(parts)
+    if language == JAVA:
+        return "/".join(parts) + ".java"
     return ""
 
 
@@ -314,6 +319,7 @@ def _ensure_resolvers() -> None:
         return
     from graphlm.parsers import python as _python  # noqa: F401
     from graphlm.parsers import javascript as _javascript  # noqa: F401
+    from graphlm.parsers import java as _java  # noqa: F401
 
     _resolvers_loaded = True
 

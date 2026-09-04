@@ -46,10 +46,11 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
-  # Default `test` job above runs without `[js]`, so the grammar-absent
-  # degradation path is what CI exercises on every PR. This job installs the
-  # extra and runs the enabled-path JS/TS tests (they skip without it).
-  test-js:
+  # Default `test` job above runs without language extras, so the
+  # grammar-absent degradation path is what CI exercises on every PR. This
+  # job installs every language pack (`graphlm[all]`) plus mcp and runs the
+  # enabled-path JS/TS/Java tests (they skip without their extra).
+  test-packs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,8 +63,8 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Install dependencies (js extra)
-        run: uv sync --group dev --extra mcp --extra js
+      - name: Install dependencies (language packs + mcp)
+        run: uv sync --group dev --extra mcp --extra all
 
       - name: Run tests
         run: uv run pytest -q
