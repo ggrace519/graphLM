@@ -21,7 +21,7 @@ class TestSettings:
         monkeypatch.setenv("GRAPHLM_API_KEY", "key")
         monkeypatch.setenv("GRAPHLM_MODEL", "model")
         monkeypatch.delenv("GRAPHLM_BASE_URL", raising=False)
-        with pytest.raises(ValueError, match="GRAPHLM_BASE_URL"):
+        with pytest.raises(ValueError, match=r"GRAPHLM_BASE_URL.*~/.config/graphlm/.env"):
             Settings.from_env()
 
     def test_from_env_missing_api_key(self, monkeypatch):
@@ -88,11 +88,10 @@ class TestSettings:
         assert Settings.from_env().max_output_tokens == 48000
 
 
-# A dedicated key that no .env in this repo (or any ancestor) defines, so the
-# loader tests can't collide with the repo's real .env — and because
-# load_dotenv mutates os.environ directly (monkeypatch cannot roll back a
-# delenv of a var that was absent), a dedicated key also keeps any value the
-# loader sets from leaking into other tests.
+# A dedicated key the user-config file never shares with real GRAPHLM_*
+# settings. load_dotenv mutates os.environ directly (monkeypatch cannot roll
+# back a delenv of a var that was absent), so a probe key also keeps any
+# value the loader sets from leaking into other tests.
 _PROBE = "GRAPHLM_USER_CONFIG_PROBE"
 
 
@@ -115,8 +114,6 @@ class TestUserConfigPath:
 
 class TestLoadEnvFiles:
     def test_user_config_supplies_value_when_unset(self, monkeypatch, tmp_path):
-        # No project .env on the path (chdir to an empty tmp dir); usecwd=True
-        # means the project search starts from cwd, so nothing is found there.
         monkeypatch.chdir(tmp_path)
         cfgdir = tmp_path / "xdg" / "graphlm"
         cfgdir.mkdir(parents=True)
@@ -142,26 +139,36 @@ class TestLoadEnvFiles:
 
         assert os.environ.get(_PROBE) == "from-shell"
 
-    def test_project_env_found_from_cwd_not_package_dir(self, monkeypatch, tmp_path):
-        # Regression guard for the #45 second facet: the project .env must be
-        # located from the working directory upward (usecwd=True), NOT from
-        # graphlm's own install directory. Write a .env into cwd and assert it
-        # is picked up. No user config present here.
+    def test_cwd_env_is_ignored(self, monkeypatch, tmp_path):
+        # ADR-009: a .env in the working directory is not graphlm config.
         monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text(f"{_PROBE}=from-project-env\n")
+        (tmp_path / ".env").write_text(f"{_PROBE}=from-cwd-env\n")
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-such-xdg"))
         monkeypatch.delenv(_PROBE, raising=False)
 
         _load_env_files()
 
-        assert os.environ.get(_PROBE) == "from-project-env"
+        assert os.environ.get(_PROBE) is None
 
-    def test_project_env_wins_over_user_config(self, monkeypatch, tmp_path):
-        # Pins the load ORDER: the project .env loads first, so with
-        # override=False the user config cannot replace it. Swapping the two
-        # load_dotenv calls in _load_env_files() must fail this test.
+    def test_parent_env_is_ignored(self, monkeypatch, tmp_path):
+        # find_dotenv(usecwd=True) used to walk ancestors; a parent .env
+        # must stay ignored even if cwd has none of its own.
+        parent = tmp_path / "repo"
+        cwd = parent / "subdir"
+        cwd.mkdir(parents=True)
+        (parent / ".env").write_text(f"{_PROBE}=from-parent-env\n")
+        monkeypatch.chdir(cwd)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-such-xdg"))
+        monkeypatch.delenv(_PROBE, raising=False)
+
+        _load_env_files()
+
+        assert os.environ.get(_PROBE) is None
+
+    def test_cwd_env_does_not_override_user_config(self, monkeypatch, tmp_path):
+        # A scanned project's .env must not shadow ~/.config/graphlm/.env.
         monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text(f"{_PROBE}=from-project-env\n")
+        (tmp_path / ".env").write_text(f"{_PROBE}=from-cwd-env\n")
         cfgdir = tmp_path / "xdg" / "graphlm"
         cfgdir.mkdir(parents=True)
         (cfgdir / ".env").write_text(f"{_PROBE}=from-user-config\n")
@@ -170,12 +177,13 @@ class TestLoadEnvFiles:
 
         _load_env_files()
 
-        assert os.environ.get(_PROBE) == "from-project-env"
+        assert os.environ.get(_PROBE) == "from-user-config"
 
     def test_missing_user_config_is_clean_noop(self, monkeypatch, tmp_path):
-        # Point XDG at a dir with no graphlm/.env, and no project .env in cwd:
+        # Point XDG at a dir with no graphlm/.env, and a decoy .env in cwd:
         # loading must not raise and must not invent the probe var.
         monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(f"{_PROBE}=from-cwd-env\n")
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty-xdg"))
         monkeypatch.delenv(_PROBE, raising=False)
 

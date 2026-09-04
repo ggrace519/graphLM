@@ -85,7 +85,7 @@ export GRAPHLM_MODEL="your-model-name"
 graphlm ~/code/some-project        # writes the map into ~/code/some-project/.graphlm/
 ```
 
-Want to see what it *would* send the model without spending a token? Add `--dry-run` — it scans, parses the AST, and prints the context stats, no network call. See [Configuration](#configuration) for the full list of settings and a `.env` you can drop in a project.
+Want to see what it *would* send the model without spending a token? Add `--dry-run` — it scans, parses the AST, and prints the context stats, no network call. See [Configuration](#configuration) for the full list of settings and the user-level `~/.config/graphlm/.env`.
 
 ## Usage
 
@@ -318,18 +318,20 @@ keep the graph in the project it describes for the staleness check to work.
 
 ## Configuration
 
-graphLM reads its LLM settings from environment variables. Copy `.env.example` to `.env` and fill in **your** endpoint, key, and model — those three have no built-in defaults:
+graphLM reads its LLM settings from environment variables. Copy `.env.example` to `~/.config/graphlm/.env` and fill in **your** endpoint, key, and model — those three have no built-in defaults:
 
 ```bash
-cp .env.example .env
+mkdir -p ~/.config/graphlm
+cp .env.example ~/.config/graphlm/.env
 ```
 
 Settings are resolved in this order (first non-empty wins):
 
 1. **Exported shell environment** — `export GRAPHLM_BASE_URL=…` etc.
-2. **Project `.env`** — searched from the current working directory upward, so it works whether graphLM is run from a source checkout or `uv tool install`ed.
-3. **User-level `.env`** at `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`) — a global config for an installed graphLM, so you don't need a `.env` in every project.
-4. Built-in defaults for the numeric budgets and timeout only.
+2. **User-level `.env`** at `~/.config/graphlm/.env` (or `$XDG_CONFIG_HOME/graphlm/.env`).
+3. Built-in defaults for the numeric budgets and timeout only.
+
+A `.env` in the working directory or in the project being scanned is **not** read. graphLM's LLM config is yours, not the target repo's.
 
 | Variable | Description | Default |
 |---|---|---|

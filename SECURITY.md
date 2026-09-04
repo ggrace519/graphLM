@@ -72,6 +72,9 @@ and the defenses around that are the security-sensitive surface. In scope:
 
 graphLM never intentionally persists or transmits secrets beyond the single LLM
 request needed to build the map, and it tries hard *not* to read secret-bearing
-files at all. If you find a case where a secret is read, redaction is bypassed, or
-credentials are written somewhere unexpected, that's exactly the kind of report we
-want — please send it privately as above.
+files at all. LLM settings come only from the process environment and
+`~/.config/graphlm/.env` — a `.env` in the working directory or the scanned
+project is not loaded as graphlm's own configuration. If you find a case where a
+secret is read, redaction is bypassed, or credentials are written somewhere
+unexpected, that's exactly the kind of report we want — please send it privately
+as above.
