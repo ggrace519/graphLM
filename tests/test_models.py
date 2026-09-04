@@ -24,7 +24,7 @@ class TestImportEdge:
         assert edge.kind == "import"
 
     def test_all_kind_values(self):
-        for kind in ("import", "from", "register", "include", "uses"):
+        for kind in ("import", "from", "require", "register", "include", "uses"):
             edge = ImportEdge(from_path="a.py", to_path="b.py", kind=kind)
             assert edge.kind == kind
 

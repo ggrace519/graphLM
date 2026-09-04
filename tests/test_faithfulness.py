@@ -83,13 +83,35 @@ class TestScore:
         ast = [_e("a.py", "b.py")]
         llm = [
             _e("a.py", "b.py"),
-            _e("app.ts", "util.ts"),  # AST can't see TS today
+            _e("app.ts", "util.ts"),  # no TS edges in this AST run
             _e("a.py", "config.json"),  # one non-.py endpoint
         ]
         f = score(llm, ast)
         assert f is not None
         assert f.llm_edges == 1
         assert f.precision == 1.0
+
+    def test_ts_edges_comparable_when_ast_emitted_ts(self):
+        ast = [_e("app.ts", "util.ts"), _e("a.py", "b.py")]
+        llm = [
+            _e("app.ts", "util.ts"),
+            _e("app.ts", "missing.ts"),  # invented TS
+            _e("a.py", "b.py"),
+        ]
+        f = score(llm, ast)
+        assert f is not None
+        assert f.llm_edges == 3
+        assert f.matched == 2
+        assert f.precision == pytest.approx(2 / 3)
+
+    def test_require_kind_is_comparable(self):
+        ast = [_e("a.js", "b.js", kind="require")]
+        llm = [_e("a.js", "b.js", kind="require")]
+        f = score(llm, ast)
+        assert f is not None
+        assert f.matched == 1
+        assert f.precision == 1.0
+        assert f.recall == 1.0
 
     def test_path_normalisation(self):
         ast = [_e("pkg/a.py", "pkg/b.py")]

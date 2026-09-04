@@ -124,6 +124,49 @@ class TestRenderMarkdown:
         assert "No ORM used" in md
         assert "Vanilla HTML/CSS/JS" in md
 
+    def test_js_cycle_gets_benign_qualifier(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[
+                Cycle(
+                    nodes=["src/foo.ts", "src/bar.ts"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                )
+            ],
+        )
+        md = render_markdown(graph)
+        assert "often benign" in md
+        assert "JavaScript/TypeScript" in md
+
+    def test_python_cycle_has_no_js_qualifier(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[
+                Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+        )
+        md = render_markdown(graph)
+        assert "often benign" not in md
+
+    def test_mixed_cycle_mentions_both_languages(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[
+                Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0),
+                Cycle(
+                    nodes=["src/foo.ts", "src/bar.ts"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                ),
+            ],
+        )
+        md = render_markdown(graph)
+        assert "Python import cycle" in md
+        assert "JavaScript/TypeScript" in md
+
     def test_markdown_has_newline_terminator(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         md = render_markdown(graph)

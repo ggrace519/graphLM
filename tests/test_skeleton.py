@@ -278,8 +278,8 @@ class TestSkeletonFor:
         assert out == EXPECTED
 
     def test_non_python_language_returns_none(self):
-        # TypeScript is a recognized language with no resolver (and so no
-        # skeleton renderer): the scanner keeps head-truncation for it.
+        # TypeScript is a recognized language; its resolver has no skeleton
+        # renderer, so the scanner keeps head-truncation for it.
         assert skeleton_for(Path("app.ts"), b"export const a = 1;\n") is None
 
     def test_unknown_extension_returns_none(self):

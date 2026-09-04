@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
 
-# Neither job needs to write anything (no releases, no PR comments, no checks
+# No job needs to write anything (no releases, no PR comments, no checks
 # API calls) — read-only is the least privilege the checkout + test/typecheck
 # steps require. Addresses CodeQL actions/missing-workflow-permissions (#1, #2).
 permissions:
@@ -45,6 +45,28 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  # Default `test` job above runs without `[js]`, so the grammar-absent
+  # degradation path is what CI exercises on every PR. This job installs the
+  # extra and runs the enabled-path JS/TS tests (they skip without it).
+  test-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies (js extra)
+        run: uv sync --group dev --extra mcp --extra js
+
+      - name: Run tests
+        run: uv run pytest -q
 
   typecheck:
     runs-on: ubuntu-latest

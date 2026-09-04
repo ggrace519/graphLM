@@ -80,6 +80,45 @@ class TestPass2Prompt:
         assert "app/services.py" in prompt
         assert "ground truth" in prompt.lower()
 
+    def test_partial_edge_table_uses_non_exhaustive_framing(self):
+        edges = [
+            ImportEdge(from_path="src/a.ts", to_path="src/b.ts", kind="import"),
+        ]
+        prompt, _tokens, _truncated = assemble_pass2_prompt(
+            "root/", [], deterministic_edges=edges, edges_partial=True
+        )
+        assert "NOT exhaustive" in prompt
+        assert "relative specifiers" in prompt
+        assert "truncated to fit the context budget" not in prompt
+        # Complete-table wording must not be used for a known-partial list.
+        assert "do not contradict or omit these parser edges" not in prompt
+
+    def test_size_capped_and_partial_mentions_both_reasons(self):
+        from graphlm.context import MESSAGE_OVERHEAD_TOKENS
+
+        edges = [
+            ImportEdge(
+                from_path=f"src/mod{i}.ts", to_path=f"src/mod{j}.ts", kind="import"
+            )
+            for i in range(300)
+            for j in range(20)
+        ]
+        max_context = MESSAGE_OVERHEAD_TOKENS + 2000
+        prompt, _tokens, _truncated = assemble_pass2_prompt(
+            "proj/",
+            [],
+            max_context=max_context,
+            deterministic_edges=edges,
+            edges_partial=True,
+        )
+        assert "truncated to fit the context budget" in prompt
+        assert "relative specifiers" in prompt
+        assert "NOT exhaustive" in prompt
+
+    def test_instruction_block_lists_require_kind(self):
+        prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])
+        assert '"require"' in prompt
+
     def test_prompt_omits_deterministic_edges_when_absent(self):
         prompt, _tokens, _truncated = assemble_pass2_prompt("root/", [])
         assert "Deterministic import edges" not in prompt

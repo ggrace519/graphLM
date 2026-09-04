@@ -31,3 +31,9 @@ def large_project() -> Path:
 def fixtures_dir() -> Path:
     """Path to the fixtures directory."""
     return FIXTURES_DIR
+
+
+@pytest.fixture(scope="session")
+def ts_project() -> Path:
+    """Path to the TypeScript fixture project (JS/TS pack)."""
+    return FIXTURES_DIR / "ts_project"

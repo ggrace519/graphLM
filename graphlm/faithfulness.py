@@ -11,12 +11,15 @@ weight the LLM's edge table accordingly.
 
 Only edges the parser could have seen are scored on the LLM side:
 
-* both endpoints must be ``.py`` files — the AST covers Python only today
-  (JS/TS are recognized by extension but return no edges; see CLAUDE.md), so
-  a correct LLM edge between two ``.ts`` files would otherwise count as a
-  false positive; and
-* ``kind`` must be ``import`` or ``from`` — the model's ``register`` /
-  ``include`` / ``uses`` kinds describe relationships the parser never claims.
+* both endpoints must share an extension the AST actually produced edges
+  for (``.py`` is always eligible — it is the core language; ``.js`` /
+  ``.jsx`` / ``.ts`` / ``.tsx`` join in when the ``[js]`` pack emitted any
+  of those edges). A correct LLM edge between two ``.ts`` files is therefore
+  *not* a false positive on a JS-only run with the extra absent, and *is*
+  scored once the pack is installed; and
+* ``kind`` must be ``import``, ``from``, or ``require`` — the model's
+  ``register`` / ``include`` / ``uses`` kinds describe relationships the
+  parser never claims.
 
 Comparison is on ``(from_path, to_path)`` only; ``kind`` is ignored because
 the parser and the model don't always agree on ``import`` vs ``from`` for the
@@ -29,9 +32,10 @@ from collections.abc import Iterable
 
 from graphlm.models import Faithfulness, ImportEdge
 
-# LLM edge kinds that assert a plain module dependency — the only kind of edge
-# the AST parser emits, so the only kind it can confirm or deny.
-_COMPARABLE_KINDS = frozenset({"import", "from"})
+# LLM edge kinds that assert a plain module dependency — the kinds the AST
+# parser emits, so the only kinds it can confirm or deny.
+_COMPARABLE_KINDS = frozenset({"import", "from", "require"})
+_PY_EXT = ".py"
 
 
 def _norm(path: str) -> str:
@@ -51,12 +55,18 @@ def _pairs(edges: Iterable[ImportEdge]) -> set[tuple[str, str]]:
     return {(_norm(e.from_path), _norm(e.to_path)) for e in edges}
 
 
-def _comparable(edge: ImportEdge) -> bool:
+def _ext(path: str) -> str:
+    name = _norm(path)
+    i = name.rfind(".")
+    return name[i:].lower() if i != -1 else ""
+
+
+def _comparable(edge: ImportEdge, ast_exts: frozenset[str]) -> bool:
     """True if the AST could have produced this LLM edge (see module docstring)."""
     return (
         edge.kind in _COMPARABLE_KINDS
-        and _norm(edge.from_path).endswith(".py")
-        and _norm(edge.to_path).endswith(".py")
+        and _ext(edge.from_path) in ast_exts
+        and _ext(edge.to_path) in ast_exts
     )
 
 
@@ -78,7 +88,14 @@ def score(
     if ast_edges is None:
         return None
 
-    llm_pairs = _pairs(e for e in llm_edges if _comparable(e))
+    ast_exts = {_PY_EXT}
+    for edge in ast_edges:
+        ast_exts.add(_ext(edge.from_path))
+        ast_exts.add(_ext(edge.to_path))
+    ast_exts.discard("")
+    comparable_exts = frozenset(ast_exts)
+
+    llm_pairs = _pairs(e for e in llm_edges if _comparable(e, comparable_exts))
     ast_pairs = _pairs(ast_edges)
     matched = len(llm_pairs & ast_pairs)
 
