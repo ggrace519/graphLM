@@ -344,7 +344,7 @@ A `.env` in the working directory or in the project being scanned is **not** rea
 | `GRAPHLM_API_KEY` | API key for authentication | *(required)* |
 | `GRAPHLM_MODEL` | Model name the endpoint serves | *(required)* |
 | `GRAPHLM_MAX_CONTEXT` | Pass-2 **input** token budget (tree + files) | `120000` |
-| `GRAPHLM_MAX_OUTPUT_TOKENS` | Graph **output** token ceiling; independent of the input budget | `128000` |
+| `GRAPHLM_MAX_OUTPUT_TOKENS` | Per-pass **output** token ceiling; applies to both LLM calls and is independent of the input budget | `128000` |
 | `GRAPHLM_TIMEOUT` | LLM request timeout in seconds (pass 2 is streamed) | `300` |
 
 CLI flags (`-b`, `-k`, `-m`, `--max-context`, `--max-output-tokens`, `--timeout`) and the matching `generate_graph(...)` arguments override the env var.
@@ -375,7 +375,7 @@ Patterns are merged with the built-in exclude set and any `--exclude` flags (uni
 | `--no-skeleton` | Send the head of an oversized file instead of its Tree-sitter signature skeleton | Skeletons on |
 | `--max-pass2-files` | Max files in pass 2 context | 80 |
 | `--max-context` | Token budget for pass-2 context | `GRAPHLM_MAX_CONTEXT` env var, else 120000 |
-| `--max-output-tokens` | Graph output-token ceiling (independent of input) | `GRAPHLM_MAX_OUTPUT_TOKENS` env var, else 128000 |
+| `--max-output-tokens` | Per-pass output-token ceiling for both LLM calls (independent of input) | `GRAPHLM_MAX_OUTPUT_TOKENS` env var, else 128000 |
 | `--timeout` | LLM request timeout in seconds | `GRAPHLM_TIMEOUT` env var, else 300 |
 | `--no-tests` | Exclude test files | Tests included by default |
 | `--exclude` | Exclude pattern (repeatable) | — |

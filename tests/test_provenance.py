@@ -14,7 +14,8 @@ def _init_repo_with_commit(path: Path) -> str:
     subprocess.run(["git", "init", "-q", str(path)], check=True)
     subprocess.run(
         ["git", "-C", str(path), "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "init"],
+         "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m",
+         "init"],
         check=True,
     )
     out = subprocess.run(

@@ -167,13 +167,13 @@ def generate_graph(
             GRAPHLM_TIMEOUT env var, then to 300. An explicit value (the CLI
             --timeout flag) takes precedence. Pass 2 is streamed, so a large
             project's generation can legitimately take minutes (#18).
-        max_output_tokens: Max tokens the model may emit for the graph — the
-            `max_tokens` the client requests. A ceiling, not a reservation: it is
-            NOT taken out of the input budget (max_context), because input and
-            output ceilings are independent on the target endpoint (#25). If None,
-            falls back to GRAPHLM_MAX_OUTPUT_TOKENS env, then LLM_MAX_OUTPUT_TOKENS
-            (the model's practical max). Truncation past even this raises a clear
-            GraphLLErrorTruncated.
+        max_output_tokens: Max tokens the model may emit in either LLM pass —
+            the `max_tokens` each request sends. A ceiling, not a reservation:
+            it is NOT taken out of the input budget (max_context), because input
+            and output ceilings are independent on the target endpoint (#25).
+            If None, falls back to GRAPHLM_MAX_OUTPUT_TOKENS env, then
+            LLM_MAX_OUTPUT_TOKENS (the model's practical max). Truncation past
+            even this raises a clear GraphLLErrorTruncated.
         include_tests: Whether to include test files in the analysis.
         exclude_patterns: Additional glob patterns to exclude.
         use_graphlmignore: If True (default), merge patterns from a
@@ -218,11 +218,10 @@ def generate_graph(
 
         max_context = int(os.environ.get("GRAPHLM_MAX_CONTEXT", "120000"))
 
-    # Resolve the output-token reserve: explicit arg > GRAPHLM_MAX_OUTPUT_TOKENS
-    # env > LLM_MAX_OUTPUT_TOKENS default. Needed even in dry-run so the pass-2
-    # estimate reserves the same budget the real call would request. This value
-    # is passed to BOTH assemble_pass2_prompt (the input reserve) and call_llm
-    # (the max_tokens requested), keeping the two in lock-step (#17/#18).
+    # Resolve the output-token ceiling: explicit arg > GRAPHLM_MAX_OUTPUT_TOKENS
+    # env > LLM_MAX_OUTPUT_TOKENS default. One ceiling applies to both LLM passes
+    # so the documented override can also recover a large pass-1 file-selection
+    # response (#73). It remains independent of pass-2 input admission (#25).
     if max_output_tokens is None:
         import os
 
@@ -340,6 +339,7 @@ def generate_graph(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=pass1_prompt,
         timeout=resolved_timeout,
+        max_output_tokens=max_output_tokens,
         on_usage=lambda u: usage_seen.__setitem__("pass1", u),
     )
     pass1_result_json = cast(str, pass1_result_json)

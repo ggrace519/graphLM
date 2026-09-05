@@ -7,6 +7,11 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--max-output-tokens` now applies to pass 1 as well as pass 2.** Large directory trees could exhaust pass 1 at the hard-coded 128000-token default even when the CLI flag or `GRAPHLM_MAX_OUTPUT_TOKENS` raised the documented ceiling, so graph generation failed with an error recommending an override that the failing request ignored (#73).
+- **Provenance tests no longer inherit the developer's GPG-signing configuration.** Their disposable repository commits could fail or prompt when global `commit.gpgsign=true`; synthetic setup commits now disable signing locally while real project commits remain signed (#74).
+
 ## [0.4.1] - 2026-09-05
 
 This patch makes `graphlm --upgrade` use the same installer that put this binary on PATH (`uv tool` / `uv pip` / pip / pipx).

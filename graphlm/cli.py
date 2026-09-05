@@ -224,7 +224,7 @@ def main(
     max_output_tokens: int | None = typer.Option(
         None,
         "--max-output-tokens",
-        help="Max tokens the model may emit for the graph "
+        help="Max tokens the model may emit in each LLM pass "
         "(default: GRAPHLM_MAX_OUTPUT_TOKENS env var, else 128000). A ceiling, "
         "not a reservation — it is NOT taken out of the input budget "
         "(--max-context), since input and output ceilings are independent on "
