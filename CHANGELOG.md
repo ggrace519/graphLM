@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Infrastructure
+
+- **CI and release workflows now use current Node.js 24-based action majors.** GitHub was forcibly running the older checkout, artifact, and uv setup actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
+
 ## [0.4.2] - 2026-09-05
 
 ### Fixed
