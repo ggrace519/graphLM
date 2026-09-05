@@ -9,7 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Infrastructure
 
-- **CI and release workflows now use current Node.js 24-based action majors.** GitHub was forcibly running the older checkout, artifact, and uv setup actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
+- **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
+- **Parallel CI jobs now use distinct, reusable uv cache keys.** Matrix and specialist jobs previously raced to reserve the same cold-cache entry, producing failed-save annotations and duplicate upload work (#82).
 
 ## [0.4.2] - 2026-09-05
 
