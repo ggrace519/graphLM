@@ -517,7 +517,8 @@ class TestProvenanceStamp:
         )
         subprocess.run(
             ["git", "-C", str(repo), "-c", "user.email=t@t", "-c",
-             "user.name=t", "commit", "-q", "-m", "init"], check=True,
+             "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q",
+             "-m", "init"], check=True,
         )
         head = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
