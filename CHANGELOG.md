@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-05
+
+This patch makes `graphlm --upgrade` use the same installer that put this binary on PATH (`uv tool` / `uv pip` / pip / pipx).
+
 ### Fixed
 
 - **`graphlm --upgrade` uses the same installer that installed this binary.** A `uv tool install` is upgraded with `uv tool upgrade` (from `uv-receipt.toml`, without following the `bin/python` symlink out of the venv). A `uv pip install` is upgraded with `uv pip install --upgrade`. pip stays `python -m pip`. 0.4.0 followed `bin/python` into uv's managed CPython, classified a uv-tool install as pip, and failed with `No module named pip` (#71).
@@ -212,7 +216,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ggrace519/graphLM/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ggrace519/graphLM/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ggrace519/graphLM/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ggrace519/graphLM/compare/v0.2.0...v0.3.0
