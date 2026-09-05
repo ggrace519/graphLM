@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`graphlm --upgrade` uses the same installer that installed this binary.** A `uv tool install` is upgraded with `uv tool upgrade` (from `uv-receipt.toml`, without following the `bin/python` symlink out of the venv). A `uv pip install` is upgraded with `uv pip install --upgrade`. pip stays `python -m pip`. 0.4.0 followed `bin/python` into uv's managed CPython, classified a uv-tool install as pip, and failed with `No module named pip` (#71).
+
 ## [0.4.0] - 2026-09-04
 
 This release finishes the GitHub top-10 language packs (C#, C/C++, Go, PHP), adds a project `.graphlmignore` and `graphlm --upgrade`, and fixes the pass-2 edge table dropping on deep monorepos.

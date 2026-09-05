@@ -1,9 +1,10 @@
 """Upgrade this graphlm install to the latest PyPI release.
 
-``graphlm --upgrade`` (a flag, not a subcommand — ADR-003) detects whether the
-running binary came from ``uv tool``, pipx, or pip, preserves extras (mcp +
-language packs), and shells out to that installer. A source checkout is
-refused: there is no PyPI install to bump.
+``graphlm --upgrade`` (a flag, not a subcommand — ADR-003) upgrades with the
+**same installer that put this binary on PATH**: ``uv tool install`` →
+``uv tool upgrade``; ``uv pip install`` → ``uv pip install --upgrade``;
+pip → ``python -m pip install --upgrade``; pipx → ``pipx upgrade``. A source
+checkout is refused: there is no PyPI install to bump.
 
 This module never uses a shell. The installer argv is a fixed list.
 """
@@ -38,7 +39,7 @@ _EXTRA_MODULES = {
 class UpgradePlan:
     """What ``--upgrade`` will run. ``argv`` is empty for a source checkout."""
 
-    installer: str  # "uv-tool" | "pipx" | "pip" | "source"
+    installer: str  # "uv-tool" | "uv-pip" | "pipx" | "pip" | "source"
     extras: tuple[str, ...]
     argv: tuple[str, ...]
     current_version: str
@@ -47,6 +48,18 @@ class UpgradePlan:
 
 def _posix(path: Path) -> str:
     return path.as_posix()
+
+
+def _abs_no_follow(path: Path) -> Path:
+    """Absolute path with ``.`` / ``..`` collapsed, symlinks intact.
+
+    ``Path.resolve()`` follows ``bin/python`` out of a uv-tool (or pipx) venv
+    into the managed CPython, so installer detection must not use it (#71).
+    """
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    return Path(os.path.normpath(p))
 
 
 def _uv_tools_root() -> Path:
@@ -66,19 +79,68 @@ def _pipx_venvs_root() -> Path:
     return Path.home() / ".local" / "pipx" / "venvs"
 
 
-def detect_installer(executable: Path) -> str:
-    """Classify the running interpreter as uv-tool, pipx, pip, or source."""
-    exe = executable.resolve()
-    posix = _posix(exe)
+def _venv_root(executable: Path) -> Path:
+    """``…/venv/bin/python`` → ``…/venv``, without following the interpreter symlink."""
+    exe = _abs_no_follow(executable)
+    if exe.parent.name in {"bin", "Scripts"}:
+        return exe.parent.parent
+    return exe.parent
+
+
+def _is_running_interpreter(executable: Path) -> bool:
+    """True when ``executable`` is this process's interpreter (resolved or not)."""
+    exe = _abs_no_follow(executable)
+    running = _abs_no_follow(Path(sys.executable))
+    if exe == running:
+        return True
     try:
-        exe.relative_to(_uv_tools_root().resolve() / "graphlm")
+        return Path(executable).resolve() == Path(sys.executable).resolve()
+    except OSError:
+        return False
+
+
+def _dist_installer() -> str | None:
+    """PEP 376 ``INSTALLER`` of the running ``graphlm`` dist (``uv`` / ``pip`` / …)."""
+    try:
+        import importlib.metadata as metadata
+
+        raw = metadata.distribution("graphlm").read_text("INSTALLER")
+    except Exception:
+        return None
+    if not raw:
+        return None
+    name = raw.strip().lower()
+    return name or None
+
+
+def detect_installer(executable: Path) -> str:
+    """Classify how this graphlm was installed, so upgrade uses the same tool.
+
+    Identity first (uv-receipt / pipx metadata / dist-info INSTALLER), then
+    path layout. Never ``Path.resolve()`` the interpreter — uv-tool venvs
+    symlink ``bin/python`` at a managed CPython outside the venv (#71).
+    """
+    exe = _abs_no_follow(executable)
+    posix = _posix(exe)
+    roots = [_venv_root(exe)]
+    if _is_running_interpreter(exe):
+        prefix = _abs_no_follow(Path(sys.prefix))
+        if prefix not in roots:
+            roots.append(prefix)
+    for root in roots:
+        if (root / "uv-receipt.toml").is_file():
+            return "uv-tool"
+        if (root / "pipx_metadata.json").is_file():
+            return "pipx"
+    try:
+        exe.relative_to(_abs_no_follow(_uv_tools_root() / "graphlm"))
         return "uv-tool"
     except ValueError:
         pass
     if "/uv/tools/graphlm/" in posix or posix.endswith("/uv/tools/graphlm"):
         return "uv-tool"
     try:
-        exe.relative_to(_pipx_venvs_root().resolve() / "graphlm")
+        exe.relative_to(_abs_no_follow(_pipx_venvs_root() / "graphlm"))
         return "pipx"
     except ValueError:
         pass
@@ -90,9 +152,13 @@ def detect_installer(executable: Path) -> str:
     except ImportError:
         return "pip"
     pkg_path = Path(pkg.__file__).resolve().as_posix()
-    if "site-packages" in pkg_path or "dist-packages" in pkg_path:
-        return "pip"
-    return "source"
+    if "site-packages" not in pkg_path and "dist-packages" not in pkg_path:
+        return "source"
+    # ``uv pip install`` writes INSTALLER=uv but no tool receipt. Upgrade
+    # with uv, not ``python -m pip`` (uv venvs usually have no pip).
+    if _is_running_interpreter(exe) and _dist_installer() == "uv":
+        return "uv-pip"
+    return "pip"
 
 
 def _extras_from_uv_receipt(receipt: Path) -> tuple[str, ...] | None:
@@ -229,6 +295,35 @@ def make_plan(
             current_version=version,
             message=f"Upgrading graphlm {version} via uv tool (keeps extras: {spec}).",
         )
+    if installer == "uv-pip":
+        uv = which("uv")
+        if uv is None:
+            return UpgradePlan(
+                installer=installer,
+                extras=extras,
+                argv=(),
+                current_version=version,
+                message=(
+                    "graphlm was installed with uv, but `uv` is not on PATH. "
+                    "Install uv, then run: uv pip install --upgrade "
+                    + spec
+                ),
+            )
+        return UpgradePlan(
+            installer=installer,
+            extras=extras,
+            argv=(
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(_abs_no_follow(exe)),
+                "--upgrade",
+                spec,
+            ),
+            current_version=version,
+            message=f"Upgrading graphlm {version} via uv pip ({spec}).",
+        )
     if installer == "pipx":
         pipx = which("pipx")
         if pipx is None:
@@ -249,7 +344,22 @@ def make_plan(
             current_version=version,
             message=f"Upgrading graphlm {version} via pipx (keeps extras: {spec}).",
         )
-    # pip / venv: extras must be restated on the spec.
+    # pip / venv: extras must be restated on the spec. uv-tool venvs do not
+    # ship pip — if detection still lands here without pip, refuse rather
+    # than `python -m pip` → "No module named pip" (#71).
+    if importlib.util.find_spec("pip") is None:
+        return UpgradePlan(
+            installer="pip",
+            extras=extras,
+            argv=(),
+            current_version=version,
+            message=(
+                "This graphlm looks like a pip install, but pip is not "
+                "importable in its interpreter. A uv-tool install is "
+                "upgraded with `uv tool upgrade graphlm`; pipx with "
+                "`pipx upgrade graphlm`."
+            ),
+        )
     return UpgradePlan(
         installer="pip",
         extras=extras,
