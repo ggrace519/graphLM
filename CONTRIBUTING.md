@@ -127,10 +127,11 @@ steps are automated with [bump-my-version](https://github.com/callowayproject/bu
 (config in `[tool.bumpversion]` in `pyproject.toml`):
 
 1. Make sure `## [Unreleased]` in `CHANGELOG.md` describes what's shipping and
-   `main` is clean.
+   local `main` is clean and synchronized with `origin/main`. Create a release
+   branch from that commit (for example, `chore/release-0.4.2`).
 2. Bump — this updates `version` in `pyproject.toml`, promotes `[Unreleased]` to
-   a dated `## [X.Y.Z]` section, updates the compare links, and makes a
-   **GPG-signed** commit + signed tag `vX.Y.Z`:
+   a dated `## [X.Y.Z]` section, and updates the compare links. It intentionally
+   does **not** commit or tag:
 
    ```bash
    uvx bump-my-version bump patch   # or: minor / major
@@ -139,8 +140,22 @@ steps are automated with [bump-my-version](https://github.com/callowayproject/bu
    Dry-run first to see the exact changes without touching anything:
    `uvx bump-my-version bump patch --dry-run --verbose`.
 3. `uv lock` (the version change dirties the lockfile; bump-my-version doesn't
-   run this) and amend it into the release commit, or commit it separately.
-4. `git push --follow-tags`. The tag fires the release workflow.
+   run this), then run the full test, mypy, build, and clean-wheel smoke gates.
+4. Make a GPG-signed `chore(release): X.Y.Z` commit, push the release branch,
+   open a PR, and wait for every PR check to pass. Merge the approved PR and
+   wait for CI on the resulting `origin/main` commit.
+5. From a clean, synchronized `main`, create and verify a signed tag on that
+   exact commit, then push **only that tag**:
+
+   ```bash
+   git tag -s vX.Y.Z -m "graphlm vX.Y.Z"
+   git verify-tag vX.Y.Z
+   test "$(git rev-parse 'vX.Y.Z^{}')" = "$(git rev-parse origin/main)"
+   git push origin refs/tags/vX.Y.Z
+   ```
+
+   The tag fires the release workflow. Watch its build, GitHub Release, and
+   PyPI jobs through completion, then verify a clean install from PyPI.
 
 Publishing is irreversible (a PyPI version can't be reused); rehearse risky
 changes against TestPyPI first via the workflow's `workflow_dispatch` →

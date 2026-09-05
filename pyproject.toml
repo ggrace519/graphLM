@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "graphlm"
-version = "0.4.1"
+version = "0.4.2"
 description = "Generate codebase graphs (Markdown + JSON + interactive HTML) from any project directory using an OpenAI-compatible LLM"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -92,24 +92,22 @@ dev = [
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["/.claude"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["graphlm"]
 
-# Release automation: `uvx bump-my-version bump patch|minor|major`
+# Release preparation: `uvx bump-my-version bump patch|minor|major`
 # Bumps project.version (auto — config lives here), promotes the CHANGELOG's
-# [Unreleased] section to a dated release header, updates the compare links,
-# then makes a signed commit + signed tag `vX.Y.Z`. Run `uv lock` afterward
-# (bump-my-version does not) and `git push --follow-tags` to publish.
+# [Unreleased] section to a dated release header, and updates the compare links.
+# Commit/tag stay disabled so PR CI gates the release commit before a maintainer
+# creates and pushes the publishing tag. See CONTRIBUTING.md for the full flow.
 # NOTE: keep current_version in step with project.version above.
 [tool.bumpversion]
-current_version = "0.4.1"
-commit = true
-tag = true
-sign_tags = true
-tag_name = "v{new_version}"
-tag_message = "graphlm v{new_version}"
-commit_args = "--gpg-sign"
-message = "chore(release): {new_version}"
+current_version = "0.4.2"
+commit = false
+tag = false
 allow_dirty = false
 
 # CHANGELOG: insert a dated release header below the permanent [Unreleased]

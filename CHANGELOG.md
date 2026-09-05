@@ -7,10 +7,18 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-05
+
 ### Fixed
 
+- **Release smoke tests now exercise the built wheel instead of the checkout.** Running the clean-venv commands from the repository root let local source files shadow the installed artifact, so a wheel missing modules or package data could pass validation (#77).
+- **Source distributions no longer include local Claude session metadata.** Hatch's default sdist selection could package an untracked `.claude/handoff.md` from a maintainer's workspace; the build now excludes `.claude`, and the generated handoff is ignored by Git (#76).
 - **`--max-output-tokens` now applies to pass 1 as well as pass 2.** Large directory trees could exhaust pass 1 at the hard-coded 128000-token default even when the CLI flag or `GRAPHLM_MAX_OUTPUT_TOKENS` raised the documented ceiling, so graph generation failed with an error recommending an override that the failing request ignored (#73).
 - **Provenance tests no longer inherit the developer's GPG-signing configuration.** Their disposable repository commits could fail or prompt when global `commit.gpgsign=true`; synthetic setup commits now disable signing locally while real project commits remain signed (#74).
+
+### Infrastructure
+
+- **Release tags are now created only after the release PR and resulting `main` commit pass CI.** The documented `git push --follow-tags` flow could trigger irreversible PyPI publication before the release commit was tested; version bumps now edit files only, and maintainers push one verified signed tag after merge (#78).
 
 ## [0.4.1] - 2026-09-05
 
@@ -221,7 +229,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ggrace519/graphLM/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ggrace519/graphLM/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ggrace519/graphLM/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ggrace519/graphLM/compare/v0.3.0...v0.3.1
