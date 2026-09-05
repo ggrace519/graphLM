@@ -49,6 +49,18 @@ def _posix(path: Path) -> str:
     return path.as_posix()
 
 
+def _abs_no_follow(path: Path) -> Path:
+    """Absolute path with ``.`` / ``..`` collapsed, symlinks intact.
+
+    ``Path.resolve()`` follows ``bin/python`` out of a uv-tool (or pipx) venv
+    into the managed CPython, so installer detection must not use it (#71).
+    """
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    return Path(os.path.normpath(p))
+
+
 def _uv_tools_root() -> Path:
     env = os.environ.get("UV_TOOL_DIR")
     if env:
@@ -68,17 +80,17 @@ def _pipx_venvs_root() -> Path:
 
 def detect_installer(executable: Path) -> str:
     """Classify the running interpreter as uv-tool, pipx, pip, or source."""
-    exe = executable.resolve()
+    exe = _abs_no_follow(executable)
     posix = _posix(exe)
     try:
-        exe.relative_to(_uv_tools_root().resolve() / "graphlm")
+        exe.relative_to(_abs_no_follow(_uv_tools_root() / "graphlm"))
         return "uv-tool"
     except ValueError:
         pass
     if "/uv/tools/graphlm/" in posix or posix.endswith("/uv/tools/graphlm"):
         return "uv-tool"
     try:
-        exe.relative_to(_pipx_venvs_root().resolve() / "graphlm")
+        exe.relative_to(_abs_no_follow(_pipx_venvs_root() / "graphlm"))
         return "pipx"
     except ValueError:
         pass
@@ -249,7 +261,22 @@ def make_plan(
             current_version=version,
             message=f"Upgrading graphlm {version} via pipx (keeps extras: {spec}).",
         )
-    # pip / venv: extras must be restated on the spec.
+    # pip / venv: extras must be restated on the spec. uv-tool venvs do not
+    # ship pip — if detection still lands here without pip, refuse rather
+    # than `python -m pip` → "No module named pip" (#71).
+    if importlib.util.find_spec("pip") is None:
+        return UpgradePlan(
+            installer="pip",
+            extras=extras,
+            argv=(),
+            current_version=version,
+            message=(
+                "This graphlm looks like a pip install, but pip is not "
+                "importable in its interpreter. A uv-tool install is "
+                "upgraded with `uv tool upgrade graphlm`; pipx with "
+                "`pipx upgrade graphlm`."
+            ),
+        )
     return UpgradePlan(
         installer="pip",
         extras=extras,

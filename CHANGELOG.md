@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`graphlm --upgrade` on a uv-tool install no longer tries `python -m pip`.** uv-tool venvs symlink `bin/python` at uv's managed CPython, outside `~/.local/share/uv/tools/graphlm`. Detection used `Path.resolve()`, followed that link, saw `site-packages`, and classified the install as pip — then `python -m pip` failed with `No module named pip` because uv-tool venvs don't ship pip. Classification now uses the unresolved interpreter path; a pip plan is refused when pip isn't importable (#71).
+
 ## [0.4.0] - 2026-09-04
 
 This release finishes the GitHub top-10 language packs (C#, C/C++, Go, PHP), adds a project `.graphlmignore` and `graphlm --upgrade`, and fixes the pass-2 edge table dropping on deep monorepos.

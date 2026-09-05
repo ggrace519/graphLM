@@ -37,10 +37,34 @@ class TestDetectInstaller:
         exe.write_text("")
         assert detect_installer(exe) == "uv-tool"
 
+    def test_uv_tool_python_symlink_outside_venv(self, tmp_path):
+        # uv tool (and some pyenv) venvs symlink bin/python at a managed
+        # CPython *outside* the tool dir. Path.resolve() walks out of
+        # uv/tools/graphlm and 0.4.0 then mis-classified the install as pip
+        # (#71). Detection must not follow that symlink.
+        real = tmp_path / "managed-cpython" / "bin" / "python3"
+        real.parent.mkdir(parents=True)
+        real.write_text("")
+        exe = tmp_path / "uv" / "tools" / "graphlm" / "bin" / "python"
+        exe.parent.mkdir(parents=True)
+        exe.symlink_to(real)
+        assert exe.resolve() != exe
+        assert "uv/tools/graphlm" not in exe.resolve().as_posix()
+        assert detect_installer(exe) == "uv-tool"
+
     def test_pipx_path(self, tmp_path):
         exe = tmp_path / "pipx" / "venvs" / "graphlm" / "bin" / "python"
         exe.parent.mkdir(parents=True)
         exe.write_text("")
+        assert detect_installer(exe) == "pipx"
+
+    def test_pipx_python_symlink_outside_venv(self, tmp_path):
+        real = tmp_path / "elsewhere" / "python"
+        real.parent.mkdir(parents=True)
+        real.write_text("")
+        exe = tmp_path / "pipx" / "venvs" / "graphlm" / "bin" / "python"
+        exe.parent.mkdir(parents=True)
+        exe.symlink_to(real)
         assert detect_installer(exe) == "pipx"
 
 
@@ -76,6 +100,20 @@ class TestInstalledExtras:
 
 
 class TestMakePlan:
+    def test_uv_tool_symlink_plan_uses_uv(self, tmp_path):
+        real = tmp_path / "managed-cpython" / "python"
+        real.parent.mkdir(parents=True)
+        real.write_text("")
+        exe = tmp_path / "uv" / "tools" / "graphlm" / "bin" / "python"
+        exe.parent.mkdir(parents=True)
+        exe.symlink_to(real)
+        plan = make_plan(
+            executable=exe,
+            which=lambda n: "/usr/bin/uv" if n == "uv" else None,
+        )
+        assert plan.installer == "uv-tool"
+        assert plan.argv == ("/usr/bin/uv", "tool", "upgrade", "graphlm")
+
     def test_uv_tool_upgrade_argv(self, tmp_path):
         exe = tmp_path / "uv" / "tools" / "graphlm" / "bin" / "python"
         exe.parent.mkdir(parents=True)
@@ -129,6 +167,8 @@ class TestMakePlan:
         assert "source checkout" in plan.message
 
     def test_pip_restates_extras(self, tmp_path, monkeypatch):
+        import importlib.util as util
+
         import graphlm as pkg
 
         monkeypatch.setattr(
@@ -143,9 +183,43 @@ class TestMakePlan:
             "graphlm.upgrade.installed_extras",
             lambda **k: ("mcp", "all"),
         )
+        orig = util.find_spec
+
+        def _find(name, package=None):
+            if name == "pip":
+                return object()
+            return orig(name, package)
+
+        monkeypatch.setattr("graphlm.upgrade.importlib.util.find_spec", _find)
         plan = make_plan(executable=exe, which=lambda n: None)
         assert plan.installer == "pip"
         assert plan.argv[1:] == ("-m", "pip", "install", "--upgrade", "graphlm[mcp,all]")
+
+    def test_pip_without_pip_module_refuses(self, tmp_path, monkeypatch):
+        import importlib.util as util
+
+        import graphlm as pkg
+
+        monkeypatch.setattr(
+            pkg,
+            "__file__",
+            str(tmp_path / "lib" / "site-packages" / "graphlm" / "__init__.py"),
+        )
+        exe = tmp_path / "venv" / "bin" / "python"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("")
+        orig = util.find_spec
+
+        def _find(name, package=None):
+            if name == "pip":
+                return None
+            return orig(name, package)
+
+        monkeypatch.setattr("graphlm.upgrade.importlib.util.find_spec", _find)
+        plan = make_plan(executable=exe, which=lambda n: None)
+        assert plan.argv == ()
+        assert "pip is not importable" in plan.message
+        assert "uv tool upgrade graphlm" in plan.message
 
 
 class TestRunUpgrade:
