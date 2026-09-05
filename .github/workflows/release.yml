@@ -2,7 +2,9 @@ name: Release
 
 # Publishes graphlm to PyPI *and* a GitHub Release from one git tag.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+# Maintainer procedure: prepare the version on a release branch, merge it only
+# after PR/main CI, then create, verify, and push one signed tag. See the
+# "Releasing (maintainers)" section in CONTRIBUTING.md for the exact commands.
 #
 # The tag drives everything: build once, smoke-test the built wheel in a clean
 # venv, attach the artifacts to a GitHub Release, and publish the same artifacts
@@ -55,16 +57,22 @@ jobs:
       - name: Smoke-test the built wheel in a clean venv
         run: |
           set -euo pipefail
+          repo_root="$PWD"
           python3 -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --quiet dist/*.whl
+          # Leave the checkout so its graphlm/ directory cannot shadow the
+          # package installed from the wheel.
+          cd /tmp
           echo "--- graphlm --version ---"
           /tmp/smoke/bin/graphlm --version
           echo "--- graphlm <fixture> --dry-run ---"
-          /tmp/smoke/bin/graphlm tests/fixtures/small_project --dry-run
+          /tmp/smoke/bin/graphlm "$repo_root/tests/fixtures/small_project" --dry-run
           echo "--- HTML template ships in the wheel ---"
           /tmp/smoke/bin/python -c "import graphlm, importlib.resources as r; \
             p = r.files('graphlm') / '_html_template.html'; \
-            assert p.is_file(), 'MISSING _html_template.html'; print('ok:', p)"
+            assert p.is_file(), 'MISSING _html_template.html'; \
+            assert str(p).startswith('/tmp/smoke/'), f'IMPORTED CHECKOUT: {p}'; \
+            print('ok:', p)"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
