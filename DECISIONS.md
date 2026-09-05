@@ -21,13 +21,14 @@ would flip the Typer app into subcommand mode and break `graphlm <project>`
 
 1. **`--upgrade` flag**, same shape as `--serve` / `--install-skill`. No
    `PROJECT_DIR`. Not eager (so `--help` still lists it).
-2. **Detect the installer from the running interpreter** (`uv/tools/graphlm`,
-   `pipx/venvs/graphlm`, site-packages, else source). **Do not follow the
-   `bin/python` symlink** (`Path.resolve()` walks a uv-tool venv into uv's
-   managed CPython and mis-classifies it as pip — #71). uv-tool and pipx keep
-   extras via their own upgrade (`uv tool upgrade graphlm` / `pipx upgrade
-   graphlm`). pip restates extras on the spec. A source checkout is refused
-   (tell the user to pull/`uv sync`, or `uv tool install`).
+2. **Upgrade with the same installer that installed.** Identity first:
+   `uv-receipt.toml` → `uv tool upgrade`; pipx metadata → `pipx upgrade`;
+   dist-info `INSTALLER=uv` → `uv pip install --upgrade`; else pip
+   (`python -m pip`). **Do not follow the `bin/python` symlink**
+   (`Path.resolve()` walks a uv-tool venv into uv's managed CPython and
+   mis-classifies it as pip — #71). uv-tool and pipx keep extras via their
+   own upgrade. pip / `uv pip` restate extras on the spec. A source checkout
+   is refused (tell the user to pull/`uv sync`, or `uv tool install`).
 3. **No shell.** Argv list only. Extras from the uv receipt / pipx metadata
    when present, else by probing the optional extra modules.
 

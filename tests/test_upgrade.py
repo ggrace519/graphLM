@@ -37,6 +37,18 @@ class TestDetectInstaller:
         exe.write_text("")
         assert detect_installer(exe) == "uv-tool"
 
+    def test_uv_receipt_in_venv_root_is_uv_tool(self, tmp_path):
+        # Install identity: uv-receipt.toml is written by `uv tool install`,
+        # even if the venv is not under the default uv/tools/graphlm path.
+        venv = tmp_path / "some-venv"
+        (venv / "bin").mkdir(parents=True)
+        exe = venv / "bin" / "python"
+        exe.write_text("")
+        (venv / "uv-receipt.toml").write_text(
+            '[tool]\nrequirements = [{ name = "graphlm", extras = ["all"] }]\n'
+        )
+        assert detect_installer(exe) == "uv-tool"
+
     def test_uv_tool_python_symlink_outside_venv(self, tmp_path):
         # uv tool (and some pyenv) venvs symlink bin/python at a managed
         # CPython *outside* the tool dir. Path.resolve() walks out of
@@ -165,6 +177,39 @@ class TestMakePlan:
         assert plan.installer == "source"
         assert plan.argv == ()
         assert "source checkout" in plan.message
+
+    def test_uv_pip_install_upgrades_with_uv(self, tmp_path, monkeypatch):
+        import graphlm as pkg
+
+        monkeypatch.setattr(
+            pkg,
+            "__file__",
+            str(tmp_path / "lib" / "site-packages" / "graphlm" / "__init__.py"),
+        )
+        monkeypatch.setattr("graphlm.upgrade._is_running_interpreter", lambda _exe: True)
+        monkeypatch.setattr("graphlm.upgrade._dist_installer", lambda: "uv")
+        monkeypatch.setattr(
+            "graphlm.upgrade.installed_extras",
+            lambda **k: ("all",),
+        )
+        exe = tmp_path / "venv" / "bin" / "python"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("")
+        plan = make_plan(
+            executable=exe,
+            which=lambda n: "/usr/bin/uv" if n == "uv" else None,
+        )
+        assert plan.installer == "uv-pip"
+        assert plan.argv == (
+            "/usr/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            str(exe),
+            "--upgrade",
+            "graphlm[all]",
+        )
+        assert "uv pip" in plan.message
 
     def test_pip_restates_extras(self, tmp_path, monkeypatch):
         import importlib.util as util

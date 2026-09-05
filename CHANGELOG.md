@@ -9,7 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
-- **`graphlm --upgrade` on a uv-tool install no longer tries `python -m pip`.** uv-tool venvs symlink `bin/python` at uv's managed CPython, outside `~/.local/share/uv/tools/graphlm`. Detection used `Path.resolve()`, followed that link, saw `site-packages`, and classified the install as pip — then `python -m pip` failed with `No module named pip` because uv-tool venvs don't ship pip. Classification now uses the unresolved interpreter path; a pip plan is refused when pip isn't importable (#71).
+- **`graphlm --upgrade` uses the same installer that installed this binary.** A `uv tool install` is upgraded with `uv tool upgrade` (from `uv-receipt.toml`, without following the `bin/python` symlink out of the venv). A `uv pip install` is upgraded with `uv pip install --upgrade`. pip stays `python -m pip`. 0.4.0 followed `bin/python` into uv's managed CPython, classified a uv-tool install as pip, and failed with `No module named pip` (#71).
 
 ## [0.4.0] - 2026-09-04
 
