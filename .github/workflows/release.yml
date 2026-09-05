@@ -45,6 +45,7 @@ jobs:
           enable-cache: true
           prune-cache: true
           cache-dependency-glob: "**/uv.lock"
+          cache-suffix: "release"
 
       - name: Set up Python
         run: uv python install 3.12
