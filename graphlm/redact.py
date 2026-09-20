@@ -42,7 +42,7 @@ def _redact_secrets(content: str) -> str:
 
     # GitHub / GITHUB_TOKEN patterns
     redacted = re.sub(
-        r'(?i)(gh[pousr]_[A-Za-z0-9_]{36,})',
+        r'(?i)((?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,})',
         r'[REDACTED:GITHUB_TOKEN]',
         redacted,
     )
@@ -199,6 +199,8 @@ def _is_sensitive_file(path: Path) -> bool:
         env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
         if env_suffix not in _ENV_SAFE_SUFFIXES:
             return True
+    if name in {".envrc", ".flaskenv"}:
+        return True
 
     stem = path.stem.lower()
     # Only apply name-based patterns to non-source files
