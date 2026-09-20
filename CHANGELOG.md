@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.npmrc` / `.yarnrc` / `.pypirc` are never read.** `_auth=base64(user:pass)` and `https://user:pass@` in `.npmrc` are not `password=` assignments, so redaction left short logins intact and pass 2 could send them.
 - **`.keystore` and backups of secret extensions (`app.jks.bak`, `server.key~`) are never read.** Android `debug.keystore` missed the `.jks` list, and backup matching only covered exact names, so binary keystore bytes were scanned.
 
 - **`BEGIN ENCRYPTED PRIVATE KEY` PEM bodies are redacted.** The PKCS#8 encrypted label was not in `(RSA |EC |DSA |OPENSSH )?`, so JSON keystores sent the ciphertext body.
