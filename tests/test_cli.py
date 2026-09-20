@@ -160,6 +160,25 @@ class TestCLI:
             or "Files selected for pass-2 analysis:" in result.stderr
         )
 
+    def test_dry_run_pass1_context_is_the_assembled_prompt(self, small_project):
+        # CLI "Pass 1 context: ~N" must be estimate_tokens of the prompt
+        # actually sent, not the two-sentence stub (#86).
+        from graphlm.context import (
+            MESSAGE_OVERHEAD_TOKENS,
+            assemble_pass1_prompt,
+            estimate_tokens,
+        )
+        from graphlm.scanner import scan_project
+
+        result = runner.invoke(app, [str(small_project), "--dry-run"])
+        assert result.exit_code == 0
+        scan = scan_project(small_project)
+        expected = (
+            estimate_tokens(assemble_pass1_prompt(scan.tree)) + MESSAGE_OVERHEAD_TOKENS
+        )
+        combined = result.stdout + result.stderr
+        assert f"Pass 1 context: ~{expected} tokens" in combined
+
     def test_dry_run_medium_project(self, medium_project):
         result = runner.invoke(app, [str(medium_project), "--dry-run"])
         assert result.exit_code == 0
