@@ -750,6 +750,16 @@ class TestRedactSecrets:
         assert "MIIE_SA_BODY_LEAK" not in redacted
         assert "BEGIN PRIVATE KEY" not in redacted
 
+    def test_redacts_encrypted_private_key_pem(self):
+        content = (
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
+            "MIIE_REAL_SECRET_MATERIAL_XXXX\n"
+            "-----END ENCRYPTED PRIVATE KEY-----"
+        )
+        redacted = _redact_secrets(content)
+        assert "REAL_SECRET" not in redacted
+        assert "BEGIN ENCRYPTED PRIVATE KEY" not in redacted
+
 
 class TestSkeletonScan:
     """Oversized Python files are sent as signature skeletons (innovation #2)."""
