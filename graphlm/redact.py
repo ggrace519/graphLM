@@ -158,6 +158,34 @@ _CREDENTIAL_FILE_NAMES = {
     ".pgpass",
 }
 
+# Exact never-read names that also have editor/suffix backups (`.bak`,
+# `~`, `#name#`). `.env*` is handled separately (prefix rule).
+_EXACT_SECRET_NAMES = (
+    _SSH_PRIVATE_KEY_NAMES | _CREDENTIAL_FILE_NAMES | {".flaskenv"}
+)
+
+
+def _is_named_or_backup(lname: str, bases: set[str]) -> bool:
+    """Exact never-read name, or a backup of one.
+
+    Matches ``base``, ``base.bak`` / ``base.old``, ``base-orig``,
+    ``base~``, ``#base#``. ``id_rsa.pub`` is excluded by the ``.pub``
+    guard so public keys stay scannable.
+    """
+    if lname in bases:
+        return True
+    if lname.endswith(".pub"):
+        return False
+    for base in bases:
+        if (
+            lname.startswith(base + ".")
+            or lname.startswith(base + "-")
+            or lname == base + "~"
+            or lname == "#" + base + "#"
+        ):
+            return True
+    return False
+
 
 def _is_sensitive_file(path: Path) -> bool:
     """Check if a file likely contains secrets or credentials.
@@ -185,16 +213,10 @@ def _is_sensitive_file(path: Path) -> bool:
     # Exact-name matching missed these and redaction only strips BEGIN/END,
     # leaving the key body.
     lname = path.name.lower()
-    if not lname.endswith(".pub"):
-        for base in _SSH_PRIVATE_KEY_NAMES:
-            if (
-                lname.startswith(base + ".")
-                or lname.startswith(base + "-")
-                or lname == base + "~"
-                or lname == "#" + base + "#"
-            ):
-                return True
-    if path.name.lower() in _CREDENTIAL_FILE_NAMES:
+    # Exact names plus editor/suffix backups. Redaction misses netrc
+    # (`password SECRET`) and pgpass (`host:port:db:user:SECRET`), so
+    # backups of those files must never be read either.
+    if _is_named_or_backup(lname, _EXACT_SECRET_NAMES):
         return True
 
     # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
