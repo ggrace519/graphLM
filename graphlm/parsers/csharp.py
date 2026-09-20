@@ -179,11 +179,11 @@ def _resolve_import(
         return []
     rel_file = "/".join(parts) + ".cs"
     candidates = [rel_file]
-    # Nested-type parent file (Ns.Type → Ns.cs) is for using static /
-    # using Alias = … only (ADR-007). A namespace using must not hit
-    # Ns.cs before unique-dir — that is a false compiler-contradicting
-    # edge when both Ns.cs and Ns/Type/File.cs exist (#126).
-    if (imp.kind == "static" or imp.is_alias) and len(parts) >= 2:
+    # Nested-type parent file (Ns.Type → Ns.cs) is immediate for
+    # ``using static`` (a type). A namespace using must not hit Ns.cs
+    # before unique-dir (#126). An alias can name a namespace *or* a
+    # nested type: unique-dir first, parent only if that misses (#134).
+    if imp.kind == "static" and len(parts) >= 2:
         candidates.append("/".join(parts[:-1]) + ".cs")
     hit = _first_known_rooted(tuple(candidates), known, roots)
     if hit:
@@ -195,6 +195,11 @@ def _resolve_import(
     if len(dir_hits) >= 2:
         imp.is_relative = False  # policy drop — dispatcher marks partial
         return []
+    if imp.is_alias and len(parts) >= 2:
+        parent = "/".join(parts[:-1]) + ".cs"
+        hit = _first_known_rooted((parent,), known, roots)
+        if hit:
+            return [hit]
     return []
 
 

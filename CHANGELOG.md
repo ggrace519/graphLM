@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **C# namespace alias `using Models = MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** #126 stopped the nested-type parent probe for a plain namespace using; aliases still ran it first, so a namespace alias preferred `MyApp.cs` over unique-dir `Models/User.cs`. Aliases now unique-dir first and only parent-probe when that misses (#134).
 - **C# namespace `using MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** The nested-type parent-file probe (`Ns.Type` → `Ns.cs`) ran for every using, so a namespace import preferred `src/MyApp.cs` over the unique-dir `src/MyApp/Models/User.cs`. That probe now runs only for `using static` and `using Alias = …` (ADR-007) (#126).
 - **C# `using System;` no longer resolves onto a unique scanned file in `System/`.** The unique-namespace-directory fallback treated a lone `System/Console.cs` as the BCL. `System` / `Microsoft` / `Windows` roots are now dropped as third-party, matching the pack docstring (#100).
 
