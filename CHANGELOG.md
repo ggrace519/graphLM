@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`write_outputs` refuses to write through a symlink.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, so a cloned repo could clobber a file outside the output dir. Same contract as skill install (#33): remove the symlink and re-run.
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
