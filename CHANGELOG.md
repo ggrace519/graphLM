@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.netrc` / `_netrc` / `.pgpass` are never read.** They hold passwords in layouts the assignment regex does not match (`machine host login user password SECRET`, `host:port:db:user:SECRET`), so they were scanned verbatim.
+
 - **In-project directory symlinks no longer explode or ghost the pass-1 tree.** `_walk_dir` followed `Path.is_dir()` into a `sub/loop → root` cycle (165 lines of `loop/sub/loop/...`) and listed `alias/mod.py` for a `alias → pkg` link that `os.walk` never reads. Directory symlinks are skipped in the tree, matching `followlinks=False` (#97).
 
 - **C/C++ quoted `#include` inside `#ifdef` is extracted.** Only root-child `preproc_include` nodes were visited, so a guarded `#include "bar.h"` never became an AST edge. The walker now visits nested preprocessor nodes (byte offsets only, never `start_point`) (#99).
