@@ -10,7 +10,17 @@ from graphlm.context import (
     filter_requested_files,
 )
 from graphlm.models import ImportEdge
-from graphlm.scanner import FileFragment, scan_project
+from graphlm.scanner import FileFragment, ScanResult, scan_project
+
+
+def _scan(*paths: str) -> ScanResult:
+    """Minimal ScanResult for filter_requested_files tests (no disk I/O)."""
+    return ScanResult(
+        tree="t",
+        file_fragments=[FileFragment(p, "x", 1) for p in paths],
+        skipped_count=0,
+        excluded_patterns=(),
+    )
 
 
 class TestEstimateTokens:
@@ -215,11 +225,50 @@ class TestFilterRequestedFiles:
         from graphlm.scanner import scan_project
 
         scan = scan_project(medium_project)
-        # Request with slightly different path
         requested = ["src/core/__init__.py"]
         matched = filter_requested_files(scan, requested, max_files=10)
         matched_paths = {f.rel_path for f in matched}
         assert "src/core/__init__.py" in matched_paths
+
+    def test_basename_does_not_substring_match_a_different_file(self):
+        # ``"a.py" in "app/data.py"`` is true; that used to pack data.py (#85).
+        scan = _scan("app/data.py", "app/a.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["a.py"])]
+        assert paths == ["app/a.py"]
+
+    def test_colliding_requests_do_not_duplicate_a_fragment(self):
+        scan = _scan("app/data.py", "app/a.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["a.py", "app/data.py"])
+        ]
+        assert paths == ["app/a.py", "app/data.py"]
+
+    def test_basename_does_not_match_test_prefixed_sibling(self):
+        scan = _scan("app/cli.py", "tests/test_cli.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["cli.py"])]
+        assert paths == ["app/cli.py"]
+
+    def test_shared_basename_includes_every_suffix_hit(self):
+        scan = _scan("pkg/a.py", "lib/a.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["a.py"])]
+        assert paths == ["lib/a.py", "pkg/a.py"]
+
+    def test_dot_slash_prefix_is_exact(self):
+        scan = _scan("src/core/__init__.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["./src/core/__init__.py"])
+        ]
+        assert paths == ["src/core/__init__.py"]
+
+    def test_repo_prefixed_request_maps_to_the_scanned_path(self):
+        scan = _scan("graphlm/cli.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["graphLM/graphlm/cli.py"])
+        ]
+        assert paths == ["graphlm/cli.py"]
 
 
 class TestMaxContext:
