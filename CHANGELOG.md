@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Pass-2's file cap keeps the files pass 1 asked for first.** `filter_requested_files` sorted by path then sliced, so `--max-pass2-files` dropped `z.py` in favour of `a.py`. The cap now follows request order; the kept set is still sorted for deterministic output (#98).
+
 - **GRAPH.html and the Mermaid module graph honour `./`-prefixed LLM paths.** Cycle nodes from `detect_cycles` are normalised (#84) but renderers still compared raw `./a.py`, so `--no-ast` cycles got no red ring and collapsed to a bogus `.` node. Node ids, link pairs, and directory collapse now strip `./` (#96).
 
 - **Go stdlib imports no longer resolve onto a unique local package directory.** `import "fmt"` with a scanned `fmt/fmt.go` (or `import "encoding/json"` with `json/json.go`) emitted a do-not-contradict AST edge. Specifiers with no `.` are treated as stdlib and dropped; dotted module paths still suffix-strip per ADR-010 (#95).

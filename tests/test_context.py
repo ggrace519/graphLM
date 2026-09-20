@@ -205,6 +205,19 @@ class TestFilterRequestedFiles:
         matched = filter_requested_files(scan, requested, max_files=3)
         assert len(matched) <= 3
 
+    def test_max_files_keeps_request_order_not_alphabetical(self):
+        # Sorting then slicing dropped z.py, the first pass-1 choice (#98).
+        scan = _scan("z.py", "a.py", "m.py", "b.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(
+                scan, ["z.py", "a.py", "m.py", "b.py"], max_files=2
+            )
+        ]
+        assert paths == ["a.py", "z.py"]  # kept z then a; sorted for output
+        assert "b.py" not in paths
+        assert "m.py" not in paths
+
     def test_empty_requested_returns_empty(self, small_project):
         scan = scan_project(small_project)
         matched = filter_requested_files(scan, [], max_files=10)
