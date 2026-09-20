@@ -131,24 +131,34 @@ def filter_requested_files(
         max_files: Maximum files to include in pass 2 context.
 
     Returns:
-        File fragments for the requested files, sorted by path.
+        File fragments for the requested files, sorted by path. The
+        ``max_files`` cap keeps request order (pass 1 lists important files
+        first), then the kept set is sorted for deterministic output (#98).
     """
     by_path: dict[str, FileFragment] = {}
     for frag in scan.file_fragments:
         by_path[_norm_path(frag.rel_path)] = frag
 
     matched: dict[str, FileFragment] = {}
+    order: list[str] = []
+
+    def _add(path: str) -> None:
+        if path in matched:
+            return
+        matched[path] = by_path[path]
+        order.append(path)
+
     for req in requested:
         nreq = _norm_path(req)
         if not nreq:
             continue
         if nreq in by_path:
-            matched[nreq] = by_path[nreq]
+            _add(nreq)
             continue
         suffix = [p for p in by_path if p.endswith("/" + nreq) or p == nreq]
         if suffix:
             for p in suffix:
-                matched[p] = by_path[p]
+                _add(p)
             continue
         prefixed = sorted(
             (p for p in by_path if nreq.endswith("/" + p)),
@@ -156,10 +166,10 @@ def filter_requested_files(
             reverse=True,
         )
         if prefixed:
-            p = prefixed[0]
-            matched[p] = by_path[p]
+            _add(prefixed[0])
 
-    return sorted(matched.values(), key=lambda f: f.rel_path)[:max_files]
+    kept = order[:max_files]
+    return sorted((matched[p] for p in kept), key=lambda f: f.rel_path)
 
 
 def assemble_pass2_prompt(

@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Pass-2's file cap keeps the files pass 1 asked for first.** `filter_requested_files` sorted by path then sliced, so `--max-pass2-files` dropped `z.py` in favour of `a.py`. The cap now follows request order; the kept set is still sorted for deterministic output (#98).
 - **Pass-2 file selection no longer substring-matches the wrong files.** A pass-1 request for `a.py` could pack `data.py` into the prompt (`"a.py" in "data.py"`), and two requests could duplicate the same fragment. Matching is now exact path, then `/`-suffix (so `cli.py` finds `app/cli.py` and not `tests/test_cli.py`), then a repo-prefixed request — unique by canonical path (#85).
 
 ### Infrastructure
