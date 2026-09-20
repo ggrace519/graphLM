@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **OpenSSH private-key filenames are never read.** `id_rsa` / `id_ed25519` / `id_ecdsa` (and the `_sk` variants) have no extension, so they missed both the `.key`/`.pem` list and the `*private*` name glob. The key body was scanned (only the BEGIN/END headers were redacted). Those names are now on the never-read list; `id_rsa.pub` stays scannable.
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
