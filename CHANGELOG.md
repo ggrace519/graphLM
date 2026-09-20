@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **OpenSSH private-key filenames are never read.** `id_rsa` / `id_ed25519` / `id_ecdsa` (and the `_sk` variants) have no extension, so they missed both the `.key`/`.pem` list and the `*private*` name glob. The key body was scanned (only the BEGIN/END headers were redacted). Those names are now on the never-read list; `id_rsa.pub` stays scannable.
+
 - **GRAPH.html no longer lets a `</script>` in graph data close the inline script tag.** Node paths and descriptions are hostile input (scanned files / LLM text). They are now JSON-embedded with `<`/`>`/`&` and U+2028/U+2029 escaped so the D3 payload cannot break out of `<script>`.
 
 - **Cycle risk scores no longer collapse to 0 on `./`-prefixed edge paths.** `--no-ast` runs Tarjan on the LLM's `import_edges`, which often carry a `./` prefix; SLOC lookup is keyed by scanner paths without it, so every `sloc_map.get` missed and `log10(total_lines) * length` became 0. Paths are now normalised the same way as faithfulness before scoring (#84).
