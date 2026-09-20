@@ -91,10 +91,45 @@ class TestGoPack:
         assert not any(e.to_path in {TOO_A, TOO_B} for e in edges)
         assert "go" in partial
 
+    def test_raw_string_relative_import_is_an_edge(self):
+        from graphlm.scanner import FileFragment
+
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "main.go",
+                    "package main\nimport `./rel`\nfunc main() {}\n",
+                    1,
+                ),
+                FileFragment("rel/rel.go", "package rel\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.go", "rel/rel.go") in pairs
+
     def test_stdlib_not_an_edge(self, go_project):
         scan = scan_project(go_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=go_project)
         assert not any("fmt" in e.to_path for e in edges)
+
+    def test_stdlib_not_an_edge_even_with_local_package_dir(self):
+        # Unique local fmt/ or json/ used to unique-file-match import "fmt"
+        # / import "encoding/json" (#95).
+        from graphlm.scanner import FileFragment
+
+        frags = [
+            FileFragment(
+                "main.go",
+                'package main\nimport (\n\t"fmt"\n\t"encoding/json"\n)\nfunc main() {}\n',
+                10,
+            ),
+            FileFragment("fmt/fmt.go", "package fmt\n", 10),
+            FileFragment("json/json.go", "package json\n", 10),
+        ]
+        edges = build_dependency_graph(frags)
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.go", "fmt/fmt.go") not in pairs
+        assert ("main.go", "json/json.go") not in pairs
 
     def test_parse_file_import_paths(self, go_project):
         result = parse_file(go_project / MAIN)

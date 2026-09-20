@@ -107,6 +107,43 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "test_helpers.py" not in paths
 
+    def test_no_tests_does_not_drop_names_that_contain_test(self, tmp_path):
+        # ``"test" in "latest"`` used to skip real modules (#94).
+        project = tmp_path / "proj"
+        project.mkdir()
+        for name, text in (
+            ("app.py", "x = 1\n"),
+            ("latest.py", "x = 1\n"),
+            ("contest.py", "x = 1\n"),
+            ("testing.py", "x = 1\n"),
+            ("test_unit.py", "x = 1\n"),
+        ):
+            (project / name).write_text(text)
+        result = scan_project(project, include_tests=False)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py", "latest.py", "contest.py", "testing.py"}
+        tree_names = {ln.strip() for ln in result.tree.splitlines()}
+        assert "latest.py" in tree_names
+        assert "contest.py" in tree_names
+        assert "testing.py" in tree_names
+        assert "test_unit.py" not in paths
+        assert "test_unit.py" not in tree_names
+
+    def test_latest_py_outranks_docs_under_max_files(self, tmp_path):
+        # Ranking still used "test" in stem after #94, so latest.py (rank 10)
+        # lost to markdown (rank 8) under a tight max_files cap (#109).
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "app.py").write_text("x = 1\n")
+        (project / "latest.py").write_text("x = 1\n")
+        for i in range(20):
+            (project / f"doc{i:02d}.md").write_text(f"# {i}\n")
+        result = scan_project(project, max_files=6)
+        paths = [f.rel_path for f in result.file_fragments]
+        assert "app.py" in paths
+        assert "latest.py" in paths
+        assert paths.count("latest.py") == 1
+
     def test_medium_project_scans_correct_files(self, medium_project):
         result = scan_project(medium_project, include_tests=True)
         paths = [f.rel_path for f in result.file_fragments]
@@ -187,6 +224,56 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "linked.py" not in paths
         assert "main.py" in paths
+
+    def test_in_project_symlink_to_env_is_not_scanned(self, tmp_path):
+        # crypto.py -> .env used to send the secret; the guard looked at the
+        # link name, read_text followed the target.
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".env").write_text("SECRET=supersecretvalue\n")
+        (project / "main.py").write_text("print(1)\n")
+        try:
+            (project / "crypto.py").symlink_to(project / ".env")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert "crypto.py" not in paths
+        assert ".env" not in paths
+        for f in result.file_fragments:
+            assert "supersecretvalue" not in f.content
+
+    def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
+        # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
+        project = tmp_path / "project"
+        sub = project / "sub"
+        sub.mkdir(parents=True)
+        (project / "main.py").write_text("x = 1\n")
+        (sub / "mod.py").write_text("x = 1\n")
+        try:
+            (sub / "loop").symlink_to(project)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert len(result.tree.splitlines()) < 20
+        assert "loop/sub/loop" not in result.tree
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py", "sub/mod.py"}
+
+    def test_in_project_dir_symlink_alias_not_listed_as_real_path(self, tmp_path):
+        project = tmp_path / "project"
+        pkg = project / "pkg"
+        pkg.mkdir(parents=True)
+        (pkg / "mod.py").write_text("x = 1\n")
+        try:
+            (project / "alias").symlink_to(pkg)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert "alias/" not in result.tree
+        assert "pkg/" in result.tree
+        assert {f.rel_path for f in result.file_fragments} == {"pkg/mod.py"}
 
     def test_external_symlink_does_not_consume_max_files_slot(self, tmp_path):
         # An escaping symlink must be dropped BEFORE the max_files slice, or it
@@ -369,16 +456,196 @@ class TestIsSensitiveFile:
 
     def test_arbitrary_env_variant_is_sensitive(self):
         # The old fixed allowlist missed unlisted variants like .env.qa / .env.test.
-        for name in (".env", ".env.qa", ".env.test", ".env.production", ".env.foo"):
+        # `.env.`-prefix also missed vim `.env~` and `.env-local`.
+        for name in (
+            ".env",
+            ".env.qa",
+            ".env.test",
+            ".env.production",
+            ".env.foo",
+            ".env~",
+            ".env-local",
+            ".env_backup",
+        ):
             assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_envrc_and_flaskenv_are_sensitive(self):
+        assert _is_sensitive_file(Path(".envrc")) is True
+        assert _is_sensitive_file(Path(".flaskenv")) is True
+
+    def test_scan_skips_envrc_and_flaskenv(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".envrc").write_text("export PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / ".flaskenv").write_text("PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "supersecretvalue" not in f.content
+
+    def test_scan_skips_env_tilde_and_hyphen_suffix(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".env~").write_text("SECRET_KEY=aaaa\nAWS_SECRET=bbbb\n")
+        (project / ".env-local").write_text("PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "bbbb" not in f.content
+            assert "supersecretvalue" not in f.content
 
     def test_env_template_variants_are_not_sensitive(self):
         # Non-secret templates must stay scannable.
         for name in (".env.example", ".env.sample", ".env.template", ".env.dist"):
             assert _is_sensitive_file(Path(name)) is False, name
 
+    def test_htpasswd_secret_yaml_and_env_suffix_are_sensitive(self):
+        for name in (
+            ".htpasswd",
+            ".htpasswd.bak",
+            "secret.yaml",
+            "my_secret.yaml",
+            "config.env",
+            "foo.env.local",
+            "app.env",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+        assert _is_sensitive_file(Path("secret.py")) is False
+        assert _is_sensitive_file(Path("foo.env.example")) is False
+
+    def test_scan_skips_htpasswd_secret_yaml_and_env_suffix(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".htpasswd").write_text("admin:$apr1$abcdefgh$HASHHASHHASH\n")
+        (project / "secret.yaml").write_text("openai: sk-proj-YAMLLEAK1234567890abcdef\n")
+        (project / "config.env").write_text("PLAIN=configenvsecret\n")
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py"}
+        for f in result.file_fragments:
+            assert "HASHHASHHASH" not in f.content
+            assert "YAMLLEAK" not in f.content
+            assert "configenvsecret" not in f.content
+
     def test_gitignore_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".gitignore")) is False
+
+    def test_openssh_private_key_filenames_are_sensitive(self):
+        for name in (
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+            "id_ecdsa_sk",
+            "id_ed25519_sk",
+            ".ssh/id_rsa",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_openssh_public_key_is_not_sensitive(self):
+        assert _is_sensitive_file(Path("id_rsa.pub")) is False
+        assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
+
+    def test_openssh_private_key_backups_are_sensitive(self):
+        for name in (
+            "id_rsa.bak",
+            "id_ed25519.old",
+            "id_ecdsa-orig",
+            "id_rsa~",
+            "#id_ed25519#",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+            assert _is_sensitive_file(Path(".ssh") / name) is True, name
+
+    def test_scan_skips_openssh_tilde_and_emacs_backups(self, tmp_path):
+        project = tmp_path / "proj"
+        ssh = project / ".ssh"
+        ssh.mkdir(parents=True)
+        body = (
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "AAAAB3NzaC1yc2EAAAADAQABAAABgQCsecretkeybodyhere\n"
+            "-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        (ssh / "id_rsa~").write_text(body)
+        (ssh / "#id_ed25519#").write_text(body)
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py"}
+        for f in result.file_fragments:
+            assert "secretkeybodyhere" not in f.content
+
+    def test_netrc_and_pgpass_are_sensitive(self):
+        assert _is_sensitive_file(Path(".netrc")) is True
+        assert _is_sensitive_file(Path("_netrc")) is True
+        assert _is_sensitive_file(Path(".pgpass")) is True
+        assert _is_sensitive_file(Path("home/.netrc")) is True
+
+    def test_scan_skips_netrc_and_pgpass(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".netrc").write_text(
+            "machine host login user password SUPERSECRET\n"
+        )
+        (project / ".pgpass").write_text("localhost:5432:db:user:PGSECRET\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        assert ".netrc" not in result.tree
+        assert ".pgpass" not in result.tree
+
+    def test_credential_file_backups_are_sensitive(self):
+        for name in (
+            ".netrc.bak",
+            ".netrc~",
+            "#.netrc#",
+            "_netrc.bak",
+            ".pgpass.bak",
+            ".pgpass~",
+            ".flaskenv.bak",
+            ".flaskenv~",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_scan_skips_credential_file_backups(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".netrc.bak").write_text(
+            "machine host login user password NETRC_SUPERSECRET_VALUE\n"
+        )
+        (project / ".pgpass~").write_text("localhost:5432:db:user:PGPASS_SUPERSECRET\n")
+        (project / ".flaskenv.bak").write_text("PLAIN=FLASKSECRET1234567890abcdef\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "SUPERSECRET" not in f.content
+            assert "FLASKSECRET" not in f.content
+
+    def test_scan_skips_openssh_private_key_but_reads_pub(self, tmp_path):
+        project = tmp_path / "proj"
+        ssh = project / ".ssh"
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        (ssh / "id_rsa.pub").write_text("ssh-rsa AAAATEST comment\n")
+        (project / "main.py").write_text("print('hi')\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert ".ssh/id_rsa.pub" in paths
+        assert ".ssh/id_rsa" not in paths
+        assert "id_rsa" not in result.tree.split()
+        pub = next(f for f in result.file_fragments if f.rel_path == ".ssh/id_rsa.pub")
+        assert "ssh-rsa AAAATEST" in pub.content
 
 
 class TestRedactSecrets:
@@ -394,12 +661,19 @@ class TestRedactSecrets:
         assert "[REDACTED:GITHUB_TOKEN]" in redacted
         assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ" not in redacted
 
+    def test_redacts_github_fine_grained_pat_without_assignment(self):
+        pat = "github_pat_11AAAAAAA0123456789abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+        redacted = _redact_secrets(f"see {pat}")
+        assert pat not in redacted
+        assert "[REDACTED:GITHUB_TOKEN]" in redacted
+
     def test_redacts_private_key_headers(self):
         content = "-----BEGIN RSA PRIVATE KEY-----\nsome key data\n-----END RSA PRIVATE KEY-----"
         redacted = _redact_secrets(content)
-        assert "[REDACTED:PRIVATE_KEY_HEADER]" in redacted
+        assert "[REDACTED:PRIVATE_KEY]" in redacted
         assert "BEGIN RSA PRIVATE KEY" not in redacted
         assert "END RSA PRIVATE KEY" not in redacted
+        assert "some key data" not in redacted
 
     def test_redacts_password_assignment(self):
         content = 'password = "mysecretpass123"'
@@ -427,6 +701,54 @@ class TestRedactSecrets:
         content = 'api_key: "sk-1234567890abcdefghijklmnop"'
         redacted = _redact_secrets(content)
         assert "[REDACTED:API_KEY]" in redacted
+
+    def test_redacts_json_quoted_password_and_api_key(self):
+        content = (
+            '{"password": "json_password_secret_value",'
+            ' "api_key": "sk-1234567890abcdefghijklmnop"}'
+        )
+        redacted = _redact_secrets(content)
+        assert "json_password_secret_value" not in redacted
+        assert "sk-1234567890abcdefghijklmnop" not in redacted
+        assert "[REDACTED:PASSWORD]" in redacted
+        assert "[REDACTED:API_KEY]" in redacted
+
+    def test_scan_redacts_json_config_secrets(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "appsettings.json").write_text(
+            '{"password": "JsonPasswordSecret123",'
+            ' "api_key": "sk-1234567890abcdefghijklmnop"}\n'
+        )
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        frag = next(f for f in result.file_fragments if f.rel_path == "appsettings.json")
+        assert "JsonPasswordSecret123" not in frag.content
+        assert "sk-1234567890abcdefghijklmnop" not in frag.content
+
+    def test_redacts_json_colon_secret_token_and_auth(self):
+        secret = _redact_secrets(
+            '{"client_secret":"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6"}'
+        )
+        assert "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6" not in secret
+        token = _redact_secrets(
+            '{"token":"abcdefghijklmnopqrstuvwxyz0123456789ABCD"}'
+        )
+        assert "abcdefghijklmnopqrstuvwxyz0123456789ABCD" not in token
+        auth = _redact_secrets(
+            '{"auth":"dXNlcjpwYXNzd29yZGhlcmUxMjM0NTY="}'
+        )
+        assert "dXNlcjpwYXNzd29yZGhlcmUxMjM0NTY=" not in auth
+
+    def test_redacts_pem_body_not_just_headers(self):
+        content = (
+            '{"private_key":"-----BEGIN PRIVATE KEY-----\\n'
+            "MIIE_SA_BODY_LEAK\\n"
+            '-----END PRIVATE KEY-----"}'
+        )
+        redacted = _redact_secrets(content)
+        assert "MIIE_SA_BODY_LEAK" not in redacted
+        assert "BEGIN PRIVATE KEY" not in redacted
 
 
 class TestSkeletonScan:

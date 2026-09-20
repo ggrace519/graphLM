@@ -134,10 +134,13 @@ def build_index(graph: CodebaseGraph) -> MapIndex:
 def resolve_path(index: MapIndex, path: str) -> tuple[Optional[str], list[str]]:
     """Map a user-supplied path onto a known map path.
 
-    Returns ``(match, candidates)``: an exact (or unique suffix/substring)
-    match, or ``None`` plus the candidate list when the query is ambiguous or
-    unknown. Suffix match first so ``cli.py`` finds ``graphlm/cli.py`` even in
-    a repo that also has ``tests/test_cli.py``.
+    Returns ``(match, candidates)``: an exact (or unique suffix / unique
+    extensionless substring) match, or ``None`` plus the candidate list
+    when the query is ambiguous or unknown. Suffix match first so
+    ``cli.py`` finds ``graphlm/cli.py`` even in a repo that also has
+    ``tests/test_cli.py``. File-like queries (a basename containing
+    ``.``) skip the unanchored substring fallback so ``a.py`` cannot
+    uniquely match ``data.py`` (#140).
     """
     q = _norm(path)
     if q in index.known_paths:
@@ -157,6 +160,11 @@ def resolve_path(index: MapIndex, path: str) -> tuple[Optional[str], list[str]]:
     )
     if prefixed:
         return prefixed[0], []
+    # Unanchored substring is for extensionless names (`core` →
+    # `app/core.py`). A dotted query already had its suffix/prefix
+    # chance; `'a.py' in 'data.py'` is the #85 footgun (#140).
+    if "." in q.rsplit("/", 1)[-1]:
+        return None, []
     lowered = q.lower()
     contains = [p for p in known if lowered in p.lower()]
     if len(contains) == 1:
