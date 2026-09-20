@@ -75,20 +75,21 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
 
 
 def _extract_usings(tree) -> list[_CsImport]:
-    """Top-level and file-scoped ``using_directive`` nodes only."""
+    """``using_directive`` nodes anywhere, including StyleCop SA1200 inside
+    ``namespace { }`` (#113). Walks ``.children`` only.
+    """
     out: list[_CsImport] = []
-    for node in tree.root_node.children:
+
+    def _visit(node) -> None:
         if node.type == "using_directive":
             extracted = _one_using(node)
             if extracted is not None:
                 out.append(extracted)
-            continue
-        if node.type == "file_scoped_namespace_declaration":
-            for child in node.children:
-                if child.type == "using_directive":
-                    extracted = _one_using(child)
-                    if extracted is not None:
-                        out.append(extracted)
+            return
+        for child in node.children:
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 

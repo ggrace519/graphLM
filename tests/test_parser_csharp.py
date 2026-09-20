@@ -138,6 +138,25 @@ class TestCsharpPack:
         assert not any(e.to_path in {TOO_A, TOO_B} for e in edges)
         assert "csharp" in partial
 
+    def test_using_inside_block_namespace_is_an_edge(self):
+        from graphlm.scanner import FileFragment
+
+        prog = (
+            "namespace MyApp {\n"
+            "    using MyApp.Models;\n"
+            "    public class Program { }\n"
+            "}\n"
+        )
+        user = "namespace MyApp.Models {\n    public class User { }\n}\n"
+        edges = build_dependency_graph(
+            [
+                FileFragment("src/MyApp/Program.cs", prog, 1),
+                FileFragment("src/MyApp/Models/User.cs", user, 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("src/MyApp/Program.cs", "src/MyApp/Models/User.cs") in pairs
+
     def test_stdlib_not_an_edge(self, csharp_project):
         scan = scan_project(csharp_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=csharp_project)
