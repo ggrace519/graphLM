@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Go stdlib imports no longer resolve onto a unique local package directory.** `import "fmt"` with a scanned `fmt/fmt.go` (or `import "encoding/json"` with `json/json.go`) emitted a do-not-contradict AST edge. Specifiers with no `.` are treated as stdlib and dropped; dotted module paths still suffix-strip per ADR-010 (#95).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
