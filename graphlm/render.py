@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from graphlm.mermaid import render_mermaid
@@ -352,6 +353,29 @@ class WriteResult(tuple):
         return (tuple(self), {"diff_md": self.diff_md, "diff_json": self.diff_json})
 
 
+def _refuse_symlink(path: Path) -> None:
+    """Refuse to write through a symlink (same contract as ``skills.py``, #33).
+
+    ``Path.write_text`` follows the link, so a cloned repo that plants
+    ``.graphlm/GRAPH.json`` → ``~/.bashrc`` (or ``.graphlm`` → ``$HOME``)
+    would overwrite a file graphlm did not create. Ancestor directory
+    symlinks are the same hole: ``decoy → victim`` plus ``-o decoy/out``
+    would mkdir and write inside ``victim``.
+    """
+    if path.is_symlink():
+        raise ValueError(
+            f"refusing to write through a symlink at {path} — graphlm won't "
+            "overwrite a file it didn't create. Remove the symlink and re-run."
+        )
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ValueError(
+                f"refusing to write through a symlink at {parent} — graphlm "
+                "won't overwrite a file it didn't create. Remove the symlink "
+                "and re-run."
+            )
+
+
 def write_outputs(
     graph: CodebaseGraph,
     output_dir: Path,
@@ -388,11 +412,19 @@ def write_outputs(
         render_diff_markdown,
     )
 
-    output_dir = output_dir.resolve()
+    # Do not Path.resolve() — that follows a directory symlink and would
+    # write GRAPH.* into the resolved target (e.g. .graphlm → $HOME).
+    output_dir = Path(output_dir)
+    if not output_dir.is_absolute():
+        output_dir = Path.cwd() / output_dir
+    output_dir = Path(os.path.normpath(output_dir))
+    _refuse_symlink(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = output_dir / f"{md_suffix}.md"
     json_path = output_dir / f"{json_suffix}.json"
+    _refuse_symlink(md_path)
+    _refuse_symlink(json_path)
 
     # Read the prior graph BEFORE overwriting GRAPH.json (ADR-002 decision 1 —
     # ordering: baseline read must precede the write).
@@ -407,6 +439,7 @@ def write_outputs(
     html_path: Path | None = None
     if html:
         html_path = output_dir / f"{html_suffix}.html"
+        _refuse_symlink(html_path)
         html_path.write_text(_render_html(graph), encoding="utf-8")
 
     diff_md_path: Path | None = None
@@ -416,6 +449,8 @@ def write_outputs(
         graph_diff = compute_diff(old_graph, graph, baseline_state)
         diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
         diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
+        _refuse_symlink(diff_md_path)
+        _refuse_symlink(diff_json_path)
         diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
         diff_json_path.write_bytes(render_diff_json(graph_diff))
 
