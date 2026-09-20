@@ -57,21 +57,21 @@ def _redact_secrets(content: str) -> str:
     # Whole PEM block (headers + body). Header-only left the body in JSON
     # `"private_key": "-----BEGIN …\\nMIIE…\\n-----END …"`.
     redacted = re.sub(
-        r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+        r'-----BEGIN (?:ENCRYPTED |RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
         r'.*?'
-        r'-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----',
+        r'-----END (?:ENCRYPTED |RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----',
         r'[REDACTED:PRIVATE_KEY]',
         redacted,
         flags=re.DOTALL,
     )
     # Leftover header lines if the block was truncated.
     redacted = re.sub(
-        r'(-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
+        r'(-----BEGIN (?:ENCRYPTED |RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
         r'[REDACTED:PRIVATE_KEY_HEADER]',
         redacted,
     )
     redacted = re.sub(
-        r'(-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
+        r'(-----END (?:ENCRYPTED |RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
         r'[REDACTED:PRIVATE_KEY_HEADER]',
         redacted,
     )
