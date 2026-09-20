@@ -97,6 +97,20 @@ Rules:
 """
 
 
+def _norm_path(path: str) -> str:
+    """Canonical relative path: forward slashes, no leading ``./``.
+
+    Pass 1 is told to reconstruct full paths from the indented tree, but the
+    model still emits basenames, ``./`` prefixes, or a repo-root prefix. Matching
+    must treat those as the same file without substring-matching ``a.py`` into
+    ``data.py`` (#85).
+    """
+    path = path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 def filter_requested_files(
     scan: ScanResult,
     requested: list[str],
@@ -104,37 +118,48 @@ def filter_requested_files(
 ) -> list[FileFragment]:
     """Filter requested files against the scan result, enforcing max_files.
 
+    Matching, in order: exact path (after ``./`` normalisation), then unique
+    ``/``-suffix (so ``cli.py`` finds ``graphlm/cli.py`` and not
+    ``tests/test_cli.py``), then all suffix hits when several files share the
+    basename, then a unique longer-query prefix (absolute / repo-prefixed
+    request). Substring containment is not used — ``a.py`` must not select
+    ``data.py`` (#85). Results are unique by canonical path.
+
     Args:
         scan: The full scan result with all file fragments.
         requested: List of file paths the LLM requested from pass 1.
         max_files: Maximum files to include in pass 2 context.
 
     Returns:
-        File fragments for the requested files, in priority order.
+        File fragments for the requested files, sorted by path.
     """
-    requested_set = set(requested)
-    # Build a lookup of requested files that exist in the scan
-    matched: dict[str, FileFragment] = {}
+    by_path: dict[str, FileFragment] = {}
     for frag in scan.file_fragments:
-        if frag.rel_path in requested_set:
-            matched[frag.rel_path] = frag
+        by_path[_norm_path(frag.rel_path)] = frag
 
-    # If LLM requested files that weren't scanned (shouldn't happen),
-    # try fuzzy matching
-    if len(matched) < len(requested_set):
-        for req in requested:
-            if req not in matched:
-                # Try matching against any fragment that contains the requested path
-                for frag in scan.file_fragments:
-                    if req in frag.rel_path or frag.rel_path in req:
-                        matched[req] = frag
-                        break
+    matched: dict[str, FileFragment] = {}
+    for req in requested:
+        nreq = _norm_path(req)
+        if not nreq:
+            continue
+        if nreq in by_path:
+            matched[nreq] = by_path[nreq]
+            continue
+        suffix = [p for p in by_path if p.endswith("/" + nreq) or p == nreq]
+        if suffix:
+            for p in suffix:
+                matched[p] = by_path[p]
+            continue
+        prefixed = sorted(
+            (p for p in by_path if nreq.endswith("/" + p)),
+            key=len,
+            reverse=True,
+        )
+        if prefixed:
+            p = prefixed[0]
+            matched[p] = by_path[p]
 
-    # Sort by path for determinism, then take up to max_files
-    sorted_fragments = sorted(matched.values(), key=lambda f: f.rel_path)
-    selected = sorted_fragments[:max_files]
-
-    return selected
+    return sorted(matched.values(), key=lambda f: f.rel_path)[:max_files]
 
 
 def assemble_pass2_prompt(

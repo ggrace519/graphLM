@@ -165,6 +165,21 @@ class TestDetectCycles:
         cycles = detect_cycles(edges)
         assert cycles[0].nodes == ["apple.py", "zebra.py"]
 
+    def test_dot_slash_prefix_still_scores_scanned_line_counts(self):
+        # LLM import_edges often carry ./; sloc_map is keyed by scanner
+        # rel_paths. Without normalisation the lookups miss and risk is 0 (#84).
+        fragments = [
+            FileFragment("a.py", "x", 1, line_count=101),
+            FileFragment("b.py", "x", 1, line_count=21),
+        ]
+        edges = [
+            _edge("./a.py", "./b.py"),
+            _edge("./b.py", "./a.py"),
+        ]
+        (cycle,) = detect_cycles(edges, compute_sloc_map(fragments))
+        assert cycle.nodes == ["a.py", "b.py"]
+        assert cycle.risk_score == pytest.approx(math.log10(122) * 2)
+
 
 # ---------------------------------------------------------------------------
 # Risk score computation
