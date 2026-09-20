@@ -7,6 +7,11 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`.envrc` and `.flaskenv` are never read.** They are dotenv-class secret stores that are not `.env.<suffix>`, so they were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
+- **GitHub fine-grained PATs (`github_pat_`) are redacted.** The dedicated GitHub regex only matched classic `ghp_` / `gho_` / … prefixes, so a bare `github_pat_…` in a comment survived.
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
