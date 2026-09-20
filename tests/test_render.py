@@ -226,6 +226,43 @@ class TestWriteOutputs:
             assert json_path.exists()
             assert html_path is None
 
+    def test_refuses_to_write_through_graph_json_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            out = tmp / "out"
+            out.mkdir()
+            canary = tmp / "canary.txt"
+            canary.write_text("USER DATA")
+            (out / "GRAPH.json").symlink_to(canary)
+            try:
+                write_outputs(graph, out, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert canary.read_text() == "USER DATA"
+            assert (out / "GRAPH.json").is_symlink()
+
+    def test_refuses_to_write_through_output_dir_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            real = tmp / "real"
+            real.mkdir()
+            link = tmp / "link"
+            try:
+                link.symlink_to(real)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(graph, link, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (real / "GRAPH.md").exists()
+
     def test_creates_output_directory(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
