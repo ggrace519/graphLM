@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-project directory symlinks no longer explode or ghost the pass-1 tree.** `_walk_dir` followed `Path.is_dir()` into a `sub/loop → root` cycle (165 lines of `loop/sub/loop/...`) and listed `alias/mod.py` for a `alias → pkg` link that `os.walk` never reads. Directory symlinks are skipped in the tree, matching `followlinks=False` (#97).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
