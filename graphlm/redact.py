@@ -138,6 +138,26 @@ _ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
 # Source-code extensions exempt from the name patterns above (token.py is code).
 _SOURCE_EXTS_FOR_SECRET_NAMES = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx", ".hh", ".hxx", ".php"}
 
+# OpenSSH private-key filenames (no extension). `id_rsa.pub` is a public key
+# and is not in this set. The `*private*` name glob misses these because the
+# stem is `id_rsa`, not `private_key`.
+_SSH_PRIVATE_KEY_NAMES = {
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_ecdsa_sk",
+    "id_ed25519_sk",
+}
+
+# Credential files whose secret is not `password = ...` (so redaction misses
+# them) and whose names miss the *password* / *token* globs.
+_CREDENTIAL_FILE_NAMES = {
+    ".netrc",
+    "_netrc",
+    ".pgpass",
+}
+
 
 def _is_sensitive_file(path: Path) -> bool:
     """Check if a file likely contains secrets or credentials.
@@ -158,6 +178,28 @@ def _is_sensitive_file(path: Path) -> bool:
     # `.env.example` / `.sample` / `.template` / `.dist`. Requiring `.env.`
     # as the next character missed editor backups and hyphen/underscore
     # suffixes.
+
+    if path.name.lower() in _SSH_PRIVATE_KEY_NAMES:
+        return True
+    # Backups: id_rsa.bak, id_ed25519.old, vim id_rsa~, emacs #id_rsa#.
+    # Exact-name matching missed these and redaction only strips BEGIN/END,
+    # leaving the key body.
+    lname = path.name.lower()
+    if not lname.endswith(".pub"):
+        for base in _SSH_PRIVATE_KEY_NAMES:
+            if (
+                lname.startswith(base + ".")
+                or lname.startswith(base + "-")
+                or lname == base + "~"
+                or lname == "#" + base + "#"
+            ):
+                return True
+    if path.name.lower() in _CREDENTIAL_FILE_NAMES:
+        return True
+
+    # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
+    # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
+    # arbitrary variants like .env.qa / .env.test; this catches them all.
     name = path.name.lower()
     if name == ".env" or name.startswith(".env"):
         if name.startswith(".env."):
