@@ -127,6 +127,39 @@ class TestPhpPack:
         assert ("index.php", "src/App/Models/User.php") in pairs
         assert ("index.php", "src/App/Models/Post.php") in pairs
 
+    def test_class_use_does_not_hit_parent_file(self):
+        """use App\\Models\\User must not resolve onto Models.php (#129)."""
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "src/index.php",
+                    "<?php\nuse App\\Models\\User;\n",
+                    2,
+                ),
+                FileFragment("src/App/Models.php", "<?php\nclass Models {}\n", 2),
+            ]
+        )
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/index.php", "src/App/Models.php", "import") not in got
+
+    def test_use_function_still_hits_parent_file(self):
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "src/index.php",
+                    "<?php\nuse function App\\Models\\helper;\n",
+                    2,
+                ),
+                FileFragment(
+                    "src/App/Models.php",
+                    "<?php\nfunction helper() {}\n",
+                    2,
+                ),
+            ]
+        )
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/index.php", "src/App/Models.php", "import") in got
+
     def test_user_service_cycle(self, php_project):
         scan = scan_project(php_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=php_project)
