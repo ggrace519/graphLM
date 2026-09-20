@@ -110,12 +110,48 @@ class TestCppPack:
         assert "bar/baz.h" in specs
         assert not any("stdio" in s for s in specs)
 
+    def test_ifdef_quoted_include_is_an_edge(self):
+        # Root-children-only extraction missed #include inside #ifdef (#99).
+        from graphlm.scanner import FileFragment
+
+        main = '#include "foo.h"\n#ifdef USE_BAR\n#include "bar.h"\n#endif\n'
+        frags = [
+            FileFragment("main.c", main, 10),
+            FileFragment("foo.h", "#pragma once\n", 10),
+            FileFragment("bar.h", "#pragma once\n", 10),
+        ]
+        edges = build_dependency_graph(frags)
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.c", "foo.h") in pairs
+        assert ("main.c", "bar.h") in pairs
+
     def test_header_cycle(self, cpp_project):
         scan = scan_project(cpp_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=cpp_project)
         cycles = detect_import_cycles(edges)
         members = {frozenset(c) for c in cycles}
         assert frozenset({CA, CB}) in members
+
+    def test_quoted_header_does_not_resolve_to_sibling_c(self):
+        """#include \"foo.h\" must not hit foo.c (#128)."""
+        frags = [
+            FileFragment("src/main.c", '#include "foo.h"\n', 1),
+            FileFragment("src/foo.c", '#include "foo.h"\nint foo(void) { return 0; }\n', 2),
+            FileFragment("include/foo.h", "int foo(void);\n", 1),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/main.c", "src/foo.c", "include") not in got
+        assert ("src/foo.c", "src/foo.c", "include") not in got
+
+    def test_extensionless_include_still_probes_header(self):
+        frags = [
+            FileFragment("src/main.c", '#include "foo"\n', 1),
+            FileFragment("src/foo.h", "#pragma once\n", 1),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/main.c", "src/foo.h", "include") in got
 
     def test_macro_include_marks_partial(self, tmp_path):
         (tmp_path / "a.c").write_text("#include FOO\n")

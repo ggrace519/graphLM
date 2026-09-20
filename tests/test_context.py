@@ -10,7 +10,17 @@ from graphlm.context import (
     filter_requested_files,
 )
 from graphlm.models import ImportEdge
-from graphlm.scanner import FileFragment, scan_project
+from graphlm.scanner import FileFragment, ScanResult, scan_project
+
+
+def _scan(*paths: str) -> ScanResult:
+    """Minimal ScanResult for filter_requested_files tests (no disk I/O)."""
+    return ScanResult(
+        tree="t",
+        file_fragments=[FileFragment(p, "x", 1) for p in paths],
+        skipped_count=0,
+        excluded_patterns=(),
+    )
 
 
 class TestEstimateTokens:
@@ -25,6 +35,26 @@ class TestEstimateTokens:
 
     def test_empty(self):
         assert estimate_tokens("") == 0
+
+
+class TestPass1Tokens:
+    def test_estimates_the_assembled_prompt_plus_overhead(self):
+        # The old helper estimated a two-sentence stub plus the raw tree, not
+        # assemble_pass1_prompt, so dry-run "Pass 1 context" and the usage
+        # stamp under-counted by ~7x (#86).
+        from graphlm import pass1_tokens
+
+        tree = "root/\n  app.py"
+        expected = (
+            estimate_tokens(assemble_pass1_prompt(tree)) + MESSAGE_OVERHEAD_TOKENS
+        )
+        assert pass1_tokens(tree) == expected
+        stub = estimate_tokens(
+            "You are analyzing a project directory to determine which files "
+            "are most important to read for a comprehensive codebase analysis. "
+            "Return a JSON object with requested_files list."
+        ) + estimate_tokens(tree)
+        assert pass1_tokens(tree) > stub
 
 
 class TestPass1Prompt:
@@ -175,10 +205,28 @@ class TestFilterRequestedFiles:
         matched = filter_requested_files(scan, requested, max_files=3)
         assert len(matched) <= 3
 
+    def test_max_files_keeps_request_order_not_alphabetical(self):
+        # Sorting then slicing dropped z.py, the first pass-1 choice (#98).
+        scan = _scan("z.py", "a.py", "m.py", "b.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(
+                scan, ["z.py", "a.py", "m.py", "b.py"], max_files=2
+            )
+        ]
+        assert paths == ["a.py", "z.py"]  # kept z then a; sorted for output
+        assert "b.py" not in paths
+        assert "m.py" not in paths
+
     def test_empty_requested_returns_empty(self, small_project):
         scan = scan_project(small_project)
         matched = filter_requested_files(scan, [], max_files=10)
         assert matched == []
+
+    def test_non_list_requested_returns_empty(self, small_project):
+        scan = scan_project(small_project)
+        assert filter_requested_files(scan, None, max_files=10) == []  # type: ignore[arg-type]
+        assert filter_requested_files(scan, "a.py", max_files=10) == []  # type: ignore[arg-type]
 
     def test_deterministic_ordering(self, large_project):
         from graphlm.scanner import scan_project
@@ -195,11 +243,50 @@ class TestFilterRequestedFiles:
         from graphlm.scanner import scan_project
 
         scan = scan_project(medium_project)
-        # Request with slightly different path
         requested = ["src/core/__init__.py"]
         matched = filter_requested_files(scan, requested, max_files=10)
         matched_paths = {f.rel_path for f in matched}
         assert "src/core/__init__.py" in matched_paths
+
+    def test_basename_does_not_substring_match_a_different_file(self):
+        # ``"a.py" in "app/data.py"`` is true; that used to pack data.py (#85).
+        scan = _scan("app/data.py", "app/a.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["a.py"])]
+        assert paths == ["app/a.py"]
+
+    def test_colliding_requests_do_not_duplicate_a_fragment(self):
+        scan = _scan("app/data.py", "app/a.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["a.py", "app/data.py"])
+        ]
+        assert paths == ["app/a.py", "app/data.py"]
+
+    def test_basename_does_not_match_test_prefixed_sibling(self):
+        scan = _scan("app/cli.py", "tests/test_cli.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["cli.py"])]
+        assert paths == ["app/cli.py"]
+
+    def test_shared_basename_includes_every_suffix_hit(self):
+        scan = _scan("pkg/a.py", "lib/a.py")
+        paths = [f.rel_path for f in filter_requested_files(scan, ["a.py"])]
+        assert paths == ["lib/a.py", "pkg/a.py"]
+
+    def test_dot_slash_prefix_is_exact(self):
+        scan = _scan("src/core/__init__.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["./src/core/__init__.py"])
+        ]
+        assert paths == ["src/core/__init__.py"]
+
+    def test_repo_prefixed_request_maps_to_the_scanned_path(self):
+        scan = _scan("graphlm/cli.py")
+        paths = [
+            f.rel_path
+            for f in filter_requested_files(scan, ["graphLM/graphlm/cli.py"])
+        ]
+        assert paths == ["graphlm/cli.py"]
 
 
 class TestMaxContext:

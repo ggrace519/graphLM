@@ -245,11 +245,27 @@ class TestRenderHtml:
             ],
         )
         html = render_html(graph)
-        data_start = html.index("const graphData = ") + len("const graphData = ")
-        data_end = html.index(";\nconst _PALETTE")
-        data = json.loads(html[data_start:data_end])
+        data = _embedded(html)
         assert len(data["nodes"]) == 1
         assert data["nodes"][0]["name"] == "Main"
+
+    def test_embedded_json_does_not_break_out_of_script_tag(self):
+        # json.dumps does not escape <; a path containing </script> used to
+        # close the inline script tag. The payload must round-trip and the
+        # document must still have exactly the two intended <script> tags
+        # (D3 CDN + inline).
+        payload = "foo</script><script>alert(1)</script>.py"
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[
+                ModuleDescription(path=payload, name="x", description="d"),
+            ],
+        )
+        html = render_html(graph)
+        assert payload not in html
+        assert html.count("<script") == 2
+        data = _embedded(html)
+        assert data["nodes"][0]["path"] == payload
 
     def test_modules_included_as_nodes(self):
         graph = CodebaseGraph(
@@ -620,6 +636,25 @@ class TestGroundTruthNodes:
         assert len(nodes) == 1
         assert nodes[0]["type"] == "module"
         assert nodes[0]["in_cycle"] is True
+
+    def test_dot_slash_llm_paths_still_flag_in_cycle(self):
+        # detect_cycles emits normalised nodes; LLM edges keep ./ (#96).
+        graph = CodebaseGraph(
+            directory_tree="p/",
+            import_edges=[_edge("./a.py", "./b.py"), _edge("./b.py", "./a.py")],
+            import_cycles=[
+                Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+            deterministic_edges=None,
+        )
+        nodes = _build_nodes(graph)
+        flags = {n["id"]: n["in_cycle"] for n in nodes}
+        assert flags == {"a.py": True, "b.py": True}
+        links = _build_links(graph)
+        assert {(lk["source"], lk["target"]) for lk in links} == {
+            ("a.py", "b.py"),
+            ("b.py", "a.py"),
+        }
 
 
 class TestGroundTruthHtml:
