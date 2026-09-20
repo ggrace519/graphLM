@@ -1,9 +1,11 @@
 """C / C++ Tree-sitter resolver (the ``graphlm[cpp]`` extra).
 
-Quoted ``#include "foo.h"`` resolves relative to the importing file (plus an
-extension probe). Angle-bracket ``#include <stdio.h>`` is a system header and
-is dropped like Python stdlib — not partial. A macro include (``#include
-FOO``) is a policy drop and marks the language known-partial.
+Quoted ``#include "foo.h"`` resolves relative to the importing file as that
+exact name. An extension probe (``.h``.c``.hpp``…) applies only to
+extensionless specifiers (``#include "foo"``). Angle-bracket
+``#include <stdio.h>`` is a system header and is dropped like Python
+stdlib — not partial. A macro include (``#include FOO``) is a policy drop
+and marks the language known-partial.
 
 One extra, two grammars: ``.c``/``.h`` use ``tree_sitter_c``; ``.cpp``/``.cc``/
 ``.cxx``/``.hpp``/``.hh``/``.hxx`` use ``tree_sitter_cpp``. ``kind`` is
@@ -55,10 +57,14 @@ def _string_content(node) -> str | None:
 
 
 def _extract_includes(tree) -> list[_Include]:
+    """Quoted / macro includes anywhere in the tree, including under ``#ifdef``.
+
+    Root-children-only missed ``#ifdef USE_BAR\\n#include "bar.h"`` (#99).
+    Walks ``.children`` only — never ``start_point`` / ``end_point``.
+    """
     out: list[_Include] = []
-    for node in tree.root_node.children:
-        if node.type != "preproc_include":
-            continue
+
+    def _take(node) -> None:
         quoted = None
         macro = False
         for child in node.children:
@@ -76,6 +82,15 @@ def _extract_includes(tree) -> list[_Include]:
                 out.append(_Include(specifier=spec, is_relative=True))
         elif macro:
             out.append(_Include(specifier="", is_relative=False))
+
+    def _visit(node) -> None:
+        if node.type == "preproc_include":
+            _take(node)
+            return
+        for child in node.children:
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 
@@ -140,11 +155,16 @@ def _candidates(from_path: str, spec: str) -> tuple[str, ...]:
     if base is None:
         return ()
     out: list[str] = [base]
-    stem = base.rsplit(".", 1)[0] if "." in Path(base).name else base
-    for ext in _PROBE_EXTS:
-        cand = stem + ext
-        if cand not in out:
-            out.append(cand)
+    # Extension probe is for `#include "foo"` only. Stripping `.h` and
+    # retrying `.c` made `#include "foo.h"` hit a sibling `foo.c` (and
+    # `foo.c` include itself) whenever `foo.h` was not beside the importer
+    # (#128). The preprocessor searches for the exact name.
+    spec_name = spec.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." not in spec_name:
+        for ext in _PROBE_EXTS:
+            cand = base + ext
+            if cand not in out:
+                out.append(cand)
     return tuple(out)
 
 

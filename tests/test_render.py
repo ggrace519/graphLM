@@ -226,6 +226,65 @@ class TestWriteOutputs:
             assert json_path.exists()
             assert html_path is None
 
+    def test_refuses_to_write_through_graph_json_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            out = tmp / "out"
+            out.mkdir()
+            canary = tmp / "canary.txt"
+            canary.write_text("USER DATA")
+            (out / "GRAPH.json").symlink_to(canary)
+            try:
+                write_outputs(graph, out, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert canary.read_text() == "USER DATA"
+            assert (out / "GRAPH.json").is_symlink()
+
+    def test_refuses_to_write_through_output_dir_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            real = tmp / "real"
+            real.mkdir()
+            link = tmp / "link"
+            try:
+                link.symlink_to(real)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(graph, link, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (real / "GRAPH.md").exists()
+
+    def test_refuses_to_write_through_ancestor_directory_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            victim = tmp / "victim"
+            victim.mkdir()
+            decoy = tmp / "decoy"
+            try:
+                decoy.symlink_to(victim)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(
+                    graph, decoy / "pwned", html=False, diff=False
+                )
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (victim / "pwned").exists()
+            assert not (victim / "pwned" / "GRAPH.md").exists()
+
     def test_creates_output_directory(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
@@ -441,6 +500,27 @@ class TestMermaidModuleGraph:
         assert "LLM-inferred import edges" in md
         assert "ground truth" not in md
         assert "n_pkg --> n_lib" in _mermaid_block(md)
+
+    def test_dot_slash_llm_paths_do_not_collapse_to_dot(self):
+        # ./a.py rpartition("/") used to yield "." (#96).
+        graph = CodebaseGraph(
+            directory_tree="p/",
+            deterministic_edges=None,
+            import_edges=[_edge("./a.py", "./b.py"), _edge("./b.py", "./a.py")],
+            import_cycles=[
+                Cycle(
+                    nodes=["a.py", "b.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                )
+            ],
+        )
+        text = "\n".join(render_mermaid(graph))
+        assert 'n_["."]' not in text
+        assert 'n_a_py["a.py"]' in text
+        assert 'n_b_py["b.py"]' in text
+        assert "n_a_py --> n_b_py" in text
 
     def test_ast_edges_win_over_llm_edges(self):
         graph = CodebaseGraph(
