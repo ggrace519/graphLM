@@ -92,10 +92,11 @@ def _extract(tree) -> list[_PhpImport]:
     out: list[_PhpImport] = []
 
     def _unwrap_string(node):
-        """String argument of require, unwrapping parentheses only.
+        """String argument of require, unwrapping parens and ``or die``.
 
-        Must not walk into ``binary_expression`` (``__DIR__ . "/x.php"``) —
-        that remains a policy drop.
+        Concatenation (``__DIR__ . "/x.php"``, operator ``.``) stays a
+        policy drop. Logical ``or`` / ``||`` / ``and`` / ``&&`` wrap a
+        real string literal (``require 'b.php' or die();``, #135).
         """
         if node.type in ("encapsed_string", "string"):
             return node
@@ -104,6 +105,16 @@ def _extract(tree) -> list[_PhpImport]:
                 found = _unwrap_string(child)
                 if found is not None:
                     return found
+            return None
+        if node.type == "binary_expression":
+            ops = {c.type for c in node.children}
+            if "." in ops:
+                return None
+            if ops & {"or", "||", "and", "&&"}:
+                for child in node.children:
+                    found = _unwrap_string(child)
+                    if found is not None:
+                        return found
         return None
 
     def _take_require(node) -> None:

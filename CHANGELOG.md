@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **PHP `require 'x.php' or die()` is extracted.** The quoted path is a string literal; tree-sitter wraps it in a logical `binary_expression`. The unwraper treated every binary as concat (`__DIR__ . "/x.php"`), so a common include form produced no edge. Logical `or` / `||` are unwrapped; concat still drops (#135).
+
 - **C# namespace alias `using Models = MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** #126 stopped the nested-type parent probe for a plain namespace using; aliases still ran it first, so a namespace alias preferred `MyApp.cs` over unique-dir `Models/User.cs`. Aliases now unique-dir first and only parent-probe when that misses (#134).
 
 - **Dotenv editor backups and non-dot suffixes (`.env~`, `.env-local`) are never read.** Never-read required `.env` or `.env.<suffix>`, so vim `.env~` and `.env-local` / `.env_backup` were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.

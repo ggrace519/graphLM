@@ -104,6 +104,31 @@ class TestPhpPack:
         pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
         assert ("a.php", "b.php", "include") in pairs
 
+    def test_require_or_die_is_an_edge(self):
+        """require 'b.php' or die() is a string literal, not concat (#135)."""
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", "<?php require 'b.php' or die();\n", 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_require_or_die_does_not_extract_concat(self, tmp_path):
+        (tmp_path / "a.php").write_text("<?php require __DIR__ . '/b.php' or die();\n")
+        (tmp_path / "b.php").write_text("<?php\n")
+        frags = [
+            FileFragment("a.php", "<?php require __DIR__ . '/b.php' or die();\n", 1),
+            FileFragment("b.php", "<?php\n", 1),
+        ]
+        partial: set[str] = set()
+        edges = build_dependency_graph(
+            frags, project_dir=tmp_path, partial_languages=partial
+        )
+        assert edges == []
+        assert "php" in partial
+
     def test_parenthesized_require_is_an_edge(self):
         edges = build_dependency_graph(
             [
