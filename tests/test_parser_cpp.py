@@ -132,6 +132,27 @@ class TestCppPack:
         members = {frozenset(c) for c in cycles}
         assert frozenset({CA, CB}) in members
 
+    def test_quoted_header_does_not_resolve_to_sibling_c(self):
+        """#include \"foo.h\" must not hit foo.c (#128)."""
+        frags = [
+            FileFragment("src/main.c", '#include "foo.h"\n', 1),
+            FileFragment("src/foo.c", '#include "foo.h"\nint foo(void) { return 0; }\n', 2),
+            FileFragment("include/foo.h", "int foo(void);\n", 1),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/main.c", "src/foo.c", "include") not in got
+        assert ("src/foo.c", "src/foo.c", "include") not in got
+
+    def test_extensionless_include_still_probes_header(self):
+        frags = [
+            FileFragment("src/main.c", '#include "foo"\n', 1),
+            FileFragment("src/foo.h", "#pragma once\n", 1),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/main.c", "src/foo.h", "include") in got
+
     def test_macro_include_marks_partial(self, tmp_path):
         (tmp_path / "a.c").write_text("#include FOO\n")
         (tmp_path / "foo.h").write_text("int x;\n")

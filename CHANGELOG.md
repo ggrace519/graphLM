@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **C++ `#include "foo.h"` no longer resolves onto a sibling `foo.c`.** The extension probe stripped `.h` and retried `.c`/`.hpp`/…, so a missing local header became a false include of the implementation file (and a self-edge from `foo.c`). The probe now runs only for extensionless `#include "foo"` (ADR-008) (#128).
+
 - **`.envrc` and `.flaskenv` are never read.** They are dotenv-class secret stores that are not `.env.<suffix>`, so they were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
 - **GitHub fine-grained PATs (`github_pat_`) are redacted.** The dedicated GitHub regex only matched classic `ghp_` / `gho_` / … prefixes, so a bare `github_pat_…` in a comment survived.
 
