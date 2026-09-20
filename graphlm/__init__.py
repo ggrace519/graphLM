@@ -247,13 +247,16 @@ def generate_graph(
         except ValueError as e:
             raise ValueError(str(e)) from None
 
-    # Resolve the request timeout: explicit arg > (settings, which already
-    # carries GRAPHLM_TIMEOUT env > default when built via from_env). When
-    # settings is built from explicit base_url/api_key/model it uses the default
-    # timeout; an explicit `timeout` arg (the CLI --timeout flag) overrides.
-    resolved_timeout = timeout if timeout is not None else (
-        settings.timeout if settings is not None else None
-    )
+    # Resolve the request timeout independently of how the endpoint was
+    # configured: explicit arg > GRAPHLM_TIMEOUT env > 300. Same pattern as
+    # max_context / max_output_tokens. Building Settings from an explicit
+    # base_url/api_key/model triple used to take the dataclass default 300 and
+    # skip the env, so `graphlm -b -k -m` silently ignored GRAPHLM_TIMEOUT (#92).
+    if timeout is None:
+        import os
+
+        timeout = float(os.environ.get("GRAPHLM_TIMEOUT", "300"))
+    resolved_timeout = timeout
 
     # Phase 1: Scan the project
     scan = scan_project(
@@ -437,12 +440,19 @@ def generate_graph(
 
 
 def pass1_tokens(tree: str) -> int:
-    """Estimate token count for pass 1 prompt (tree + instructions)."""
-    from graphlm.context import estimate_tokens
+    """Estimate token count for the pass-1 *request* (user prompt + overhead).
 
-    instruction_tokens = estimate_tokens(
-        "You are analyzing a project directory to determine which files "
-        "are most important to read for a comprehensive codebase analysis. "
-        "Return a JSON object with requested_files list."
+    Must be ``estimate_tokens`` of the prompt actually sent
+    (``assemble_pass1_prompt``) plus ``MESSAGE_OVERHEAD_TOKENS`` for the system
+    prompt and framing — the same accounting pass 2 uses — so
+    ``meta.usage.pass1.estimated_prompt_tokens`` can be compared to the
+    server's ``prompt_tokens`` (#86). A two-sentence stub of the instructions
+    plus the raw tree under-counted the real prompt by ~7x.
+    """
+    from graphlm.context import (
+        MESSAGE_OVERHEAD_TOKENS,
+        assemble_pass1_prompt,
+        estimate_tokens,
     )
-    return instruction_tokens + estimate_tokens(tree)
+
+    return estimate_tokens(assemble_pass1_prompt(tree)) + MESSAGE_OVERHEAD_TOKENS
