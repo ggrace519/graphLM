@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **C/C++ quoted `#include` inside `#ifdef` is extracted.** Only root-child `preproc_include` nodes were visited, so a guarded `#include "bar.h"` never became an AST edge. The walker now visits nested preprocessor nodes (byte offsets only, never `start_point`) (#99).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
