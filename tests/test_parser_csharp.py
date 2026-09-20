@@ -262,3 +262,23 @@ class TestCsharpPack:
         edges = build_dependency_graph(frags)
         got = {(e.from_path, e.to_path, e.kind) for e in edges}
         assert ("src/Program.cs", "src/MyApp/Outer.cs", "import") in got
+
+    def test_namespace_alias_does_not_hit_parent_file(self):
+        """using Models = MyApp.Models unique-dirs; must not prefer MyApp.cs (#134)."""
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using Models = MyApp.Models;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment("src/MyApp.cs", "namespace MyApp { class App {} }\n", 1),
+            FileFragment(
+                "src/MyApp/Models/User.cs",
+                "namespace MyApp.Models { class User {} }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Models/User.cs", "import") in got
+        assert ("src/Program.cs", "src/MyApp.cs", "import") not in got
