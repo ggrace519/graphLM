@@ -223,6 +223,11 @@ class TestFilterRequestedFiles:
         matched = filter_requested_files(scan, [], max_files=10)
         assert matched == []
 
+    def test_non_list_requested_returns_empty(self, small_project):
+        scan = scan_project(small_project)
+        assert filter_requested_files(scan, None, max_files=10) == []  # type: ignore[arg-type]
+        assert filter_requested_files(scan, "a.py", max_files=10) == []  # type: ignore[arg-type]
+
     def test_deterministic_ordering(self, large_project):
         from graphlm.scanner import scan_project
 

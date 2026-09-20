@@ -63,6 +63,34 @@ class TestFullPipeline:
         assert len(md_files) >= 1
         assert len(json_files) >= 1
 
+    def test_pass1_null_requested_files_still_writes_a_graph(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        # {"requested_files": null} is valid JSON and used to TypeError after
+        # the paid pass-1 call (#115).
+        httpx_mock.add_response(
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({"requested_files": None})
+                        },
+                        "index": 0,
+                    }
+                ]
+            }
+        )
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        assert isinstance(result.graph, CodebaseGraph)
+        assert (tmp_path / "GRAPH.md").exists()
+
     def test_directory_tree_filled_locally_not_from_llm(
         self, httpx_mock, small_project, tmp_path
     ):

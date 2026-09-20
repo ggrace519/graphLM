@@ -135,6 +135,12 @@ def filter_requested_files(
         ``max_files`` cap keeps request order (pass 1 lists important files
         first), then the kept set is sorted for deterministic output (#98).
     """
+    if not isinstance(requested, list):
+        return []
+    requested_set = set(requested)
+    # Build a lookup of requested files that exist in the scan
+    matched: dict[str, FileFragment] = {}
+
     by_path: dict[str, FileFragment] = {}
     for frag in scan.file_fragments:
         by_path[_norm_path(frag.rel_path)] = frag

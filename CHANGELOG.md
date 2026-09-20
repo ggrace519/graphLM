@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Pass 1 `requested_files: null` no longer aborts after a paid LLM call.** Free-form JSON with `null` or a string used to `TypeError` in `filter_requested_files` (or silently match zero files). Non-list / non-string entries are now treated as “request nothing” and pass 2 still runs (#115).
+
 - **`write_outputs` refuses to write through a symlink.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, so a cloned repo could clobber a file outside the output dir. Same contract as skill install (#33): remove the symlink and re-run.
 
 - **`latest.py` is ranked as source, not as a test.** After #94, `_rank_file` still used `"test" in stem`, so `latest.py` (rank 10) lost to markdown (rank 8) under a tight `max_files` cap and never reached pass 2 / AST (#109).
