@@ -93,6 +93,98 @@ class TestPhpPack:
         assert ("App/Models/User.php", "import") in specs
         assert ("bootstrap.php", "include") in specs
 
+    def test_require_inside_if_is_an_edge(self):
+        a = '<?php\nif (true) {\n    require "b.php";\n}\n'
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", a, 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_require_or_die_is_an_edge(self):
+        """require 'b.php' or die() is a string literal, not concat (#135)."""
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", "<?php require 'b.php' or die();\n", 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_require_or_die_does_not_extract_concat(self, tmp_path):
+        (tmp_path / "a.php").write_text("<?php require __DIR__ . '/b.php' or die();\n")
+        (tmp_path / "b.php").write_text("<?php\n")
+        frags = [
+            FileFragment("a.php", "<?php require __DIR__ . '/b.php' or die();\n", 1),
+            FileFragment("b.php", "<?php\n", 1),
+        ]
+        partial: set[str] = set()
+        edges = build_dependency_graph(
+            frags, project_dir=tmp_path, partial_languages=partial
+        )
+        assert edges == []
+        assert "php" in partial
+
+    def test_parenthesized_require_is_an_edge(self):
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", '<?php require("b.php");\n', 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_grouped_use_is_an_edge(self):
+        src = "<?php\nuse App\\Models\\{User, Post};\n"
+        edges = build_dependency_graph(
+            [
+                FileFragment("index.php", src, 1),
+                FileFragment("src/App/Models/User.php", "<?php\n", 1),
+                FileFragment("src/App/Models/Post.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("index.php", "src/App/Models/User.php") in pairs
+        assert ("index.php", "src/App/Models/Post.php") in pairs
+
+    def test_class_use_does_not_hit_parent_file(self):
+        """use App\\Models\\User must not resolve onto Models.php (#129)."""
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "src/index.php",
+                    "<?php\nuse App\\Models\\User;\n",
+                    2,
+                ),
+                FileFragment("src/App/Models.php", "<?php\nclass Models {}\n", 2),
+            ]
+        )
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/index.php", "src/App/Models.php", "import") not in got
+
+    def test_use_function_still_hits_parent_file(self):
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "src/index.php",
+                    "<?php\nuse function App\\Models\\helper;\n",
+                    2,
+                ),
+                FileFragment(
+                    "src/App/Models.php",
+                    "<?php\nfunction helper() {}\n",
+                    2,
+                ),
+            ]
+        )
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/index.php", "src/App/Models.php", "import") in got
+
     def test_user_service_cycle(self, php_project):
         scan = scan_project(php_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=php_project)
