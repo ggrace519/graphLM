@@ -212,6 +212,29 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTS
 
 
+def _is_test_path(rel_path: str) -> bool:
+    """True for test files/dirs — not names that merely contain ``test`` (#94).
+
+    ``latest.py`` / ``contest.py`` / ``testing.py`` are ordinary modules.
+    ``test_foo.py``, ``foo_test.py``, ``foo.test.js``, and anything under
+    ``tests/`` / ``test/`` / ``__tests__/`` are tests.
+    """
+    rel = rel_path.replace("\\", "/").lower()
+    parts = rel.split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    dir_parts = parts[:-1]
+    if parts[0] in {"tests", "test", "__tests__"} or any(
+        p in {"tests", "test", "__tests__"} for p in dir_parts
+    ):
+        return True
+    if stem.startswith("test_") or stem.endswith("_test") or stem == "test":
+        return True
+    if ".test." in name or ".spec." in name:
+        return True
+    return False
+
+
 def _is_nested_checkout(dir_path: Path) -> bool:
     """True if ``dir_path`` is the root of another git checkout.
 
@@ -385,18 +408,9 @@ def scan_project(
                 if _is_sensitive_file(entry):
                     skipped_count += 1
                     continue
-                if not include_tests and (
-                    rel_str.startswith("test") or rel_str.startswith("tests/")
-                ):
-                    # Check test prefix more carefully
-                    if "test" in rel_str.split("/")[-1].lower().split(".")[0]:
-                        skipped_count += 1
-                        continue
-                    # Also catch tests/ prefix
-                    parts = rel_str.split("/")
-                    if parts[0] == "tests" or parts[0].startswith("test_"):
-                        skipped_count += 1
-                        continue
+                if not include_tests and _is_test_path(rel_str):
+                    skipped_count += 1
+                    continue
 
             listable.append(entry)
 
@@ -521,12 +535,8 @@ def scan_project(
             if _is_sensitive_file(fpath):
                 skipped_count += 1
                 continue
-            if not include_tests:
-                parts = rel.split("/")
-                if "test" in parts[-1].lower().split(".")[0]:
-                    continue
-                if parts[0] in ("tests",) or parts[0].startswith("test_"):
-                    continue
+            if not include_tests and _is_test_path(rel):
+                continue
 
             try:
                 rank = _rank_file(rel)
