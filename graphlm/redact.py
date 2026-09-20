@@ -102,6 +102,7 @@ _SECRET_EXTS = {
     ".p12",
     ".pfx",
     ".jks",
+    ".keystore",
     ".cer",
     # SSH keys
     ".ppk",
@@ -210,6 +211,20 @@ def _is_sensitive_file(path: Path) -> bool:
     # backups of those files must never be read either.
     if _is_named_or_backup(lname, _EXACT_SECRET_NAMES):
         return True
+    # Backups of secret *extensions*: app.jks.bak, server.key~, #foo.pem#.
+    dotted_exts = {e for e in _SECRET_EXTS if e.startswith(".")}
+    for ext in dotted_exts:
+        if (
+            lname.endswith(ext + ".bak")
+            or lname.endswith(ext + ".old")
+            or lname.endswith(ext + "~")
+            or lname.endswith(ext + "-orig")
+        ):
+            return True
+    if lname.startswith("#") and lname.endswith("#"):
+        inner_suffix = Path(lname[1:-1]).suffix.lower()
+        if inner_suffix in dotted_exts:
+            return True
 
     # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the
     # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed

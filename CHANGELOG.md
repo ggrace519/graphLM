@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.keystore` and backups of secret extensions (`app.jks.bak`, `server.key~`) are never read.** Android `debug.keystore` missed the `.jks` list, and backup matching only covered exact names, so binary keystore bytes were scanned.
 - **`.htpasswd`, singular `secret.yaml`, and `*.env` / `foo.env.local` are never read.** `*secrets*` missed `secret.yaml`; `.htpasswd` is not `*password*`; `config.env` is not a leading `.env`. Those files were scanned with hashes and keys intact.
 - **Backups of `.netrc` / `_netrc` / `.pgpass` / `.flaskenv` are never read.** Exact-name matching skipped `.netrc.bak` / `.pgpass~` / `.flaskenv.bak`; netrc and pgpass secrets are not `password=` assignments, so redaction left them intact.
 - **`.netrc` / `_netrc` / `.pgpass` are never read.** They hold passwords in layouts the assignment regex does not match (`machine host login user password SECRET`, `host:port:db:user:SECRET`), so they were scanned verbatim.
