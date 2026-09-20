@@ -165,7 +165,7 @@ _EXACT_SECRET_NAMES = (
 )
 
 
-def _is_named_or_backup(lname: str, bases: frozenset[str]) -> bool:
+def _is_named_or_backup(lname: str, bases: set[str]) -> bool:
     """Exact never-read name, or a backup of one.
 
     Matches ``base``, ``base.bak`` / ``base.old``, ``base-orig``,
