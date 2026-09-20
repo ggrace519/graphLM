@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
 - **`BEGIN ENCRYPTED PRIVATE KEY` PEM bodies are redacted.** The PKCS#8 encrypted label was not in `(RSA |EC |DSA |OPENSSH )?`, so JSON keystores sent the ciphertext body.
 - **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.
 - **JSON `"password"` / `"api_key"` assignments are redacted.** The assignment regexes required the keyword to sit immediately before `=`/`:`, so `"password": "…"` in `appsettings.json` survived. Optional quotes around the key are now accepted.

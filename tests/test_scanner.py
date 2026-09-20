@@ -419,6 +419,16 @@ class TestRedactSecrets:
         assert "[REDACTED:CONN_STRING_PASSWORD]" in redacted
         assert "p4ssw0rd" not in redacted
 
+    def test_redacts_tls_and_srv_connection_strings(self):
+        for uri in (
+            "mongodb+srv://user:AtlasSecret99@cluster0.mongodb.net/app",
+            "rediss://user:RedisSecret99@localhost:6379/0",
+            "amqps://user:AmqpSecret99@localhost",
+        ):
+            redacted = _redact_secrets(uri)
+            assert "[REDACTED:CONN_STRING_PASSWORD]" in redacted, uri
+            assert "Secret99" not in redacted, uri
+
     def test_leaves_plain_code_untouched(self):
         content = "x = 42\nname = 'hello'\ndef foo(): pass"
         redacted = _redact_secrets(content)
