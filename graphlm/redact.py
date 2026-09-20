@@ -138,6 +138,26 @@ _ENV_SAFE_SUFFIXES = ("example", "sample", "template", "dist")
 # Source-code extensions exempt from the name patterns above (token.py is code).
 _SOURCE_EXTS_FOR_SECRET_NAMES = {".py", ".js", ".ts", ".jsx", ".tsx", ".rb", ".go", ".rs", ".java", ".cs", ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx", ".hh", ".hxx", ".php"}
 
+# OpenSSH private-key filenames (no extension). `id_rsa.pub` is a public key
+# and is not in this set. The `*private*` name glob misses these because the
+# stem is `id_rsa`, not `private_key`.
+_SSH_PRIVATE_KEY_NAMES = {
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_ecdsa_sk",
+    "id_ed25519_sk",
+}
+
+# Credential files whose secret is not `password = ...` (so redaction misses
+# them) and whose names miss the *password* / *token* globs.
+_CREDENTIAL_FILE_NAMES = {
+    ".netrc",
+    "_netrc",
+    ".pgpass",
+}
+
 
 def _is_sensitive_file(path: Path) -> bool:
     """Check if a file likely contains secrets or credentials.
@@ -151,6 +171,11 @@ def _is_sensitive_file(path: Path) -> bool:
 
     # Check full filename for non-dot-prefixed patterns like "env.production"
     if path.name.lower() in _SECRET_EXTS:
+        return True
+
+    if path.name.lower() in _SSH_PRIVATE_KEY_NAMES:
+        return True
+    if path.name.lower() in _CREDENTIAL_FILE_NAMES:
         return True
 
     # Any dotenv file (.env, .env.<anything>) is secret-bearing, except the

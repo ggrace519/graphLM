@@ -442,6 +442,27 @@ class TestMermaidModuleGraph:
         assert "ground truth" not in md
         assert "n_pkg --> n_lib" in _mermaid_block(md)
 
+    def test_dot_slash_llm_paths_do_not_collapse_to_dot(self):
+        # ./a.py rpartition("/") used to yield "." (#96).
+        graph = CodebaseGraph(
+            directory_tree="p/",
+            deterministic_edges=None,
+            import_edges=[_edge("./a.py", "./b.py"), _edge("./b.py", "./a.py")],
+            import_cycles=[
+                Cycle(
+                    nodes=["a.py", "b.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                )
+            ],
+        )
+        text = "\n".join(render_mermaid(graph))
+        assert 'n_["."]' not in text
+        assert 'n_a_py["a.py"]' in text
+        assert 'n_b_py["b.py"]' in text
+        assert "n_a_py --> n_b_py" in text
+
     def test_ast_edges_win_over_llm_edges(self):
         graph = CodebaseGraph(
             directory_tree="root/",
