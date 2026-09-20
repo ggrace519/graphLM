@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Backups of `.netrc` / `_netrc` / `.pgpass` / `.flaskenv` are never read.** Exact-name matching skipped `.netrc.bak` / `.pgpass~` / `.flaskenv.bak`; netrc and pgpass secrets are not `password=` assignments, so redaction left them intact.
 - **`.netrc` / `_netrc` / `.pgpass` are never read.** They hold passwords in layouts the assignment regex does not match (`machine host login user password SECRET`, `host:port:db:user:SECRET`), so they were scanned verbatim.
 - **OpenSSH vim/emacs private-key backups (`id_rsa~`, `#id_rsa#`) are never read.** The `.bak` / `.old` prefix rule missed editor backup names, and redaction still only strips BEGIN/END, so the key body was scanned.
 - **OpenSSH private-key *backups* are never read.** Exact-name matching skipped `id_rsa.bak` / `id_ed25519.old`, and redaction only strips BEGIN/END, so the key body was still sent. Names that start with `id_rsa.` / `id_rsa-` (except `.pub`) are now never-read too.
