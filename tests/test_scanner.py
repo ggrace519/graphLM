@@ -396,6 +396,26 @@ class TestIsSensitiveFile:
         assert _is_sensitive_file(Path("id_rsa.pub")) is False
         assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
 
+    def test_netrc_and_pgpass_are_sensitive(self):
+        assert _is_sensitive_file(Path(".netrc")) is True
+        assert _is_sensitive_file(Path("_netrc")) is True
+        assert _is_sensitive_file(Path(".pgpass")) is True
+        assert _is_sensitive_file(Path("home/.netrc")) is True
+
+    def test_scan_skips_netrc_and_pgpass(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".netrc").write_text(
+            "machine host login user password SUPERSECRET\n"
+        )
+        (project / ".pgpass").write_text("localhost:5432:db:user:PGSECRET\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        assert ".netrc" not in result.tree
+        assert ".pgpass" not in result.tree
+
     def test_scan_skips_openssh_private_key_but_reads_pub(self, tmp_path):
         project = tmp_path / "proj"
         ssh = project / ".ssh"
