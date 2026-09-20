@@ -358,13 +358,22 @@ def _refuse_symlink(path: Path) -> None:
 
     ``Path.write_text`` follows the link, so a cloned repo that plants
     ``.graphlm/GRAPH.json`` → ``~/.bashrc`` (or ``.graphlm`` → ``$HOME``)
-    would overwrite a file graphlm did not create.
+    would overwrite a file graphlm did not create. Ancestor directory
+    symlinks are the same hole: ``decoy → victim`` plus ``-o decoy/out``
+    would mkdir and write inside ``victim``.
     """
     if path.is_symlink():
         raise ValueError(
             f"refusing to write through a symlink at {path} — graphlm won't "
             "overwrite a file it didn't create. Remove the symlink and re-run."
         )
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ValueError(
+                f"refusing to write through a symlink at {parent} — graphlm "
+                "won't overwrite a file it didn't create. Remove the symlink "
+                "and re-run."
+            )
 
 
 def write_outputs(

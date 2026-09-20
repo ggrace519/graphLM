@@ -263,6 +263,28 @@ class TestWriteOutputs:
                 raise AssertionError("expected ValueError")
             assert not (real / "GRAPH.md").exists()
 
+    def test_refuses_to_write_through_ancestor_directory_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            victim = tmp / "victim"
+            victim.mkdir()
+            decoy = tmp / "decoy"
+            try:
+                decoy.symlink_to(victim)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(
+                    graph, decoy / "pwned", html=False, diff=False
+                )
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (victim / "pwned").exists()
+            assert not (victim / "pwned" / "GRAPH.md").exists()
+
     def test_creates_output_directory(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:

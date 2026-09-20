@@ -9,7 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
-- **`write_outputs` refuses to write through a symlink.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, so a cloned repo could clobber a file outside the output dir. Same contract as skill install (#33): remove the symlink and re-run.
+- **`write_outputs` refuses to write through a symlink, including ancestor directory links.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, and a parent `decoy → victim` plus `-o decoy/out` still wrote GRAPH.* into `victim`. Same contract as skill install (#33): remove the symlink and re-run.
 
 ### Infrastructure
 
