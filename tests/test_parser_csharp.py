@@ -189,3 +189,57 @@ class TestCsharpPack:
         edges = build_dependency_graph(frags, project_dir=tmp_path)
         got = {(e.from_path, e.to_path, e.kind) for e in edges}
         assert ("src/MyApp/A.cs", "src/MyApp/B.cs", "static") in got
+
+    def test_namespace_using_does_not_hit_parent_file(self):
+        """using MyApp.Models unique-dirs; must not prefer MyApp.cs (#126)."""
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using MyApp.Models;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment("src/MyApp.cs", "namespace MyApp { class App {} }\n", 1),
+            FileFragment(
+                "src/MyApp/Models/User.cs",
+                "namespace MyApp.Models { class User {} }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Models/User.cs", "import") in got
+        assert ("src/Program.cs", "src/MyApp.cs", "import") not in got
+
+    def test_using_static_nested_type_still_hits_parent_file(self):
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using static MyApp.Outer.Inner;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment(
+                "src/MyApp/Outer.cs",
+                "namespace MyApp { static class Outer { public static class Inner {} } }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Outer.cs", "static") in got
+
+    def test_alias_nested_type_still_hits_parent_file(self):
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using Inner = MyApp.Outer.Inner;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment(
+                "src/MyApp/Outer.cs",
+                "namespace MyApp { class Outer { public class Inner {} } }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Outer.cs", "import") in got
