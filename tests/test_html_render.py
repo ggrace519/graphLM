@@ -637,6 +637,25 @@ class TestGroundTruthNodes:
         assert nodes[0]["type"] == "module"
         assert nodes[0]["in_cycle"] is True
 
+    def test_dot_slash_llm_paths_still_flag_in_cycle(self):
+        # detect_cycles emits normalised nodes; LLM edges keep ./ (#96).
+        graph = CodebaseGraph(
+            directory_tree="p/",
+            import_edges=[_edge("./a.py", "./b.py"), _edge("./b.py", "./a.py")],
+            import_cycles=[
+                Cycle(nodes=["a.py", "b.py"], edges=[], length=2, risk_score=1.0)
+            ],
+            deterministic_edges=None,
+        )
+        nodes = _build_nodes(graph)
+        flags = {n["id"]: n["in_cycle"] for n in nodes}
+        assert flags == {"a.py": True, "b.py": True}
+        links = _build_links(graph)
+        assert {(lk["source"], lk["target"]) for lk in links} == {
+            ("a.py", "b.py"),
+            ("b.py", "a.py"),
+        }
+
 
 class TestGroundTruthHtml:
     def test_template_has_three_layer_toggles(self):

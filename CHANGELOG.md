@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **GRAPH.html and the Mermaid module graph honour `./`-prefixed LLM paths.** Cycle nodes from `detect_cycles` are normalised (#84) but renderers still compared raw `./a.py`, so `--no-ast` cycles got no red ring and collapsed to a bogus `.` node. Node ids, link pairs, and directory collapse now strip `./` (#96).
+
 - **Go stdlib imports no longer resolve onto a unique local package directory.** `import "fmt"` with a scanned `fmt/fmt.go` (or `import "encoding/json"` with `json/json.go`) emitted a do-not-contradict AST edge. Specifiers with no `.` are treated as stdlib and dropped; dotted module paths still suffix-strip per ADR-010 (#95).
 
 - **`--no-tests` no longer drops modules whose names merely contain `test`.** `latest.py`, `contest.py`, and `testing.py` were skipped because the scanner used `"test" in stem`. It now matches real test conventions (`test_*`, `*_test`, `*.test.*`, `tests/` / `test/` / `__tests__/`) and the tree walk uses the same predicate (#94).
