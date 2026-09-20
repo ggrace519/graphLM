@@ -42,7 +42,7 @@ def _redact_secrets(content: str) -> str:
 
     # GitHub / GITHUB_TOKEN patterns
     redacted = re.sub(
-        r'(?i)(gh[pousr]_[A-Za-z0-9_]{36,})',
+        r'(?i)((?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,})',
         r'[REDACTED:GITHUB_TOKEN]',
         redacted,
     )
@@ -201,6 +201,17 @@ def _is_sensitive_file(path: Path) -> bool:
     if path.name.lower() in _SECRET_EXTS:
         return True
 
+    # Any file whose name is `.env` or starts with `.env` is secret-bearing
+    # (`.env.local`, `.envrc`, vim `.env~`, `.env-local`), except templates
+    # `.env.example` / `.sample` / `.template` / `.dist`. Requiring `.env.`
+    # as the next character missed editor backups and hyphen/underscore
+    # suffixes.
+
+    if path.name.lower() in _SSH_PRIVATE_KEY_NAMES:
+        return True
+    # Backups: id_rsa.bak, id_ed25519.old, vim id_rsa~, emacs #id_rsa#.
+    # Exact-name matching missed these and redaction only strips BEGIN/END,
+    # leaving the key body.
     lname = path.name.lower()
     # Exact names plus editor/suffix backups. Redaction misses netrc
     # (`password SECRET`) and pgpass (`host:port:db:user:SECRET`), so
@@ -212,10 +223,15 @@ def _is_sensitive_file(path: Path) -> bool:
     # non-secret template variants. A fixed allowlist (_SECRET_EXTS) missed
     # arbitrary variants like .env.qa / .env.test; this catches them all.
     name = path.name.lower()
-    if name == ".env" or name.startswith(".env."):
-        env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
-        if env_suffix not in _ENV_SAFE_SUFFIXES:
+    if name == ".env" or name.startswith(".env"):
+        if name.startswith(".env."):
+            env_suffix = name[len(".env.") :]
+            if env_suffix not in _ENV_SAFE_SUFFIXES:
+                return True
+        else:
             return True
+    if name == ".flaskenv":
+        return True
 
     stem = path.stem.lower()
     # Only apply name-based patterns to non-source files
