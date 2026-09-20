@@ -107,6 +107,28 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "test_helpers.py" not in paths
 
+    def test_no_tests_does_not_drop_names_that_contain_test(self, tmp_path):
+        # ``"test" in "latest"`` used to skip real modules (#94).
+        project = tmp_path / "proj"
+        project.mkdir()
+        for name, text in (
+            ("app.py", "x = 1\n"),
+            ("latest.py", "x = 1\n"),
+            ("contest.py", "x = 1\n"),
+            ("testing.py", "x = 1\n"),
+            ("test_unit.py", "x = 1\n"),
+        ):
+            (project / name).write_text(text)
+        result = scan_project(project, include_tests=False)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py", "latest.py", "contest.py", "testing.py"}
+        tree_names = {ln.strip() for ln in result.tree.splitlines()}
+        assert "latest.py" in tree_names
+        assert "contest.py" in tree_names
+        assert "testing.py" in tree_names
+        assert "test_unit.py" not in paths
+        assert "test_unit.py" not in tree_names
+
     def test_medium_project_scans_correct_files(self, medium_project):
         result = scan_project(medium_project, include_tests=True)
         paths = [f.rel_path for f in result.file_fragments]
@@ -187,6 +209,37 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "linked.py" not in paths
         assert "main.py" in paths
+
+    def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
+        # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
+        project = tmp_path / "project"
+        sub = project / "sub"
+        sub.mkdir(parents=True)
+        (project / "main.py").write_text("x = 1\n")
+        (sub / "mod.py").write_text("x = 1\n")
+        try:
+            (sub / "loop").symlink_to(project)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert len(result.tree.splitlines()) < 20
+        assert "loop/sub/loop" not in result.tree
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py", "sub/mod.py"}
+
+    def test_in_project_dir_symlink_alias_not_listed_as_real_path(self, tmp_path):
+        project = tmp_path / "project"
+        pkg = project / "pkg"
+        pkg.mkdir(parents=True)
+        (pkg / "mod.py").write_text("x = 1\n")
+        try:
+            (project / "alias").symlink_to(pkg)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert "alias/" not in result.tree
+        assert "pkg/" in result.tree
+        assert {f.rel_path for f in result.file_fragments} == {"pkg/mod.py"}
 
     def test_external_symlink_does_not_consume_max_files_slot(self, tmp_path):
         # An escaping symlink must be dropped BEFORE the max_files slice, or it

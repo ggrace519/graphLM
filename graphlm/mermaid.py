@@ -28,6 +28,18 @@ CYCLE_COLOR = "#e11"
 _UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9_]")
 
 
+def _norm_path(path: str) -> str:
+    """Canonical path: forward slashes, no leading ``./``.
+
+    LLM edges often carry ``./a.py``; ``rpartition("/")`` then yields ``.``
+    and every root-level cycle collapses to one bogus node (#96).
+    """
+    path = path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 def _collapse_dir(path: str) -> str:
     """Map a file path to its directory-level node label.
 
@@ -36,6 +48,7 @@ def _collapse_dir(path: str) -> str:
     root file into a single ``.`` node would hide the one place (top-level
     scripts) where per-file structure still matters.
     """
+    path = _norm_path(path)
     head, sep, _tail = path.rpartition("/")
     return head if sep else path
 
@@ -79,13 +92,13 @@ def _cycle_edge_test(graph: CodebaseGraph) -> Callable[[ImportEdge], bool]:
     the same SCC are cycle members regardless of which directories they land
     in. Cycle sets are frozensets of the SCC's node paths.
     """
-    cycle_sets = [frozenset(c.nodes) for c in graph.import_cycles]
+    cycle_sets = [
+        frozenset(_norm_path(n) for n in c.nodes) for c in graph.import_cycles
+    ]
 
     def is_cycle(edge: ImportEdge) -> bool:
-        return any(
-            edge.from_path in members and edge.to_path in members
-            for members in cycle_sets
-        )
+        src, dst = _norm_path(edge.from_path), _norm_path(edge.to_path)
+        return any(src in members and dst in members for members in cycle_sets)
 
     return is_cycle
 
