@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Dotenv editor backups and non-dot suffixes (`.env~`, `.env-local`) are never read.** Never-read required `.env` or `.env.<suffix>`, so vim `.env~` and `.env-local` / `.env_backup` were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
 - **`.envrc` and `.flaskenv` are never read.** They are dotenv-class secret stores that are not `.env.<suffix>`, so they were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
 - **GitHub fine-grained PATs (`github_pat_`) are redacted.** The dedicated GitHub regex only matched classic `ghp_` / `gho_` / … prefixes, so a bare `github_pat_…` in a comment survived.
 
