@@ -160,6 +160,10 @@ _CREDENTIAL_FILE_NAMES = {
     "_netrc",
     ".pgpass",
     ".htpasswd",
+    ".npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    ".pypirc",
 }
 
 # Exact never-read names that also have editor/suffix backups (`.bak`,

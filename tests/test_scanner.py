@@ -485,6 +485,26 @@ class TestIsSensitiveFile:
         assert ".netrc" not in result.tree
         assert ".pgpass" not in result.tree
 
+    def test_npmrc_yarnrc_pypirc_are_sensitive(self):
+        for name in (".npmrc", ".yarnrc", ".yarnrc.yml", ".pypirc", ".npmrc.bak"):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_scan_skips_npmrc(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".npmrc").write_text(
+            "//registry.npmjs.org/:_auth=YWRtaW46YWRtaW4=\n"
+            "registry=https://user:s3cretpass@npm.company.com/\n"
+        )
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        assert ".npmrc" not in result.tree
+        for f in result.file_fragments:
+            assert "YWRtaW46YWRtaW4=" not in f.content
+            assert "s3cretpass" not in f.content
+
     def test_credential_file_backups_are_sensitive(self):
         for name in (
             ".netrc.bak",
