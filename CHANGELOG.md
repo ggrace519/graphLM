@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`latest.py` is ranked as source, not as a test.** After #94, `_rank_file` still used `"test" in stem`, so `latest.py` (rank 10) lost to markdown (rank 8) under a tight `max_files` cap and never reached pass 2 / AST (#109).
+
 - **`.netrc` / `_netrc` / `.pgpass` are never read.** They hold passwords in layouts the assignment regex does not match (`machine host login user password SECRET`, `host:port:db:user:SECRET`), so they were scanned verbatim.
 
 - **In-project directory symlinks no longer explode or ghost the pass-1 tree.** `_walk_dir` followed `Path.is_dir()` into a `sub/loop → root` cycle (165 lines of `loop/sub/loop/...`) and listed `alias/mod.py` for a `alias → pkg` link that `os.walk` never reads. Directory symlinks are skipped in the tree, matching `followlinks=False` (#97).
