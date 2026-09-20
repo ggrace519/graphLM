@@ -500,9 +500,33 @@ class TestIsSensitiveFile:
         assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
 
     def test_openssh_private_key_backups_are_sensitive(self):
-        for name in ("id_rsa.bak", "id_ed25519.old", "id_ecdsa-orig"):
+        for name in (
+            "id_rsa.bak",
+            "id_ed25519.old",
+            "id_ecdsa-orig",
+            "id_rsa~",
+            "#id_ed25519#",
+        ):
             assert _is_sensitive_file(Path(name)) is True, name
             assert _is_sensitive_file(Path(".ssh") / name) is True, name
+
+    def test_scan_skips_openssh_tilde_and_emacs_backups(self, tmp_path):
+        project = tmp_path / "proj"
+        ssh = project / ".ssh"
+        ssh.mkdir(parents=True)
+        body = (
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "AAAAB3NzaC1yc2EAAAADAQABAAABgQCsecretkeybodyhere\n"
+            "-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        (ssh / "id_rsa~").write_text(body)
+        (ssh / "#id_ed25519#").write_text(body)
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py"}
+        for f in result.file_fragments:
+            assert "secretkeybodyhere" not in f.content
 
     def test_netrc_and_pgpass_are_sensitive(self):
         assert _is_sensitive_file(Path(".netrc")) is True
