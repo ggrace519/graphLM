@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GRAPH.html and the Mermaid module graph honour `./`-prefixed LLM paths.** Cycle nodes from `detect_cycles` are normalised (#84) but renderers still compared raw `./a.py`, so `--no-ast` cycles got no red ring and collapsed to a bogus `.` node. Node ids, link pairs, and directory collapse now strip `./` (#96).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
