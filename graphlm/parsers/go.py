@@ -178,6 +178,13 @@ def _resolve_import(
             return []
         hits = _pkg_go_files(target_dir, known)
     else:
+        # Stdlib / GOPATH-era paths have no dot (fmt, encoding/json). A unique
+        # local fmt/ or json/ directory must not become a ground-truth edge
+        # (#95). Module paths carry a domain (github.com/...). Relative
+        # imports are handled above. Suffix stripping (ADR-010) stays for
+        # dotted specs.
+        if "." not in spec:
+            return []
         hits = []
         for cand in _dir_candidates(spec):
             hits = _pkg_go_files(cand, known)
