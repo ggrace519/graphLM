@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--no-tests` no longer drops modules whose names merely contain `test`.** `latest.py`, `contest.py`, and `testing.py` were skipped because the scanner used `"test" in stem`. It now matches real test conventions (`test_*`, `*_test`, `*.test.*`, `tests/` / `test/` / `__tests__/`) and the tree walk uses the same predicate (#94).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
