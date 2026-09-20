@@ -86,7 +86,7 @@ def _redact_secrets(content: str) -> str:
 
     # Connection strings with embedded passwords
     redacted = re.sub(
-        r'((?:mysql|postgres|postgresql|mongodb|redis|amqp)://[^:\s]+:)([^@\s]+)(@)',
+        r'((?:mysql|postgres|postgresql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s]+:)([^@\s]+)(@)',
         r'\1[REDACTED:CONN_STRING_PASSWORD]\3',
         redacted,
     )
