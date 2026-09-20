@@ -47,6 +47,8 @@ class _PhpImport:
     specifier: str  # FQN with \\ or a relative path
     kind: str  # "import" | "include"
     is_relative: bool = True
+    # True for ``use function`` / ``use const`` — parent-file probe (ADR-011).
+    strip_member: bool = False
 
 
 def _fqn_text(node) -> str:
@@ -122,6 +124,9 @@ def _extract(tree) -> list[_PhpImport]:
     def _visit(node) -> None:
         if node.type == "namespace_use_declaration":
             prefix = ""
+            # ``use function`` / ``use const`` may sit on the declaration
+            # (grouped) or on the clause (plain).
+            decl_strip = any(c.type in ("function", "const") for c in node.children)
             for child in node.children:
                 if child.type == "namespace_name":
                     prefix = child.text.decode("utf-8").strip("\\")
@@ -132,7 +137,16 @@ def _extract(tree) -> list[_PhpImport]:
                     if fqn:
                         if prefix and "\\" not in fqn:
                             fqn = prefix + "\\" + fqn
-                        out.append(_PhpImport(specifier=fqn, kind="import"))
+                        clause_strip = decl_strip or any(
+                            gc.type in ("function", "const") for gc in n.children
+                        )
+                        out.append(
+                            _PhpImport(
+                                specifier=fqn,
+                                kind="import",
+                                strip_member=clause_strip,
+                            )
+                        )
                     return
                 for child in n.children:
                     _clauses(child)
@@ -210,12 +224,20 @@ def _norm_rel(path: str) -> str | None:
     return "/".join(parts)
 
 
-def _resolve_use(fqn: str, known: set[str], roots: tuple[str, ...]) -> list[str]:
+def _resolve_use(
+    fqn: str,
+    known: set[str],
+    roots: tuple[str, ...],
+    strip_member: bool = False,
+) -> list[str]:
     parts = [p for p in fqn.replace("\\", "/").split("/") if p]
     if not parts:
         return []
     candidates = ["/".join(parts) + ".php"]
-    if len(parts) >= 2:
+    # Parent-file probe is for ``use function`` / ``use const`` only
+    # (ADR-011). A class ``use App\Models\User`` must not hit Models.php
+    # when User.php is absent (#129).
+    if strip_member and len(parts) >= 2:
         candidates.append("/".join(parts[:-1]) + ".php")
     hit = _first_known_rooted(tuple(candidates), known, roots)
     return [hit] if hit else []
@@ -241,7 +263,9 @@ def _resolve_import(
         return []
     if imp.kind == "include":
         return _resolve_require(imp.specifier, from_path, known)
-    return _resolve_use(imp.specifier, known, roots)
+    return _resolve_use(
+        imp.specifier, known, roots, strip_member=imp.strip_member
+    )
 
 
 def _edge_kind(imp: _PhpImport) -> str:
