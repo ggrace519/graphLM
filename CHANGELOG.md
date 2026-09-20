@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.keystore` and backups of secret extensions (`app.jks.bak`, `server.key~`) are never read.** Android `debug.keystore` missed the `.jks` list, and backup matching only covered exact names, so binary keystore bytes were scanned.
+
 - **`BEGIN ENCRYPTED PRIVATE KEY` PEM bodies are redacted.** The PKCS#8 encrypted label was not in `(RSA |EC |DSA |OPENSSH )?`, so JSON keystores sent the ciphertext body.
 
 - **PHP interpolated double-quoted `require "config.php$id"` is not a static include.** The extractor took the first `string_content` chunk and emitted `a.php → config.php`. Interpolation is now a policy drop (same as concat) and marks known-partial (#147).

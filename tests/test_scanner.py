@@ -517,6 +517,17 @@ class TestIsSensitiveFile:
         assert _is_sensitive_file(Path("secret.py")) is False
         assert _is_sensitive_file(Path("foo.env.example")) is False
 
+    def test_keystore_and_secret_ext_backups_are_sensitive(self):
+        for name in (
+            "debug.keystore",
+            "app.jks.bak",
+            "app.p12.bak",
+            "server.key~",
+            "foo.pem.bak",
+            "#tls.pem#",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+
     def test_scan_skips_htpasswd_secret_yaml_and_env_suffix(self, tmp_path):
         project = tmp_path / "proj"
         project.mkdir()
