@@ -86,32 +86,38 @@ def _string_content(node) -> str | None:
 
 
 def _extract(tree) -> list[_PhpImport]:
+    """``use`` and quoted require/include anywhere, including under ``if`` (#114)."""
     out: list[_PhpImport] = []
-    for node in tree.root_node.children:
+
+    def _take_require(node) -> None:
+        expr = None
+        for gc in node.children:
+            if gc.type in ("encapsed_string", "string"):
+                expr = gc
+                break
+        literal = _string_content(expr)
+        if literal:
+            spec = literal.replace("\\", "/").strip()
+            if spec:
+                out.append(_PhpImport(specifier=spec, kind="include"))
+        else:
+            out.append(_PhpImport(specifier="", kind="include", is_relative=False))
+
+    def _visit(node) -> None:
         if node.type == "namespace_use_declaration":
             for child in node.children:
                 if child.type == "namespace_use_clause":
                     fqn = _use_fqn(child)
                     if fqn:
                         out.append(_PhpImport(specifier=fqn, kind="import"))
-            continue
-        if node.type != "expression_statement":
-            continue
+            return
+        if node.type in _REQUIRE_TYPES:
+            _take_require(node)
+            return
         for child in node.children:
-            if child.type not in _REQUIRE_TYPES:
-                continue
-            expr = None
-            for gc in child.children:
-                if gc.type in ("encapsed_string", "string"):
-                    expr = gc
-                    break
-            literal = _string_content(expr)
-            if literal:
-                spec = literal.replace("\\", "/").strip()
-                if spec:
-                    out.append(_PhpImport(specifier=spec, kind="include"))
-            else:
-                out.append(_PhpImport(specifier="", kind="include", is_relative=False))
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 
