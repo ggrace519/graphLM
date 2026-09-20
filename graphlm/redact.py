@@ -106,6 +106,7 @@ _SECRET_EXTS = {
     # SSH keys
     ".ppk",
     # Database credentials / connection strings
+    ".env",
     ".env.local",
     ".env.production",
     ".env.staging",
@@ -122,6 +123,7 @@ _SECRET_EXTS = {
 # Checked against both the stem and the full filename.
 _SECRET_NAME_PATTERNS = {
     "*secrets*",
+    "*secret*",
     "*credentials*",
     "*private*",
     "*password*",
@@ -156,6 +158,7 @@ _CREDENTIAL_FILE_NAMES = {
     ".netrc",
     "_netrc",
     ".pgpass",
+    ".htpasswd",
 }
 
 # Exact never-read names that also have editor/suffix backups (`.bak`,
@@ -215,6 +218,10 @@ def _is_sensitive_file(path: Path) -> bool:
     if name == ".env" or name.startswith(".env."):
         env_suffix = name[len(".env.") :] if name.startswith(".env.") else ""
         if env_suffix not in _ENV_SAFE_SUFFIXES:
+            return True
+    # `config.env` / `foo.env.local` — not a leading `.env`.
+    if name.endswith(".env") or ".env." in name:
+        if not any(name.endswith(".env." + s) for s in _ENV_SAFE_SUFFIXES):
             return True
 
     stem = path.stem.lower()
