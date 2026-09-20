@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).
 - **PHP quoted `require`/`include` inside `if` or a function is extracted.** Only root `expression_statement` nodes were visited, so `if (true) { require "b.php"; }` produced no include edge and did not mark known-partial (#114).
 
 ### Infrastructure

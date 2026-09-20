@@ -89,27 +89,55 @@ def _extract(tree) -> list[_PhpImport]:
     """``use`` and quoted require/include anywhere, including under ``if`` (#114)."""
     out: list[_PhpImport] = []
 
+    def _unwrap_string(node):
+        """String argument of require, unwrapping parentheses only.
+
+        Must not walk into ``binary_expression`` (``__DIR__ . "/x.php"``) —
+        that remains a policy drop.
+        """
+        if node.type in ("encapsed_string", "string"):
+            return node
+        if node.type == "parenthesized_expression":
+            for child in node.children:
+                found = _unwrap_string(child)
+                if found is not None:
+                    return found
+        return None
+
     def _take_require(node) -> None:
         expr = None
-        for gc in node.children:
-            if gc.type in ("encapsed_string", "string"):
-                expr = gc
+        for child in node.children:
+            found = _unwrap_string(child)
+            if found is not None:
+                expr = found
                 break
         literal = _string_content(expr)
         if literal:
             spec = literal.replace("\\", "/").strip()
             if spec:
                 out.append(_PhpImport(specifier=spec, kind="include"))
-        else:
-            out.append(_PhpImport(specifier="", kind="include", is_relative=False))
+                return
+        out.append(_PhpImport(specifier="", kind="include", is_relative=False))
 
     def _visit(node) -> None:
         if node.type == "namespace_use_declaration":
+            prefix = ""
             for child in node.children:
-                if child.type == "namespace_use_clause":
-                    fqn = _use_fqn(child)
+                if child.type == "namespace_name":
+                    prefix = child.text.decode("utf-8").strip("\\")
+
+            def _clauses(n) -> None:
+                if n.type == "namespace_use_clause":
+                    fqn = _use_fqn(n)
                     if fqn:
+                        if prefix and "\\" not in fqn:
+                            fqn = prefix + "\\" + fqn
                         out.append(_PhpImport(specifier=fqn, kind="import"))
+                    return
+                for child in n.children:
+                    _clauses(child)
+
+            _clauses(node)
             return
         if node.type in _REQUIRE_TYPES:
             _take_require(node)
