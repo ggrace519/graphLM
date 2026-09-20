@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`--no-tests` no longer drops modules whose names merely contain `test`.** `latest.py`, `contest.py`, and `testing.py` were skipped because the scanner used `"test" in stem`. It now matches real test conventions (`test_*`, `*_test`, `*.test.*`, `tests/` / `test/` / `__tests__/`) and the tree walk uses the same predicate (#94).
+
 - **`GRAPHLM_TIMEOUT` is honoured when the LLM endpoint is passed on the CLI.** `-b/-k/-m` (or `generate_graph(base_url=..., api_key=..., model=...)`) used to build a `Settings` with the dataclass default 300s and skip the env, so a raised timeout never reached pass 2. Timeout now resolves like `--max-context`: flag > env > 300 (#92).
 
 - **OpenSSH private-key filenames are never read.** `id_rsa` / `id_ed25519` / `id_ecdsa` (and the `_sk` variants) have no extension, so they missed both the `.key`/`.pem` list and the `*private*` name glob. The key body was scanned (only the BEGIN/END headers were redacted). Those names are now on the never-read list; `id_rsa.pub` stays scannable.

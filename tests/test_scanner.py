@@ -107,6 +107,28 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "test_helpers.py" not in paths
 
+    def test_no_tests_does_not_drop_names_that_contain_test(self, tmp_path):
+        # ``"test" in "latest"`` used to skip real modules (#94).
+        project = tmp_path / "proj"
+        project.mkdir()
+        for name, text in (
+            ("app.py", "x = 1\n"),
+            ("latest.py", "x = 1\n"),
+            ("contest.py", "x = 1\n"),
+            ("testing.py", "x = 1\n"),
+            ("test_unit.py", "x = 1\n"),
+        ):
+            (project / name).write_text(text)
+        result = scan_project(project, include_tests=False)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py", "latest.py", "contest.py", "testing.py"}
+        tree_names = {ln.strip() for ln in result.tree.splitlines()}
+        assert "latest.py" in tree_names
+        assert "contest.py" in tree_names
+        assert "testing.py" in tree_names
+        assert "test_unit.py" not in paths
+        assert "test_unit.py" not in tree_names
+
     def test_medium_project_scans_correct_files(self, medium_project):
         result = scan_project(medium_project, include_tests=True)
         paths = [f.rel_path for f in result.file_fragments]
