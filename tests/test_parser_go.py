@@ -91,6 +91,22 @@ class TestGoPack:
         assert not any(e.to_path in {TOO_A, TOO_B} for e in edges)
         assert "go" in partial
 
+    def test_raw_string_relative_import_is_an_edge(self):
+        from graphlm.scanner import FileFragment
+
+        edges = build_dependency_graph(
+            [
+                FileFragment(
+                    "main.go",
+                    "package main\nimport `./rel`\nfunc main() {}\n",
+                    1,
+                ),
+                FileFragment("rel/rel.go", "package rel\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("main.go", "rel/rel.go") in pairs
+
     def test_stdlib_not_an_edge(self, go_project):
         scan = scan_project(go_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=go_project)

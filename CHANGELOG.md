@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Go raw-string import literals are extracted.** `import \`./rel\`` is valid Go; the extractor only accepted interpreted `"..."` strings, so those edges were missing (#122).
+
 - **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).
 
 - **In-project symlinks to never-read files are not scanned.** `crypto.py → .env` (or `id_rsa`) used to be read because the never-read check used the *link name* while `read_text` followed the target. The resolved target is now screened too.

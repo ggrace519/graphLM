@@ -40,7 +40,10 @@ class _GoImport:
 def _lit(node) -> str:
     if node is None:
         return ""
-    if node.type == "interpreted_string_literal_content":
+    if node.type in (
+        "interpreted_string_literal_content",
+        "raw_string_literal_content",
+    ):
         return node.text.decode("utf-8")
     if node.type == "interpreted_string_literal":
         for child in node.children:
@@ -49,12 +52,19 @@ def _lit(node) -> str:
         raw = node.text.decode("utf-8")
         if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
             return raw[1:-1]
+    if node.type == "raw_string_literal":
+        for child in node.children:
+            if child.type == "raw_string_literal_content":
+                return child.text.decode("utf-8")
+        raw = node.text.decode("utf-8")
+        if len(raw) >= 2 and raw[0] == "`" and raw[-1] == "`":
+            return raw[1:-1]
     return ""
 
 
 def _import_path(spec_node) -> str:
     for child in spec_node.children:
-        if child.type == "interpreted_string_literal":
+        if child.type in ("interpreted_string_literal", "raw_string_literal"):
             return _lit(child)
     return ""
 
