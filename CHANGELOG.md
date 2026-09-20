@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cycle risk scores no longer collapse to 0 on `./`-prefixed edge paths.** `--no-ast` runs Tarjan on the LLM's `import_edges`, which often carry a `./` prefix; SLOC lookup is keyed by scanner paths without it, so every `sloc_map.get` missed and `log10(total_lines) * length` became 0. Paths are now normalised the same way as faithfulness before scoring (#84).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
