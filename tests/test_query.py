@@ -125,6 +125,20 @@ class TestResolvePath:
         match, cands = query.resolve_path(index, "core")
         assert match == "app/core.py"  # unique substring
 
+    def test_dotted_query_does_not_substring_match_data_py(self):
+        """'a.py' in 'data.py' must not uniquely resolve (#140)."""
+        idx = query.build_index(
+            CodebaseGraph(
+                directory_tree="",
+                import_edges=[_edge("data.py", "z.py")],
+                modules=[
+                    ModuleDescription(path="data.py", name="data", description="DATA"),
+                ],
+            )
+        )
+        match, cands = query.resolve_path(idx, "a.py")
+        assert match is None and cands == []
+
     def test_ambiguous_suffix_returns_only_suffix_candidates(self):
         idx = query.build_index(
             CodebaseGraph(
