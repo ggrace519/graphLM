@@ -724,8 +724,10 @@ class TestRedactSecrets:
         assert "p4ssw0rd" not in redacted
 
     def test_redacts_tls_and_srv_connection_strings(self):
+        # Do not use `*.mongodb.net` as the host: GitHub secret scanning treats
+        # `mongodb+srv://user:pass@*.mongodb.net` as a live Atlas URI even in tests.
         for uri in (
-            "mongodb+srv://user:AtlasSecret99@cluster0.mongodb.net/app",
+            "mongodb+srv://user:AtlasSecret99@cluster0.example.test/app",
             "rediss://user:RedisSecret99@localhost:6379/0",
             "amqps://user:AmqpSecret99@localhost",
         ):
