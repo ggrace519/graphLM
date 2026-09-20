@@ -396,7 +396,11 @@ def main(
         raise typer.Exit(0)
 
     dest = output_destination(project_dir, output_dir)
-    written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+    try:
+        written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
     md_path, json_path, html_path = written
     typer.echo(f"Markdown:  {md_path}", err=True)
     typer.echo(f"JSON:      {json_path}", err=True)

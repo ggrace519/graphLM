@@ -107,6 +107,43 @@ class TestScanProject:
         paths = [f.rel_path for f in result.file_fragments]
         assert "test_helpers.py" not in paths
 
+    def test_no_tests_does_not_drop_names_that_contain_test(self, tmp_path):
+        # ``"test" in "latest"`` used to skip real modules (#94).
+        project = tmp_path / "proj"
+        project.mkdir()
+        for name, text in (
+            ("app.py", "x = 1\n"),
+            ("latest.py", "x = 1\n"),
+            ("contest.py", "x = 1\n"),
+            ("testing.py", "x = 1\n"),
+            ("test_unit.py", "x = 1\n"),
+        ):
+            (project / name).write_text(text)
+        result = scan_project(project, include_tests=False)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py", "latest.py", "contest.py", "testing.py"}
+        tree_names = {ln.strip() for ln in result.tree.splitlines()}
+        assert "latest.py" in tree_names
+        assert "contest.py" in tree_names
+        assert "testing.py" in tree_names
+        assert "test_unit.py" not in paths
+        assert "test_unit.py" not in tree_names
+
+    def test_latest_py_outranks_docs_under_max_files(self, tmp_path):
+        # Ranking still used "test" in stem after #94, so latest.py (rank 10)
+        # lost to markdown (rank 8) under a tight max_files cap (#109).
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "app.py").write_text("x = 1\n")
+        (project / "latest.py").write_text("x = 1\n")
+        for i in range(20):
+            (project / f"doc{i:02d}.md").write_text(f"# {i}\n")
+        result = scan_project(project, max_files=6)
+        paths = [f.rel_path for f in result.file_fragments]
+        assert "app.py" in paths
+        assert "latest.py" in paths
+        assert paths.count("latest.py") == 1
+
     def test_medium_project_scans_correct_files(self, medium_project):
         result = scan_project(medium_project, include_tests=True)
         paths = [f.rel_path for f in result.file_fragments]
@@ -206,6 +243,37 @@ class TestScanProject:
         assert ".env" not in paths
         for f in result.file_fragments:
             assert "supersecretvalue" not in f.content
+
+    def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
+        # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
+        project = tmp_path / "project"
+        sub = project / "sub"
+        sub.mkdir(parents=True)
+        (project / "main.py").write_text("x = 1\n")
+        (sub / "mod.py").write_text("x = 1\n")
+        try:
+            (sub / "loop").symlink_to(project)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert len(result.tree.splitlines()) < 20
+        assert "loop/sub/loop" not in result.tree
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py", "sub/mod.py"}
+
+    def test_in_project_dir_symlink_alias_not_listed_as_real_path(self, tmp_path):
+        project = tmp_path / "project"
+        pkg = project / "pkg"
+        pkg.mkdir(parents=True)
+        (pkg / "mod.py").write_text("x = 1\n")
+        try:
+            (project / "alias").symlink_to(pkg)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        assert "alias/" not in result.tree
+        assert "pkg/" in result.tree
+        assert {f.rel_path for f in result.file_fragments} == {"pkg/mod.py"}
 
     def test_external_symlink_does_not_consume_max_files_slot(self, tmp_path):
         # An escaping symlink must be dropped BEFORE the max_files slice, or it
@@ -398,6 +466,65 @@ class TestIsSensitiveFile:
 
     def test_gitignore_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".gitignore")) is False
+
+    def test_openssh_private_key_filenames_are_sensitive(self):
+        for name in (
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+            "id_ecdsa_sk",
+            "id_ed25519_sk",
+            ".ssh/id_rsa",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_openssh_public_key_is_not_sensitive(self):
+        assert _is_sensitive_file(Path("id_rsa.pub")) is False
+        assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
+
+    def test_openssh_private_key_backups_are_sensitive(self):
+        for name in ("id_rsa.bak", "id_ed25519.old", "id_ecdsa-orig"):
+            assert _is_sensitive_file(Path(name)) is True, name
+            assert _is_sensitive_file(Path(".ssh") / name) is True, name
+
+    def test_netrc_and_pgpass_are_sensitive(self):
+        assert _is_sensitive_file(Path(".netrc")) is True
+        assert _is_sensitive_file(Path("_netrc")) is True
+        assert _is_sensitive_file(Path(".pgpass")) is True
+        assert _is_sensitive_file(Path("home/.netrc")) is True
+
+    def test_scan_skips_netrc_and_pgpass(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".netrc").write_text(
+            "machine host login user password SUPERSECRET\n"
+        )
+        (project / ".pgpass").write_text("localhost:5432:db:user:PGSECRET\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        assert ".netrc" not in result.tree
+        assert ".pgpass" not in result.tree
+
+    def test_scan_skips_openssh_private_key_but_reads_pub(self, tmp_path):
+        project = tmp_path / "proj"
+        ssh = project / ".ssh"
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        (ssh / "id_rsa.pub").write_text("ssh-rsa AAAATEST comment\n")
+        (project / "main.py").write_text("print('hi')\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert ".ssh/id_rsa.pub" in paths
+        assert ".ssh/id_rsa" not in paths
+        assert "id_rsa" not in result.tree.split()
+        pub = next(f for f in result.file_fragments if f.rel_path == ".ssh/id_rsa.pub")
+        assert "ssh-rsa AAAATEST" in pub.content
 
 
 class TestRedactSecrets:

@@ -226,6 +226,28 @@ def _symlink_hides_sensitive(path: Path) -> bool:
         return True
     return _is_sensitive_file(target)
 
+def _is_test_path(rel_path: str) -> bool:
+    """True for test files/dirs — not names that merely contain ``test`` (#94).
+
+    ``latest.py`` / ``contest.py`` / ``testing.py`` are ordinary modules.
+    ``test_foo.py``, ``foo_test.py``, ``foo.test.js``, and anything under
+    ``tests/`` / ``test/`` / ``__tests__/`` are tests.
+    """
+    rel = rel_path.replace("\\", "/").lower()
+    parts = rel.split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    dir_parts = parts[:-1]
+    if parts[0] in {"tests", "test", "__tests__"} or any(
+        p in {"tests", "test", "__tests__"} for p in dir_parts
+    ):
+        return True
+    if stem.startswith("test_") or stem.endswith("_test") or stem == "test":
+        return True
+    if ".test." in name or ".spec." in name:
+        return True
+    return False
+
 
 def _is_nested_checkout(dir_path: Path) -> bool:
     """True if ``dir_path`` is the root of another git checkout.
@@ -386,6 +408,13 @@ def scan_project(
             if entry.is_symlink() and not _path_is_inside(project_dir, entry):
                 skipped_count += 1
                 continue
+            # Directory symlinks, even in-project, are not recursed. os.walk
+            # uses followlinks=False so their contents are not scanned;
+            # listing them advertised paths pass 2 cannot open, and a
+            # cycle (sub/loop → project root) exploded the tree (#97).
+            if entry.is_symlink() and entry.is_dir():
+                skipped_count += 1
+                continue
 
             # A nested git checkout (worktree, submodule, vendored clone) is a
             # separate project: keep it out of the tree and the file walk.
@@ -400,18 +429,9 @@ def scan_project(
                 if _is_sensitive_file(entry) or _symlink_hides_sensitive(entry):
                     skipped_count += 1
                     continue
-                if not include_tests and (
-                    rel_str.startswith("test") or rel_str.startswith("tests/")
-                ):
-                    # Check test prefix more carefully
-                    if "test" in rel_str.split("/")[-1].lower().split(".")[0]:
-                        skipped_count += 1
-                        continue
-                    # Also catch tests/ prefix
-                    parts = rel_str.split("/")
-                    if parts[0] == "tests" or parts[0].startswith("test_"):
-                        skipped_count += 1
-                        continue
+                if not include_tests and _is_test_path(rel_str):
+                    skipped_count += 1
+                    continue
 
             listable.append(entry)
 
@@ -491,7 +511,7 @@ def scan_project(
             return 1
         if name.endswith("/main.py") or name.endswith("/main.js"):
             return 2
-        if "test" in name.split("/")[-1].lower().split(".")[0]:
+        if _is_test_path(rel_path):
             return 10
         # Source code outranks non-source text (docs, data, configs not already
         # prioritized above). Under a tight max_files cap, a doc-heavy repo (e.g.
@@ -536,12 +556,8 @@ def scan_project(
             if _is_sensitive_file(fpath) or _symlink_hides_sensitive(fpath):
                 skipped_count += 1
                 continue
-            if not include_tests:
-                parts = rel.split("/")
-                if "test" in parts[-1].lower().split(".")[0]:
-                    continue
-                if parts[0] in ("tests",) or parts[0].startswith("test_"):
-                    continue
+            if not include_tests and _is_test_path(rel):
+                continue
 
             try:
                 rank = _rank_file(rel)

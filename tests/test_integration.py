@@ -63,6 +63,34 @@ class TestFullPipeline:
         assert len(md_files) >= 1
         assert len(json_files) >= 1
 
+    def test_pass1_null_requested_files_still_writes_a_graph(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        # {"requested_files": null} is valid JSON and used to TypeError after
+        # the paid pass-1 call (#115).
+        httpx_mock.add_response(
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({"requested_files": None})
+                        },
+                        "index": 0,
+                    }
+                ]
+            }
+        )
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        assert isinstance(result.graph, CodebaseGraph)
+        assert (tmp_path / "GRAPH.md").exists()
+
     def test_directory_tree_filled_locally_not_from_llm(
         self, httpx_mock, small_project, tmp_path
     ):
@@ -114,6 +142,35 @@ class TestFullPipeline:
         )
         # Both passes' clients were built with the explicit timeout.
         assert seen and all(t == 42.0 for t in seen)
+
+    def test_timeout_env_honoured_when_endpoint_is_explicit(
+        self, httpx_mock, small_project, tmp_path, monkeypatch
+    ):
+        # GRAPHLM_TIMEOUT must still apply when the endpoint triple is passed
+        # as args (CLI -b/-k/-m). Settings(base_url, api_key, model) used to
+        # take the dataclass default 300 and skip the env (#92).
+        monkeypatch.setenv("GRAPHLM_TIMEOUT", "600")
+        import graphlm.llm as llm_mod
+
+        seen: list[float | None] = []
+        real_client = llm_mod.httpx.Client
+
+        def spy_client(*args, **kwargs):
+            seen.append(kwargs.get("timeout"))
+            return real_client(*args, **kwargs)
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", spy_client)
+
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        assert seen and all(t == 600.0 for t in seen)
 
     def test_max_output_tokens_independent_of_input_admission(
         self, large_project, monkeypatch
@@ -702,7 +759,17 @@ class TestRunTelemetry:
         assert meta.usage.pass2.completion_tokens == 400
         # The estimate is graphlm's own figure for the same prompt, so the
         # real-vs-estimated ratio is derivable from the stamp alone.
+        from graphlm.context import (
+            MESSAGE_OVERHEAD_TOKENS,
+            assemble_pass1_prompt,
+            estimate_tokens,
+        )
+
         assert meta.usage.pass1.estimated_prompt_tokens == result.pass1_context_tokens
+        assert meta.usage.pass1.estimated_prompt_tokens == (
+            estimate_tokens(assemble_pass1_prompt(result.graph.directory_tree))
+            + MESSAGE_OVERHEAD_TOKENS
+        )
         assert meta.usage.pass2.estimated_prompt_tokens == result.pass2_context_tokens
         assert meta.usage.pass2.estimated_prompt_tokens > 0
 
