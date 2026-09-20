@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`GRAPHLM_TIMEOUT` is honoured when the LLM endpoint is passed on the CLI.** `-b/-k/-m` (or `generate_graph(base_url=..., api_key=..., model=...)`) used to build a `Settings` with the dataclass default 300s and skip the env, so a raised timeout never reached pass 2. Timeout now resolves like `--max-context`: flag > env > 300 (#92).
+
 - **OpenSSH private-key filenames are never read.** `id_rsa` / `id_ed25519` / `id_ecdsa` (and the `_sk` variants) have no extension, so they missed both the `.key`/`.pem` list and the `*private*` name glob. The key body was scanned (only the BEGIN/END headers were redacted). Those names are now on the never-read list; `id_rsa.pub` stays scannable.
 
 - **GRAPH.html no longer lets a `</script>` in graph data close the inline script tag.** Node paths and descriptions are hostile input (scanned files / LLM text). They are now JSON-embedded with `<`/`>`/`&` and U+2028/U+2029 escaped so the D3 payload cannot break out of `<script>`.
