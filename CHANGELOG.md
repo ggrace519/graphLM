@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pass-1 token estimate is now of the prompt actually sent.** `pass1_tokens()` used to score a two-sentence stub plus the raw tree, so `--dry-run`'s `Pass 1 context` line and `meta.usage.pass1.estimated_prompt_tokens` under-counted by ~7x and could not audit the `estimate_tokens` heuristic. It now uses `assemble_pass1_prompt` plus the same message-overhead reserve as pass 2 (#86).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
