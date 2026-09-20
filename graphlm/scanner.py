@@ -394,6 +394,13 @@ def scan_project(
             if entry.is_symlink() and not _path_is_inside(project_dir, entry):
                 skipped_count += 1
                 continue
+            # Directory symlinks, even in-project, are not recursed. os.walk
+            # uses followlinks=False so their contents are not scanned;
+            # listing them advertised paths pass 2 cannot open, and a
+            # cycle (sub/loop → project root) exploded the tree (#97).
+            if entry.is_symlink() and entry.is_dir():
+                skipped_count += 1
+                continue
 
             # A nested git checkout (worktree, submodule, vendored clone) is a
             # separate project: keep it out of the tree and the file walk.
