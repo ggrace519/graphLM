@@ -490,7 +490,7 @@ def scan_project(
             return 1
         if name.endswith("/main.py") or name.endswith("/main.js"):
             return 2
-        if "test" in name.split("/")[-1].lower().split(".")[0]:
+        if _is_test_path(rel_path):
             return 10
         # Source code outranks non-source text (docs, data, configs not already
         # prioritized above). Under a tight max_files cap, a doc-heavy repo (e.g.

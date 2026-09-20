@@ -129,6 +129,21 @@ class TestScanProject:
         assert "test_unit.py" not in paths
         assert "test_unit.py" not in tree_names
 
+    def test_latest_py_outranks_docs_under_max_files(self, tmp_path):
+        # Ranking still used "test" in stem after #94, so latest.py (rank 10)
+        # lost to markdown (rank 8) under a tight max_files cap (#109).
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "app.py").write_text("x = 1\n")
+        (project / "latest.py").write_text("x = 1\n")
+        for i in range(20):
+            (project / f"doc{i:02d}.md").write_text(f"# {i}\n")
+        result = scan_project(project, max_files=6)
+        paths = [f.rel_path for f in result.file_fragments]
+        assert "app.py" in paths
+        assert "latest.py" in paths
+        assert paths.count("latest.py") == 1
+
     def test_medium_project_scans_correct_files(self, medium_project):
         result = scan_project(medium_project, include_tests=True)
         paths = [f.rel_path for f in result.file_fragments]

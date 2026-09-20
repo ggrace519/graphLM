@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`latest.py` is ranked as source, not as a test.** After #94, `_rank_file` still used `"test" in stem`, so `latest.py` (rank 10) lost to markdown (rank 8) under a tight `max_files` cap and never reached pass 2 / AST (#109).
 - **`--no-tests` no longer drops modules whose names merely contain `test`.** `latest.py`, `contest.py`, and `testing.py` were skipped because the scanner used `"test" in stem`. It now matches real test conventions (`test_*`, `*_test`, `*.test.*`, `tests/` / `test/` / `__tests__/`) and the tree walk uses the same predicate (#94).
 
 ### Infrastructure
