@@ -641,9 +641,10 @@ class TestRedactSecrets:
     def test_redacts_private_key_headers(self):
         content = "-----BEGIN RSA PRIVATE KEY-----\nsome key data\n-----END RSA PRIVATE KEY-----"
         redacted = _redact_secrets(content)
-        assert "[REDACTED:PRIVATE_KEY_HEADER]" in redacted
+        assert "[REDACTED:PRIVATE_KEY]" in redacted
         assert "BEGIN RSA PRIVATE KEY" not in redacted
         assert "END RSA PRIVATE KEY" not in redacted
+        assert "some key data" not in redacted
 
     def test_redacts_password_assignment(self):
         content = 'password = "mysecretpass123"'
@@ -695,6 +696,30 @@ class TestRedactSecrets:
         frag = next(f for f in result.file_fragments if f.rel_path == "appsettings.json")
         assert "JsonPasswordSecret123" not in frag.content
         assert "sk-1234567890abcdefghijklmnop" not in frag.content
+
+    def test_redacts_json_colon_secret_token_and_auth(self):
+        secret = _redact_secrets(
+            '{"client_secret":"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6"}'
+        )
+        assert "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6" not in secret
+        token = _redact_secrets(
+            '{"token":"abcdefghijklmnopqrstuvwxyz0123456789ABCD"}'
+        )
+        assert "abcdefghijklmnopqrstuvwxyz0123456789ABCD" not in token
+        auth = _redact_secrets(
+            '{"auth":"dXNlcjpwYXNzd29yZGhlcmUxMjM0NTY="}'
+        )
+        assert "dXNlcjpwYXNzd29yZGhlcmUxMjM0NTY=" not in auth
+
+    def test_redacts_pem_body_not_just_headers(self):
+        content = (
+            '{"private_key":"-----BEGIN PRIVATE KEY-----\\n'
+            "MIIE_SA_BODY_LEAK\\n"
+            '-----END PRIVATE KEY-----"}'
+        )
+        redacted = _redact_secrets(content)
+        assert "MIIE_SA_BODY_LEAK" not in redacted
+        assert "BEGIN PRIVATE KEY" not in redacted
 
 
 class TestSkeletonScan:

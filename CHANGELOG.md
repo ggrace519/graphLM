@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.
+
 - **`write_outputs` refuses to write through a symlink, including ancestor directory links.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, and a parent `decoy → victim` plus `-o decoy/out` still wrote GRAPH.* into `victim`. Same contract as skill install (#33): remove the symlink and re-run.
 
 - **GRAPH.html no longer lets `{_PALETTE}` in graph data steal the template placeholder.** Palette substitution ran after JSON embed, so a node path or description containing `{_PALETTE}` spliced the color array into `graphData` and left `const _PALETTE = {_PALETTE}`. Palette is substituted first (#141).

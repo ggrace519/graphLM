@@ -54,7 +54,17 @@ def _redact_secrets(content: str) -> str:
         redacted,
     )
 
-    # Private key headers
+    # Whole PEM block (headers + body). Header-only left the body in JSON
+    # `"private_key": "-----BEGIN …\\nMIIE…\\n-----END …"`.
+    redacted = re.sub(
+        r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+        r'.*?'
+        r'-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----',
+        r'[REDACTED:PRIVATE_KEY]',
+        redacted,
+        flags=re.DOTALL,
+    )
+    # Leftover header lines if the block was truncated.
     redacted = re.sub(
         r'(-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)',
         r'[REDACTED:PRIVATE_KEY_HEADER]',
@@ -81,9 +91,10 @@ def _redact_secrets(content: str) -> str:
         redacted,
     )
 
-    # Long random-looking strings assigned to variable names suggesting secrets
+    # Long random-looking strings assigned to secret-ish names (`=` or JSON `:`)
     redacted = re.sub(
-        r'((?:secret|token|key|password|credential|auth)[^\s=]*\s*=\s*)["\']?([A-Za-z0-9_\-/+=]{32,})["\']?',
+        r'(["\']?(?:secret|token|key|password|credential|auth)[^\s"\'=:]*["\']?\s*[=:]\s*)'
+        r'["\']?([A-Za-z0-9_\-/+=]{32,})["\']?',
         r'\1"[REDACTED:SECRET]"',
         redacted,
         flags=re.IGNORECASE,
