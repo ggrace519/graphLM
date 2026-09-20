@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **PHP interpolated double-quoted `require "config.php$id"` is not a static include.** The extractor took the first `string_content` chunk and emitted `a.php → config.php`. Interpolation is now a policy drop (same as concat) and marks known-partial (#147).
 - **PHP `require 'x.php' or die()` is extracted.** The quoted path is a string literal; tree-sitter wraps it in a logical `binary_expression`. The unwraper treated every binary as concat (`__DIR__ . "/x.php"`), so a common include form produced no edge. Logical `or` / `||` are unwrapped; concat still drops (#135).
 - **PHP class `use App\Models\User` no longer resolves onto `Models.php`.** The parent-file probe (last-segment strip) ran for every FQN, so a missing `User.php` became a false edge to the parent type. That probe now runs only for `use function` / `use const` (ADR-011) (#129).
 - **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).
