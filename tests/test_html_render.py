@@ -386,6 +386,24 @@ class TestRenderHtml:
         assert "scaleOrdinal(null" not in html
         assert "scaleOrdinal(_PALETTE)" in html
 
+    def test_palette_placeholder_in_graph_data_does_not_corrupt_html(self):
+        """A node path `{_PALETTE}` must not steal the template replace (#141)."""
+        graph = CodebaseGraph(
+            directory_tree=".",
+            modules=[
+                ModuleDescription(
+                    path="{_PALETTE}", name="{_PALETTE}", description="x"
+                )
+            ],
+        )
+        html = render_html(graph)
+        assert "const _PALETTE = {_PALETTE}" not in html
+        data = json.loads(
+            html[html.index("const graphData = ") + len("const graphData = "):html.index(";\nconst _PALETTE")]
+        )
+        paths = {n["path"] for n in data["nodes"]}
+        assert "{_PALETTE}" in paths
+
     def test_rendered_links_all_resolve_to_nodes(self):
         graph = CodebaseGraph(
             directory_tree="root/",

@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **GRAPH.html no longer lets `{_PALETTE}` in graph data steal the template placeholder.** Palette substitution ran after JSON embed, so a node path or description containing `{_PALETTE}` spliced the color array into `graphData` and left `const _PALETTE = {_PALETTE}`. Palette is substituted first (#141).
+
 - **`--serve` path resolution no longer maps `a.py` onto `data.py`.** After exact/suffix/prefix matching, `resolve_path` used unanchored `query in path`, so a unique `'a.py' in 'data.py'` returned the wrong module as `found: True`. File-like queries (basename containing `.`) skip that fallback; extensionless unique names like `core` still match (#140).
 
 - **JSON `"password"` / `"api_key"` assignments are redacted.** The assignment regexes required the keyword to sit immediately before `=`/`:`, so `"password": "…"` in `appsettings.json` survived. Optional quotes around the key are now accepted.
