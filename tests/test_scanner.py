@@ -464,6 +464,11 @@ class TestIsSensitiveFile:
         assert _is_sensitive_file(Path("id_rsa.pub")) is False
         assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
 
+    def test_openssh_private_key_backups_are_sensitive(self):
+        for name in ("id_rsa.bak", "id_ed25519.old", "id_ecdsa-orig"):
+            assert _is_sensitive_file(Path(name)) is True, name
+            assert _is_sensitive_file(Path(".ssh") / name) is True, name
+
     def test_netrc_and_pgpass_are_sensitive(self):
         assert _is_sensitive_file(Path(".netrc")) is True
         assert _is_sensitive_file(Path("_netrc")) is True

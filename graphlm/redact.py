@@ -175,6 +175,13 @@ def _is_sensitive_file(path: Path) -> bool:
 
     if path.name.lower() in _SSH_PRIVATE_KEY_NAMES:
         return True
+    # Backups: id_rsa.bak, id_ed25519.old — exact-name matching missed these
+    # and redaction only strips BEGIN/END, leaving the key body.
+    lname = path.name.lower()
+    if not lname.endswith(".pub"):
+        for base in _SSH_PRIVATE_KEY_NAMES:
+            if lname.startswith(base + ".") or lname.startswith(base + "-"):
+                return True
     if path.name.lower() in _CREDENTIAL_FILE_NAMES:
         return True
 
