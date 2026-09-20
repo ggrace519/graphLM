@@ -456,7 +456,17 @@ class TestIsSensitiveFile:
 
     def test_arbitrary_env_variant_is_sensitive(self):
         # The old fixed allowlist missed unlisted variants like .env.qa / .env.test.
-        for name in (".env", ".env.qa", ".env.test", ".env.production", ".env.foo"):
+        # `.env.`-prefix also missed vim `.env~` and `.env-local`.
+        for name in (
+            ".env",
+            ".env.qa",
+            ".env.test",
+            ".env.production",
+            ".env.foo",
+            ".env~",
+            ".env-local",
+            ".env_backup",
+        ):
             assert _is_sensitive_file(Path(name)) is True, name
 
     def test_envrc_and_flaskenv_are_sensitive(self):
@@ -473,6 +483,19 @@ class TestIsSensitiveFile:
         paths = {f.rel_path for f in result.file_fragments}
         assert paths == {"app.py"}
         for f in result.file_fragments:
+            assert "supersecretvalue" not in f.content
+
+    def test_scan_skips_env_tilde_and_hyphen_suffix(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".env~").write_text("SECRET_KEY=aaaa\nAWS_SECRET=bbbb\n")
+        (project / ".env-local").write_text("PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "bbbb" not in f.content
             assert "supersecretvalue" not in f.content
 
     def test_env_template_variants_are_not_sensitive(self):

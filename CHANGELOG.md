@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Dotenv editor backups and non-dot suffixes (`.env~`, `.env-local`) are never read.** Never-read required `.env` or `.env.<suffix>`, so vim `.env~` and `.env-local` / `.env_backup` were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
+
 - **PHP class `use App\Models\User` no longer resolves onto `Models.php`.** The parent-file probe (last-segment strip) ran for every FQN, so a missing `User.php` became a false edge to the parent type. That probe now runs only for `use function` / `use const` (ADR-011) (#129).
 
 - **C++ `#include "foo.h"` no longer resolves onto a sibling `foo.c`.** The extension probe stripped `.h` and retried `.c`/`.hpp`/…, so a missing local header became a false include of the implementation file (and a self-edge from `foo.c`). The probe now runs only for extensionless `#include "foo"` (ADR-008) (#128).
