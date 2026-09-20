@@ -194,6 +194,23 @@ def _load_template() -> str:
     return _template_path.read_text(encoding="utf-8")
 
 
+def _json_for_script(value: object) -> str:
+    """JSON that is safe to splice into an HTML ``<script>`` body.
+
+    ``json.dumps`` does not escape ``<``, so a path or description containing
+    ``</script>`` would close the inline script tag and execute whatever
+    followed. U+2028/U+2029 break JS string literals in the same way.
+    """
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def render_html(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a self-contained HTML file with D3.js.
 
@@ -203,15 +220,14 @@ def render_html(graph: CodebaseGraph) -> str:
     # ``cycles`` is the SCC count for the stats line — it is not derivable
     # from the in_cycle node flags (two cycles of three nodes and one of six
     # both flag six nodes).
-    data = json.dumps(
+    data = _json_for_script(
         {
             "nodes": _build_nodes(graph),
             "links": _build_links(graph),
             "cycles": len(graph.import_cycles),
-        },
-        ensure_ascii=False,
+        }
     )
-    palette_js = json.dumps(_PALETTE, ensure_ascii=False)
+    palette_js = _json_for_script(_PALETTE)
     tpl = _load_template()
     result = tpl.replace("{EMBEDDED_JSON}", data, 1)
     result = result.replace("{_PALETTE}", palette_js, 1)

@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GRAPH.html no longer lets a `</script>` in graph data close the inline script tag.** Node paths and descriptions are hostile input (scanned files / LLM text). They are now JSON-embedded with `<`/`>`/`&` and U+2028/U+2029 escaped so the D3 payload cannot break out of `<script>`.
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
