@@ -143,6 +143,25 @@ class TestCsharpPack:
         edges = build_dependency_graph(scan.file_fragments, project_dir=csharp_project)
         assert not any("System" in e.to_path for e in edges)
 
+    def test_using_system_not_an_edge_even_with_unique_system_file(self):
+        from graphlm.scanner import FileFragment
+
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using System;\nnamespace App { class Program {} }\n",
+                10,
+            ),
+            FileFragment(
+                "src/System/Console.cs",
+                "namespace System { public static class Console {} }\n",
+                10,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("src/Program.cs", "src/System/Console.cs") not in pairs
+
     def test_parse_file_returns_real_usings(self, csharp_project):
         result = parse_file(csharp_project / PROG)
         assert result is not None
