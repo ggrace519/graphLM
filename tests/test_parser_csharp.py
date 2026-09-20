@@ -138,6 +138,25 @@ class TestCsharpPack:
         assert not any(e.to_path in {TOO_A, TOO_B} for e in edges)
         assert "csharp" in partial
 
+    def test_using_inside_block_namespace_is_an_edge(self):
+        from graphlm.scanner import FileFragment
+
+        prog = (
+            "namespace MyApp {\n"
+            "    using MyApp.Models;\n"
+            "    public class Program { }\n"
+            "}\n"
+        )
+        user = "namespace MyApp.Models {\n    public class User { }\n}\n"
+        edges = build_dependency_graph(
+            [
+                FileFragment("src/MyApp/Program.cs", prog, 1),
+                FileFragment("src/MyApp/Models/User.cs", user, 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("src/MyApp/Program.cs", "src/MyApp/Models/User.cs") in pairs
+
     def test_stdlib_not_an_edge(self, csharp_project):
         scan = scan_project(csharp_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=csharp_project)
@@ -189,3 +208,57 @@ class TestCsharpPack:
         edges = build_dependency_graph(frags, project_dir=tmp_path)
         got = {(e.from_path, e.to_path, e.kind) for e in edges}
         assert ("src/MyApp/A.cs", "src/MyApp/B.cs", "static") in got
+
+    def test_namespace_using_does_not_hit_parent_file(self):
+        """using MyApp.Models unique-dirs; must not prefer MyApp.cs (#126)."""
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using MyApp.Models;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment("src/MyApp.cs", "namespace MyApp { class App {} }\n", 1),
+            FileFragment(
+                "src/MyApp/Models/User.cs",
+                "namespace MyApp.Models { class User {} }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Models/User.cs", "import") in got
+        assert ("src/Program.cs", "src/MyApp.cs", "import") not in got
+
+    def test_using_static_nested_type_still_hits_parent_file(self):
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using static MyApp.Outer.Inner;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment(
+                "src/MyApp/Outer.cs",
+                "namespace MyApp { static class Outer { public static class Inner {} } }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Outer.cs", "static") in got
+
+    def test_alias_nested_type_still_hits_parent_file(self):
+        frags = [
+            FileFragment(
+                "src/Program.cs",
+                "using Inner = MyApp.Outer.Inner;\nclass Program {}\n",
+                1,
+            ),
+            FileFragment(
+                "src/MyApp/Outer.cs",
+                "namespace MyApp { class Outer { public class Inner {} } }\n",
+                1,
+            ),
+        ]
+        edges = build_dependency_graph(frags)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/Program.cs", "src/MyApp/Outer.cs", "import") in got

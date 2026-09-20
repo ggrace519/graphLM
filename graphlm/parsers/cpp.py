@@ -57,10 +57,14 @@ def _string_content(node) -> str | None:
 
 
 def _extract_includes(tree) -> list[_Include]:
+    """Quoted / macro includes anywhere in the tree, including under ``#ifdef``.
+
+    Root-children-only missed ``#ifdef USE_BAR\\n#include "bar.h"`` (#99).
+    Walks ``.children`` only — never ``start_point`` / ``end_point``.
+    """
     out: list[_Include] = []
-    for node in tree.root_node.children:
-        if node.type != "preproc_include":
-            continue
+
+    def _take(node) -> None:
         quoted = None
         macro = False
         for child in node.children:
@@ -78,6 +82,15 @@ def _extract_includes(tree) -> list[_Include]:
                 out.append(_Include(specifier=spec, is_relative=True))
         elif macro:
             out.append(_Include(specifier="", is_relative=False))
+
+    def _visit(node) -> None:
+        if node.type == "preproc_include":
+            _take(node)
+            return
+        for child in node.children:
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 

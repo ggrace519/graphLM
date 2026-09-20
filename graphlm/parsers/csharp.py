@@ -6,6 +6,7 @@ file is added (the Java wildcard problem, ADR-005). v1 therefore:
 
 - ``using static Ns.Type;`` and ``using Alias = Ns.Type;`` resolve to
   ``Ns/Type.cs`` (then ``Ns.cs`` for a nested type), like Java static.
+  The nested-type parent probe is *not* applied to a namespace using.
 - a namespace ``using Ns;`` / ``global using Ns;`` resolves only when
   **exactly one** scanned file lives in the ``Ns/`` directory (or
   ``Ns.cs`` itself). Two or more files in that directory are a policy drop
@@ -51,6 +52,7 @@ class _CsImport:
     fqn: str
     kind: str  # "import" | "static"
     is_relative: bool = True
+    is_alias: bool = False
 
 
 def _dotted(node) -> str:
@@ -73,25 +75,27 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
 
 
 def _extract_usings(tree) -> list[_CsImport]:
-    """Top-level and file-scoped ``using_directive`` nodes only."""
+    """``using_directive`` nodes anywhere, including StyleCop SA1200 inside
+    ``namespace { }`` (#113). Walks ``.children`` only.
+    """
     out: list[_CsImport] = []
-    for node in tree.root_node.children:
+
+    def _visit(node) -> None:
         if node.type == "using_directive":
             extracted = _one_using(node)
             if extracted is not None:
                 out.append(extracted)
-            continue
-        if node.type == "file_scoped_namespace_declaration":
-            for child in node.children:
-                if child.type == "using_directive":
-                    extracted = _one_using(child)
-                    if extracted is not None:
-                        out.append(extracted)
+            return
+        for child in node.children:
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 
 def _one_using(node) -> _CsImport | None:
     is_static = any(c.type == "static" for c in node.children)
+    is_alias = any(c.type == "=" for c in node.children)
     names = [c for c in node.children if c.type in _NAME_TYPES]
     if not names:
         return None
@@ -100,7 +104,11 @@ def _one_using(node) -> _CsImport | None:
     fqn = _dotted(names[-1])
     if not fqn:
         return None
-    return _CsImport(fqn=fqn, kind="static" if is_static else "import")
+    return _CsImport(
+        fqn=fqn,
+        kind="static" if is_static else "import",
+        is_alias=is_alias,
+    )
 
 
 def _dir_cs_files(ns_path: str, known: set[str], roots: tuple[str, ...]) -> list[str]:
@@ -172,7 +180,11 @@ def _resolve_import(
         return []
     rel_file = "/".join(parts) + ".cs"
     candidates = [rel_file]
-    if len(parts) >= 2:
+    # Nested-type parent file (Ns.Type → Ns.cs) is for using static /
+    # using Alias = … only (ADR-007). A namespace using must not hit
+    # Ns.cs before unique-dir — that is a false compiler-contradicting
+    # edge when both Ns.cs and Ns/Type/File.cs exist (#126).
+    if (imp.kind == "static" or imp.is_alias) and len(parts) >= 2:
         candidates.append("/".join(parts[:-1]) + ".cs")
     hit = _first_known_rooted(tuple(candidates), known, roots)
     if hit:

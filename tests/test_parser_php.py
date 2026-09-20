@@ -93,6 +93,40 @@ class TestPhpPack:
         assert ("App/Models/User.php", "import") in specs
         assert ("bootstrap.php", "include") in specs
 
+    def test_require_inside_if_is_an_edge(self):
+        a = '<?php\nif (true) {\n    require "b.php";\n}\n'
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", a, 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_parenthesized_require_is_an_edge(self):
+        edges = build_dependency_graph(
+            [
+                FileFragment("a.php", '<?php require("b.php");\n', 1),
+                FileFragment("b.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("a.php", "b.php", "include") in pairs
+
+    def test_grouped_use_is_an_edge(self):
+        src = "<?php\nuse App\\Models\\{User, Post};\n"
+        edges = build_dependency_graph(
+            [
+                FileFragment("index.php", src, 1),
+                FileFragment("src/App/Models/User.php", "<?php\n", 1),
+                FileFragment("src/App/Models/Post.php", "<?php\n", 1),
+            ]
+        )
+        pairs = {(e.from_path, e.to_path) for e in edges}
+        assert ("index.php", "src/App/Models/User.php") in pairs
+        assert ("index.php", "src/App/Models/Post.php") in pairs
+
     def test_user_service_cycle(self, php_project):
         scan = scan_project(php_project, include_tests=True)
         edges = build_dependency_graph(scan.file_fragments, project_dir=php_project)
