@@ -104,6 +104,20 @@ class TestPhpPack:
         pairs = {(e.from_path, e.to_path, e.kind) for e in edges}
         assert ("a.php", "b.php", "include") in pairs
 
+    def test_interpolated_require_is_not_an_edge_and_marks_partial(self, tmp_path):
+        (tmp_path / "a.php").write_text('<?php require "config.php$id";\n')
+        (tmp_path / "config.php").write_text("<?php\n")
+        frags = [
+            FileFragment("a.php", '<?php require "config.php$id";\n', 1),
+            FileFragment("config.php", "<?php\n", 1),
+        ]
+        partial: set[str] = set()
+        edges = build_dependency_graph(
+            frags, project_dir=tmp_path, partial_languages=partial
+        )
+        assert edges == []
+        assert "php" in partial
+
     def test_require_or_die_is_an_edge(self):
         """require 'b.php' or die() is a string literal, not concat (#135)."""
         edges = build_dependency_graph(

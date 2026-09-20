@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **PHP interpolated double-quoted `require "config.php$id"` is not a static include.** The extractor took the first `string_content` chunk and emitted `a.php → config.php`. Interpolation is now a policy drop (same as concat) and marks known-partial (#147).
+
 - **`.htpasswd`, singular `secret.yaml`, and `*.env` / `foo.env.local` are never read.** `*secrets*` missed `secret.yaml`; `.htpasswd` is not `*password*`; `config.env` is not a leading `.env`. Those files were scanned with hashes and keys intact.
 
 - **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.

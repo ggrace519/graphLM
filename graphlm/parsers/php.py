@@ -73,6 +73,13 @@ def _string_content(node) -> str | None:
     if node is None:
         return None
     if node.type == "encapsed_string":
+        # Interpolation (`"config.php$id"`) is not a string literal —
+        # taking the first string_content chunk made a false include
+        # of the prefix file (#147).
+        if any(
+            c.type not in ('"', "'", "string_content") for c in node.children
+        ):
+            return None
         for child in node.children:
             if child.type == "string_content":
                 text = child.text.decode("utf-8")
