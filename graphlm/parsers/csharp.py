@@ -165,6 +165,11 @@ def _resolve_import(
     parts = [p for p in imp.fqn.split(".") if p]
     if not parts:
         return []
+    # BCL roots (using System; / System.IO) must not unique-dir-match a
+    # scanned System/Console.cs (#100). Same "false ground-truth is worse
+    # than missing" rule as Python #19 / Go #95.
+    if parts[0].lower() in {"system", "microsoft", "windows"}:
+        return []
     rel_file = "/".join(parts) + ".cs"
     candidates = [rel_file]
     if len(parts) >= 2:
