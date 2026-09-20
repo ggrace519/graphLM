@@ -47,9 +47,9 @@ def _redact_secrets(content: str) -> str:
         redacted,
     )
 
-    # Generic bearer / API key assignments
+    # Generic bearer / API key assignments (JSON `"api_key": "…"` too)
     redacted = re.sub(
-        r'(?i)((?:api[_-]?key|apikey)\s*[=:]\s*)["\']?([A-Za-z0-9_\-/+=]{20,})["\']?',
+        r'(?i)(["\']?(?:api[_-]?key|apikey)["\']?\s*[=:]\s*)["\']?([A-Za-z0-9_\-/+=]{20,})["\']?',
         r'\1"[REDACTED:API_KEY]"',
         redacted,
     )
@@ -66,9 +66,9 @@ def _redact_secrets(content: str) -> str:
         redacted,
     )
 
-    # Password assignments (KEY = value patterns)
+    # Password assignments (KEY = value, including JSON `"password": "…"`)
     redacted = re.sub(
-        r"(?i)((?:password|passwd|pwd)\s*[=:]\s*)([\"']?)(?!none|null|false|true|''|\"\"|\$\{)"
+        r"(?i)([\"']?(?:password|passwd|pwd)[\"']?\s*[=:]\s*)([\"']?)(?!none|null|false|true|''|\"\"|\$\{)"
         r"[^\s\"',}]+\2",
         r"\1\2[REDACTED:PASSWORD]\2",
         redacted,

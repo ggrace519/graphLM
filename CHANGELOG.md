@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **JSON `"password"` / `"api_key"` assignments are redacted.** The assignment regexes required the keyword to sit immediately before `=`/`:`, so `"password": "…"` in `appsettings.json` survived. Optional quotes around the key are now accepted.
+
 - **Backups of `.netrc` / `_netrc` / `.pgpass` / `.flaskenv` are never read.** Exact-name matching skipped `.netrc.bak` / `.pgpass~` / `.flaskenv.bak`; netrc and pgpass secrets are not `password=` assignments, so redaction left them intact.
 
 - **PHP `require 'x.php' or die()` is extracted.** The quoted path is a string literal; tree-sitter wraps it in a logical `binary_expression`. The unwraper treated every binary as concat (`__DIR__ . "/x.php"`), so a common include form produced no edge. Logical `or` / `||` are unwrapped; concat still drops (#135).

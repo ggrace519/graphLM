@@ -672,6 +672,30 @@ class TestRedactSecrets:
         redacted = _redact_secrets(content)
         assert "[REDACTED:API_KEY]" in redacted
 
+    def test_redacts_json_quoted_password_and_api_key(self):
+        content = (
+            '{"password": "json_password_secret_value",'
+            ' "api_key": "sk-1234567890abcdefghijklmnop"}'
+        )
+        redacted = _redact_secrets(content)
+        assert "json_password_secret_value" not in redacted
+        assert "sk-1234567890abcdefghijklmnop" not in redacted
+        assert "[REDACTED:PASSWORD]" in redacted
+        assert "[REDACTED:API_KEY]" in redacted
+
+    def test_scan_redacts_json_config_secrets(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "appsettings.json").write_text(
+            '{"password": "JsonPasswordSecret123",'
+            ' "api_key": "sk-1234567890abcdefghijklmnop"}\n'
+        )
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        frag = next(f for f in result.file_fragments if f.rel_path == "appsettings.json")
+        assert "JsonPasswordSecret123" not in frag.content
+        assert "sk-1234567890abcdefghijklmnop" not in frag.content
+
 
 class TestSkeletonScan:
     """Oversized Python files are sent as signature skeletons (innovation #2)."""
