@@ -229,6 +229,8 @@ def render_html(graph: CodebaseGraph) -> str:
     )
     palette_js = _json_for_script(_PALETTE)
     tpl = _load_template()
-    result = tpl.replace("{EMBEDDED_JSON}", data, 1)
-    result = result.replace("{_PALETTE}", palette_js, 1)
+    # Palette first: graph data containing `{_PALETTE}` must not steal the
+    # template placeholder and leave `const _PALETTE = {_PALETTE}` (#141).
+    result = tpl.replace("{_PALETTE}", palette_js, 1)
+    result = result.replace("{EMBEDDED_JSON}", data, 1)
     return result

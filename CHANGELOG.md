@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **GRAPH.html no longer lets `{_PALETTE}` in graph data steal the template placeholder.** Palette substitution ran after JSON embed, so a node path or description containing `{_PALETTE}` spliced the color array into `graphData` and left `const _PALETTE = {_PALETTE}`. Palette is substituted first (#141).
 - **GRAPH.html no longer lets a `</script>` in graph data close the inline script tag.** Node paths and descriptions are hostile input (scanned files / LLM text). They are now JSON-embedded with `<`/`>`/`&` and U+2028/U+2029 escaped so the D3 payload cannot break out of `<script>`.
 
 ### Infrastructure
