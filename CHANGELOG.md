@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`GRAPHLM_TIMEOUT` is honoured when the LLM endpoint is passed on the CLI.** `-b/-k/-m` (or `generate_graph(base_url=..., api_key=..., model=...)`) used to build a `Settings` with the dataclass default 300s and skip the env, so a raised timeout never reached pass 2. Timeout now resolves like `--max-context`: flag > env > 300 (#92).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).

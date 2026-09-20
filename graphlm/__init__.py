@@ -247,13 +247,16 @@ def generate_graph(
         except ValueError as e:
             raise ValueError(str(e)) from None
 
-    # Resolve the request timeout: explicit arg > (settings, which already
-    # carries GRAPHLM_TIMEOUT env > default when built via from_env). When
-    # settings is built from explicit base_url/api_key/model it uses the default
-    # timeout; an explicit `timeout` arg (the CLI --timeout flag) overrides.
-    resolved_timeout = timeout if timeout is not None else (
-        settings.timeout if settings is not None else None
-    )
+    # Resolve the request timeout independently of how the endpoint was
+    # configured: explicit arg > GRAPHLM_TIMEOUT env > 300. Same pattern as
+    # max_context / max_output_tokens. Building Settings from an explicit
+    # base_url/api_key/model triple used to take the dataclass default 300 and
+    # skip the env, so `graphlm -b -k -m` silently ignored GRAPHLM_TIMEOUT (#92).
+    if timeout is None:
+        import os
+
+        timeout = float(os.environ.get("GRAPHLM_TIMEOUT", "300"))
+    resolved_timeout = timeout
 
     # Phase 1: Scan the project
     scan = scan_project(
