@@ -37,6 +37,26 @@ class TestEstimateTokens:
         assert estimate_tokens("") == 0
 
 
+class TestPass1Tokens:
+    def test_estimates_the_assembled_prompt_plus_overhead(self):
+        # The old helper estimated a two-sentence stub plus the raw tree, not
+        # assemble_pass1_prompt, so dry-run "Pass 1 context" and the usage
+        # stamp under-counted by ~7x (#86).
+        from graphlm import pass1_tokens
+
+        tree = "root/\n  app.py"
+        expected = (
+            estimate_tokens(assemble_pass1_prompt(tree)) + MESSAGE_OVERHEAD_TOKENS
+        )
+        assert pass1_tokens(tree) == expected
+        stub = estimate_tokens(
+            "You are analyzing a project directory to determine which files "
+            "are most important to read for a comprehensive codebase analysis. "
+            "Return a JSON object with requested_files list."
+        ) + estimate_tokens(tree)
+        assert pass1_tokens(tree) > stub
+
+
 class TestPass1Prompt:
     def test_prompt_contains_tree(self, small_project):
         from graphlm.scanner import scan_project
