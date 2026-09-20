@@ -1,9 +1,11 @@
 """C / C++ Tree-sitter resolver (the ``graphlm[cpp]`` extra).
 
-Quoted ``#include "foo.h"`` resolves relative to the importing file (plus an
-extension probe). Angle-bracket ``#include <stdio.h>`` is a system header and
-is dropped like Python stdlib — not partial. A macro include (``#include
-FOO``) is a policy drop and marks the language known-partial.
+Quoted ``#include "foo.h"`` resolves relative to the importing file as that
+exact name. An extension probe (``.h``.c``.hpp``…) applies only to
+extensionless specifiers (``#include "foo"``). Angle-bracket
+``#include <stdio.h>`` is a system header and is dropped like Python
+stdlib — not partial. A macro include (``#include FOO``) is a policy drop
+and marks the language known-partial.
 
 One extra, two grammars: ``.c``/``.h`` use ``tree_sitter_c``; ``.cpp``/``.cc``/
 ``.cxx``/``.hpp``/``.hh``/``.hxx`` use ``tree_sitter_cpp``. ``kind`` is
@@ -140,11 +142,16 @@ def _candidates(from_path: str, spec: str) -> tuple[str, ...]:
     if base is None:
         return ()
     out: list[str] = [base]
-    stem = base.rsplit(".", 1)[0] if "." in Path(base).name else base
-    for ext in _PROBE_EXTS:
-        cand = stem + ext
-        if cand not in out:
-            out.append(cand)
+    # Extension probe is for `#include "foo"` only. Stripping `.h` and
+    # retrying `.c` made `#include "foo.h"` hit a sibling `foo.c` (and
+    # `foo.c` include itself) whenever `foo.h` was not beside the importer
+    # (#128). The preprocessor searches for the exact name.
+    spec_name = spec.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." not in spec_name:
+        for ext in _PROBE_EXTS:
+            cand = base + ext
+            if cand not in out:
+                out.append(cand)
     return tuple(out)
 
 

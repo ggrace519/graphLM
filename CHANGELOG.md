@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **C++ `#include "foo.h"` no longer resolves onto a sibling `foo.c`.** The extension probe stripped `.h` and retried `.c`/`.hpp`/…, so a missing local header became a false include of the implementation file (and a self-edge from `foo.c`). The probe now runs only for extensionless `#include "foo"` (ADR-008) (#128).
 - **C# `using System;` no longer resolves onto a unique scanned file in `System/`.** The unique-namespace-directory fallback treated a lone `System/Console.cs` as the BCL. `System` / `Microsoft` / `Windows` roots are now dropped as third-party, matching the pack docstring (#100).
 
 ### Infrastructure
