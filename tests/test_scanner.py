@@ -402,6 +402,40 @@ class TestIsSensitiveFile:
     def test_gitignore_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".gitignore")) is False
 
+    def test_openssh_private_key_filenames_are_sensitive(self):
+        for name in (
+            "id_rsa",
+            "id_dsa",
+            "id_ecdsa",
+            "id_ed25519",
+            "id_ecdsa_sk",
+            "id_ed25519_sk",
+            ".ssh/id_rsa",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+
+    def test_openssh_public_key_is_not_sensitive(self):
+        assert _is_sensitive_file(Path("id_rsa.pub")) is False
+        assert _is_sensitive_file(Path(".ssh/id_ed25519.pub")) is False
+
+    def test_scan_skips_openssh_private_key_but_reads_pub(self, tmp_path):
+        project = tmp_path / "proj"
+        ssh = project / ".ssh"
+        ssh.mkdir(parents=True)
+        (ssh / "id_rsa").write_text(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+        )
+        (ssh / "id_rsa.pub").write_text("ssh-rsa AAAATEST comment\n")
+        (project / "main.py").write_text("print('hi')\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert ".ssh/id_rsa.pub" in paths
+        assert ".ssh/id_rsa" not in paths
+        assert "id_rsa" not in result.tree.split()
+        pub = next(f for f in result.file_fragments if f.rel_path == ".ssh/id_rsa.pub")
+        assert "ssh-rsa AAAATEST" in pub.content
+
 
 class TestRedactSecrets:
     def test_redacts_aws_access_key(self):
