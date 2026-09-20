@@ -731,7 +731,17 @@ class TestRunTelemetry:
         assert meta.usage.pass2.completion_tokens == 400
         # The estimate is graphlm's own figure for the same prompt, so the
         # real-vs-estimated ratio is derivable from the stamp alone.
+        from graphlm.context import (
+            MESSAGE_OVERHEAD_TOKENS,
+            assemble_pass1_prompt,
+            estimate_tokens,
+        )
+
         assert meta.usage.pass1.estimated_prompt_tokens == result.pass1_context_tokens
+        assert meta.usage.pass1.estimated_prompt_tokens == (
+            estimate_tokens(assemble_pass1_prompt(result.graph.directory_tree))
+            + MESSAGE_OVERHEAD_TOKENS
+        )
         assert meta.usage.pass2.estimated_prompt_tokens == result.pass2_context_tokens
         assert meta.usage.pass2.estimated_prompt_tokens > 0
 

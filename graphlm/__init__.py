@@ -434,12 +434,19 @@ def generate_graph(
 
 
 def pass1_tokens(tree: str) -> int:
-    """Estimate token count for pass 1 prompt (tree + instructions)."""
-    from graphlm.context import estimate_tokens
+    """Estimate token count for the pass-1 *request* (user prompt + overhead).
 
-    instruction_tokens = estimate_tokens(
-        "You are analyzing a project directory to determine which files "
-        "are most important to read for a comprehensive codebase analysis. "
-        "Return a JSON object with requested_files list."
+    Must be ``estimate_tokens`` of the prompt actually sent
+    (``assemble_pass1_prompt``) plus ``MESSAGE_OVERHEAD_TOKENS`` for the system
+    prompt and framing — the same accounting pass 2 uses — so
+    ``meta.usage.pass1.estimated_prompt_tokens`` can be compared to the
+    server's ``prompt_tokens`` (#86). A two-sentence stub of the instructions
+    plus the raw tree under-counted the real prompt by ~7x.
+    """
+    from graphlm.context import (
+        MESSAGE_OVERHEAD_TOKENS,
+        assemble_pass1_prompt,
+        estimate_tokens,
     )
-    return instruction_tokens + estimate_tokens(tree)
+
+    return estimate_tokens(assemble_pass1_prompt(tree)) + MESSAGE_OVERHEAD_TOKENS
