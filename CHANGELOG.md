@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.htpasswd`, singular `secret.yaml`, and `*.env` / `foo.env.local` are never read.** `*secrets*` missed `secret.yaml`; `.htpasswd` is not `*password*`; `config.env` is not a leading `.env`. Those files were scanned with hashes and keys intact.
+
 - **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.
 
 - **`write_outputs` refuses to write through a symlink, including ancestor directory links.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, and a parent `decoy → victim` plus `-o decoy/out` still wrote GRAPH.* into `victim`. Same contract as skill install (#33): remove the symlink and re-run.

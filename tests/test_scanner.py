@@ -503,6 +503,35 @@ class TestIsSensitiveFile:
         for name in (".env.example", ".env.sample", ".env.template", ".env.dist"):
             assert _is_sensitive_file(Path(name)) is False, name
 
+    def test_htpasswd_secret_yaml_and_env_suffix_are_sensitive(self):
+        for name in (
+            ".htpasswd",
+            ".htpasswd.bak",
+            "secret.yaml",
+            "my_secret.yaml",
+            "config.env",
+            "foo.env.local",
+            "app.env",
+        ):
+            assert _is_sensitive_file(Path(name)) is True, name
+        assert _is_sensitive_file(Path("secret.py")) is False
+        assert _is_sensitive_file(Path("foo.env.example")) is False
+
+    def test_scan_skips_htpasswd_secret_yaml_and_env_suffix(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".htpasswd").write_text("admin:$apr1$abcdefgh$HASHHASHHASH\n")
+        (project / "secret.yaml").write_text("openai: sk-proj-YAMLLEAK1234567890abcdef\n")
+        (project / "config.env").write_text("PLAIN=configenvsecret\n")
+        (project / "main.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"main.py"}
+        for f in result.file_fragments:
+            assert "HASHHASHHASH" not in f.content
+            assert "YAMLLEAK" not in f.content
+            assert "configenvsecret" not in f.content
+
     def test_gitignore_is_not_sensitive(self):
         assert _is_sensitive_file(Path(".gitignore")) is False
 
