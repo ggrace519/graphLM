@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Cycle risk scores no longer collapse to 0 on `./`-prefixed edge paths.** `--no-ast` runs Tarjan on the LLM's `import_edges`, which often carry a `./` prefix; SLOC lookup is keyed by scanner paths without it, so every `sloc_map.get` missed and `log10(total_lines) * length` became 0. Paths are now normalised the same way as faithfulness before scoring (#84).
+
 - **Pass-1 token estimate is now of the prompt actually sent.** `pass1_tokens()` used to score a two-sentence stub plus the raw tree, so `--dry-run`'s `Pass 1 context` line and `meta.usage.pass1.estimated_prompt_tokens` under-counted by ~7x and could not audit the `estimate_tokens` heuristic. It now uses `assemble_pass1_prompt` plus the same message-overhead reserve as pass 2 (#86).
 
 - **Pass-2 file selection no longer substring-matches the wrong files.** A pass-1 request for `a.py` could pack `data.py` into the prompt (`"a.py" in "data.py"`), and two requests could duplicate the same fragment. Matching is now exact path, then `/`-suffix (so `cli.py` finds `app/cli.py` and not `tests/test_cli.py`), then a repo-prefixed request — unique by canonical path (#85).
