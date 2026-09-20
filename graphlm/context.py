@@ -137,9 +137,6 @@ def filter_requested_files(
     """
     if not isinstance(requested, list):
         return []
-    requested_set = set(requested)
-    # Build a lookup of requested files that exist in the scan
-    matched: dict[str, FileFragment] = {}
 
     by_path: dict[str, FileFragment] = {}
     for frag in scan.file_fragments:
