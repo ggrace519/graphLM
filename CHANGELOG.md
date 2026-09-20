@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **In-project symlinks to never-read files are not scanned.** `crypto.py → .env` (or `id_rsa`) used to be read because the never-read check used the *link name* while `read_text` followed the target. The resolved target is now screened too.
+
 - **PHP quoted `require`/`include` inside `if` or a function is extracted.** Only root `expression_statement` nodes were visited, so `if (true) { require "b.php"; }` produced no include edge and did not mark known-partial (#114).
 
 - **C# `using` inside `namespace { }` is extracted.** StyleCop SA1200 puts usings in the block; the walker only looked at root / file-scoped namespace children, so those edges were missing (#113).

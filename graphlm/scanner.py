@@ -212,6 +212,20 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTS
 
 
+def _symlink_hides_sensitive(path: Path) -> bool:
+    """True when ``path`` is a symlink to a never-read file (``.env``, key, …).
+
+    Guards inspect the *link name*; ``read_text`` follows the target, so
+    ``crypto.py → .ssh/id_rsa`` used to send the key body to the LLM.
+    """
+    if not path.is_symlink():
+        return False
+    try:
+        target = path.resolve()
+    except OSError:
+        return True
+    return _is_sensitive_file(target)
+
 def _is_test_path(rel_path: str) -> bool:
     """True for test files/dirs — not names that merely contain ``test`` (#94).
 
@@ -412,7 +426,7 @@ def scan_project(
                 if _is_binary(entry):
                     skipped_count += 1
                     continue
-                if _is_sensitive_file(entry):
+                if _is_sensitive_file(entry) or _symlink_hides_sensitive(entry):
                     skipped_count += 1
                     continue
                 if not include_tests and _is_test_path(rel_str):
@@ -539,7 +553,7 @@ def scan_project(
                 continue
             if _is_binary(fpath):
                 continue
-            if _is_sensitive_file(fpath):
+            if _is_sensitive_file(fpath) or _symlink_hides_sensitive(fpath):
                 skipped_count += 1
                 continue
             if not include_tests and _is_test_path(rel):

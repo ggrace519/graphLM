@@ -225,6 +225,25 @@ class TestScanProject:
         assert "linked.py" not in paths
         assert "main.py" in paths
 
+    def test_in_project_symlink_to_env_is_not_scanned(self, tmp_path):
+        # crypto.py -> .env used to send the secret; the guard looked at the
+        # link name, read_text followed the target.
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".env").write_text("SECRET=supersecretvalue\n")
+        (project / "main.py").write_text("print(1)\n")
+        try:
+            (project / "crypto.py").symlink_to(project / ".env")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "main.py" in paths
+        assert "crypto.py" not in paths
+        assert ".env" not in paths
+        for f in result.file_fragments:
+            assert "supersecretvalue" not in f.content
+
     def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
         # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
         project = tmp_path / "project"
