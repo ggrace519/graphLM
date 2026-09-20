@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`--serve` path resolution no longer maps `a.py` onto `data.py`.** After exact/suffix/prefix matching, `resolve_path` used unanchored `query in path`, so a unique `'a.py' in 'data.py'` returned the wrong module as `found: True`. File-like queries (basename containing `.`) skip that fallback; extensionless unique names like `core` still match (#140).
 - **C# `using System;` no longer resolves onto a unique scanned file in `System/`.** The unique-namespace-directory fallback treated a lone `System/Console.cs` as the BCL. `System` / `Microsoft` / `Windows` roots are now dropped as third-party, matching the pack docstring (#100).
 
 ### Infrastructure
