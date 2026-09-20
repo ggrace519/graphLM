@@ -9,6 +9,8 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **PHP quoted `require`/`include` inside `if` or a function is extracted.** Only root `expression_statement` nodes were visited, so `if (true) { require "b.php"; }` produced no include edge and did not mark known-partial (#114).
+
 - **C# `using` inside `namespace { }` is extracted.** StyleCop SA1200 puts usings in the block; the walker only looked at root / file-scoped namespace children, so those edges were missing (#113).
 
 - **Pass 1 `requested_files: null` no longer aborts after a paid LLM call.** Free-form JSON with `null` or a string used to `TypeError` in `filter_requested_files` (or silently match zero files). Non-list / non-string entries are now treated as “request nothing” and pass 2 still runs (#115).
