@@ -245,11 +245,27 @@ class TestRenderHtml:
             ],
         )
         html = render_html(graph)
-        data_start = html.index("const graphData = ") + len("const graphData = ")
-        data_end = html.index(";\nconst _PALETTE")
-        data = json.loads(html[data_start:data_end])
+        data = _embedded(html)
         assert len(data["nodes"]) == 1
         assert data["nodes"][0]["name"] == "Main"
+
+    def test_embedded_json_does_not_break_out_of_script_tag(self):
+        # json.dumps does not escape <; a path containing </script> used to
+        # close the inline script tag. The payload must round-trip and the
+        # document must still have exactly the two intended <script> tags
+        # (D3 CDN + inline).
+        payload = "foo</script><script>alert(1)</script>.py"
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[
+                ModuleDescription(path=payload, name="x", description="d"),
+            ],
+        )
+        html = render_html(graph)
+        assert payload not in html
+        assert html.count("<script") == 2
+        data = _embedded(html)
+        assert data["nodes"][0]["path"] == payload
 
     def test_modules_included_as_nodes(self):
         graph = CodebaseGraph(
