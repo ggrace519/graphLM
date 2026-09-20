@@ -9,6 +9,9 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`.envrc` and `.flaskenv` are never read.** They are dotenv-class secret stores that are not `.env.<suffix>`, so they were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
+- **GitHub fine-grained PATs (`github_pat_`) are redacted.** The dedicated GitHub regex only matched classic `ghp_` / `gho_` / … prefixes, so a bare `github_pat_…` in a comment survived.
+
 - **Go raw-string import literals are extracted.** `import \`./rel\`` is valid Go; the extractor only accepted interpreted `"..."` strings, so those edges were missing (#122).
 
 - **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).

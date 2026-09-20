@@ -459,6 +459,22 @@ class TestIsSensitiveFile:
         for name in (".env", ".env.qa", ".env.test", ".env.production", ".env.foo"):
             assert _is_sensitive_file(Path(name)) is True, name
 
+    def test_envrc_and_flaskenv_are_sensitive(self):
+        assert _is_sensitive_file(Path(".envrc")) is True
+        assert _is_sensitive_file(Path(".flaskenv")) is True
+
+    def test_scan_skips_envrc_and_flaskenv(self, tmp_path):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".envrc").write_text("export PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / ".flaskenv").write_text("PLAIN=supersecretvalue1234567890abcdef\n")
+        (project / "app.py").write_text("x = 1\n")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "supersecretvalue" not in f.content
+
     def test_env_template_variants_are_not_sensitive(self):
         # Non-secret templates must stay scannable.
         for name in (".env.example", ".env.sample", ".env.template", ".env.dist"):
@@ -539,6 +555,12 @@ class TestRedactSecrets:
         redacted = _redact_secrets(content)
         assert "[REDACTED:GITHUB_TOKEN]" in redacted
         assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ" not in redacted
+
+    def test_redacts_github_fine_grained_pat_without_assignment(self):
+        pat = "github_pat_11AAAAAAA0123456789abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+        redacted = _redact_secrets(f"see {pat}")
+        assert pat not in redacted
+        assert "[REDACTED:GITHUB_TOKEN]" in redacted
 
     def test_redacts_private_key_headers(self):
         content = "-----BEGIN RSA PRIVATE KEY-----\nsome key data\n-----END RSA PRIVATE KEY-----"
