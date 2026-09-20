@@ -349,12 +349,18 @@ def generate_graph(
 
     try:
         pass1_data = _json.loads(pass1_result_json)
-        requested_files = pass1_data.get("requested_files", [])
     except (_json.JSONDecodeError, TypeError, KeyError) as e:
         raise GraphLLError(
             f"Pass 1 LLM response was not valid JSON: {e}\n"
             f"Response: {pass1_result_json[:200]}"
         ) from e
+    # Pass 1 is free-form JSON. null / a string / a missing object must not
+    # TypeError after the paid call (#115).
+    if not isinstance(pass1_data, dict):
+        requested_files: list[str] = []
+    else:
+        raw = pass1_data.get("requested_files", [])
+        requested_files = [p for p in raw if isinstance(p, str)] if isinstance(raw, list) else []
 
     # Phase 2: Filter requested files and assemble context
     pass2_files = filter_requested_files(scan, requested_files, max_pass2_files)

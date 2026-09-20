@@ -112,6 +112,8 @@ def filter_requested_files(
     Returns:
         File fragments for the requested files, in priority order.
     """
+    if not isinstance(requested, list):
+        return []
     requested_set = set(requested)
     # Build a lookup of requested files that exist in the scan
     matched: dict[str, FileFragment] = {}

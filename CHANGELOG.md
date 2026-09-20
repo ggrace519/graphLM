@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pass 1 `requested_files: null` no longer aborts after a paid LLM call.** Free-form JSON with `null` or a string used to `TypeError` in `filter_requested_files` (or silently match zero files). Non-list / non-string entries are now treated as “request nothing” and pass 2 still runs (#115).
+
 ### Infrastructure
 
 - **CI and release workflows now use current Node.js 24-based actions.** GitHub was forcibly running the older checkout, artifact, uv setup, coverage, and release-publishing actions under a compatibility runtime and warning that their Node.js 20 runtime was deprecated (#80).
