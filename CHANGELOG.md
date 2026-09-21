@@ -9,8 +9,10 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Truncated PEM bodies are redacted after a leftover BEGIN header.** Head-truncation can cut before `END`; the full-block regex then misses and only the BEGIN line was replaced, leaving `MIIE…` in the fragment.
 - **In-project symlinks into `.git/` (and other always-excluded dirs) are not scanned.** `utils.py → .git/config` used to be read because the never-read check only screened secret *filenames*, while the walk already refuses `.git`.
 - **`tests/src/` is not treated as a Python/Java/PHP source root.** #19 rejected `tests/stub/requests` but any nested `src`/`lib`/`python` still became a root, so `import requests` resolved onto `tests/src/requests` (#161).
+
 
 - **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
 
