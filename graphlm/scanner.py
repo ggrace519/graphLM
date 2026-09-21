@@ -224,7 +224,15 @@ def _symlink_hides_sensitive(path: Path) -> bool:
         target = path.resolve()
     except OSError:
         return True
-    return _is_sensitive_file(target)
+    if _is_sensitive_file(target):
+        return True
+    # ``utils.py → .git/config``: never-read missed ``config``, but the
+    # walk already refuses ``.git``. Same for node_modules / .venv / …
+    for part in target.parts:
+        for pat in _ALWAYS_EXCLUDE:
+            if fnmatch.fnmatch(part, pat):
+                return True
+    return False
 
 def _is_test_path(rel_path: str) -> bool:
     """True for test files/dirs — not names that merely contain ``test`` (#94).

@@ -9,7 +9,9 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **In-project symlinks into `.git/` (and other always-excluded dirs) are not scanned.** `utils.py → .git/config` used to be read because the never-read check only screened secret *filenames*, while the walk already refuses `.git`.
 - **`tests/src/` is not treated as a Python/Java/PHP source root.** #19 rejected `tests/stub/requests` but any nested `src`/`lib`/`python` still became a root, so `import requests` resolved onto `tests/src/requests` (#161).
+
 - **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
 
 - **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
@@ -55,6 +57,7 @@ and this project adheres to Semantic Versioning.
 - **Go raw-string import literals are extracted.** `import \`./rel\`` is valid Go; the extractor only accepted interpreted `"..."` strings, so those edges were missing (#122).
 
 - **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).
+
 
 - **In-project symlinks to never-read files are not scanned.** `crypto.py → .env` (or `id_rsa`) used to be read because the never-read check used the *link name* while `read_text` followed the target. The resolved target is now screened too.
 
