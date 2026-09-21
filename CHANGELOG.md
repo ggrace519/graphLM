@@ -9,8 +9,10 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
 - **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
 - **Rust `mod foo;` is no longer dropped when a preceding attribute merely contains the word `path`.** `#[cfg(feature = "path")]` was treated as `#[path = "..."]` because the detector was `b"path" in node.text`. Only a real `#[path = "..."]` is skipped now (#153).
+
 - **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
 
 - **`.npmrc` / `.yarnrc` / `.pypirc` are never read.** `_auth=base64(user:pass)` and `https://user:pass@` in `.npmrc` are not `password=` assignments, so redaction left short logins intact and pass 2 could send them.
@@ -23,6 +25,7 @@ and this project adheres to Semantic Versioning.
 - **`.htpasswd`, singular `secret.yaml`, and `*.env` / `foo.env.local` are never read.** `*secrets*` missed `secret.yaml`; `.htpasswd` is not `*password*`; `config.env` is not a leading `.env`. Those files were scanned with hashes and keys intact.
 
 - **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.
+
 
 - **`write_outputs` refuses to write through a symlink, including ancestor directory links.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, and a parent `decoy → victim` plus `-o decoy/out` still wrote GRAPH.* into `victim`. Same contract as skill install (#33): remove the symlink and re-run.
 

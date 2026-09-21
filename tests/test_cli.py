@@ -328,9 +328,21 @@ class TestCLI:
         project = tmp_path / "scanned"
         other = tmp_path / "elsewhere"
         # Default: a .graphlm/ subdir of the scanned project.
-        assert output_destination(project, None) == project / ".graphlm"
+        assert output_destination(project, None) == project.resolve() / ".graphlm"
         # -o is honored literally (no .graphlm appended).
         assert output_destination(project, str(other)) == other
+
+    def test_output_destination_resolves_symlink_project(self, tmp_path):
+        real = tmp_path / "realproj"
+        real.mkdir()
+        link = tmp_path / "linkproj"
+        try:
+            link.symlink_to(real)
+        except (OSError, NotImplementedError):
+            return
+        assert output_destination(link, None) == real.resolve() / ".graphlm"
+        other = tmp_path / "elsewhere"
+        assert output_destination(link, str(other)) == other
 
     def test_cli_writes_into_dot_graphlm_not_cwd(
         self, small_project, tmp_path, monkeypatch
