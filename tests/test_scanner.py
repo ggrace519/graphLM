@@ -408,6 +408,13 @@ class TestRedactSecrets:
         assert "[REDACTED:PASSWORD]" in redacted
         assert "mysecretpass123" not in redacted
 
+    def test_redacts_quoted_password_with_spaces(self):
+        json_pw = _redact_secrets('{"password": "hello world secret"}')
+        assert "hello world secret" not in json_pw
+        assert "[REDACTED:PASSWORD]" in json_pw
+        assign = _redact_secrets('password = "hello world secret"')
+        assert "hello world secret" not in assign
+
     def test_does_not_redact_none_password(self):
         content = "password = none"
         redacted = _redact_secrets(content)
