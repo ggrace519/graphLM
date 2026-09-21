@@ -46,7 +46,10 @@ def output_destination(project_dir: Path, output_dir: str | None) -> Path:
     """
     if output_dir:
         return Path(output_dir)
-    return Path(project_dir) / GRAPHLM_OUTPUT_DIRNAME
+    # Resolve so `graphlm /symlink/to/project` writes into the real
+    # checkout's `.graphlm/` rather than being refused as an ancestor
+    # symlink after the paid LLM calls (#154). `-o` stays literal.
+    return Path(project_dir).resolve() / GRAPHLM_OUTPUT_DIRNAME
 
 
 def _do_install_skill(
