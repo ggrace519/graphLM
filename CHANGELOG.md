@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning.
 
 
 
+
 - **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
 
 - **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
