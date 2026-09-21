@@ -155,6 +155,11 @@ def _module_candidates(dotted: str) -> tuple[str, ...]:
 # ground-truth table is worse than a missing one, so the set is deliberately a
 # small allowlist of real Python source-layout roots.
 _SOURCE_ROOT_NAMES = ("src", "lib", "python")
+# A conventional root nested under tests/vendor/stubs is a stub shadow,
+# not a real interpreter path (#19 / #161).
+_NOT_SOURCE_PARENTS = frozenset(
+    {"tests", "test", "__tests__", "vendor", "stubs", "stub", "fixtures"}
+)
 
 
 def _source_roots(known: set[str]) -> tuple[str, ...]:
@@ -183,6 +188,8 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
         # root's LAST segment must be a conventional source-root name.
         prefix_parts = parts[:-2]
         if prefix_parts and prefix_parts[-1] in _SOURCE_ROOT_NAMES:
+            if any(p in _NOT_SOURCE_PARENTS for p in prefix_parts[:-1]):
+                continue
             roots.add("/".join(prefix_parts) + "/")
     return tuple(sorted(roots, key=len))
 
