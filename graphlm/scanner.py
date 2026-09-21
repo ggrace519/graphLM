@@ -212,11 +212,15 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTS
 
 
-def _symlink_hides_sensitive(path: Path) -> bool:
-    """True when ``path`` is a symlink to a never-read file (``.env``, key, …).
+def _symlink_hides_sensitive(
+    path: Path, exclude: tuple[str, ...] | None = None
+) -> bool:
+    """True when ``path`` is a symlink to a never-read file or excluded tree.
 
     Guards inspect the *link name*; ``read_text`` follows the target, so
-    ``crypto.py → .ssh/id_rsa`` used to send the key body to the LLM.
+    ``crypto.py → .ssh/id_rsa`` used to send the key body to the LLM, and
+    ``config.yaml → secrets/prod.yaml`` still would when ``secrets`` is
+    only in ``.graphlmignore``.
     """
     if not path.is_symlink():
         return False
@@ -226,10 +230,9 @@ def _symlink_hides_sensitive(path: Path) -> bool:
         return True
     if _is_sensitive_file(target):
         return True
-    # ``utils.py → .git/config``: never-read missed ``config``, but the
-    # walk already refuses ``.git``. Same for node_modules / .venv / …
+    pats = exclude if exclude is not None else tuple(_ALWAYS_EXCLUDE)
     for part in target.parts:
-        for pat in _ALWAYS_EXCLUDE:
+        for pat in pats:
             if fnmatch.fnmatch(part, pat):
                 return True
     return False
@@ -434,7 +437,9 @@ def scan_project(
                 if _is_binary(entry):
                     skipped_count += 1
                     continue
-                if _is_sensitive_file(entry) or _symlink_hides_sensitive(entry):
+                if _is_sensitive_file(entry) or _symlink_hides_sensitive(
+                    entry, all_exclude
+                ):
                     skipped_count += 1
                     continue
                 if not include_tests and _is_test_path(rel_str):
@@ -561,7 +566,9 @@ def scan_project(
                 continue
             if _is_binary(fpath):
                 continue
-            if _is_sensitive_file(fpath) or _symlink_hides_sensitive(fpath):
+            if _is_sensitive_file(fpath) or _symlink_hides_sensitive(
+                fpath, all_exclude
+            ):
                 skipped_count += 1
                 continue
             if not include_tests and _is_test_path(rel):
