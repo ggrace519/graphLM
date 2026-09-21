@@ -189,6 +189,11 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
         parts = _posix_rel(path).split("/")[:-1]
         if "src" in parts:
             idx = parts.index("src")
+            if any(
+                p in {"tests", "test", "__tests__", "vendor", "stubs", "stub", "fixtures"}
+                for p in parts[:idx]
+            ):
+                continue
             roots.add("/".join(parts[: idx + 1]) + "/")
     return tuple(sorted(roots, key=len))
 

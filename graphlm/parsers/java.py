@@ -106,6 +106,11 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
             continue
         if "src" in parts:
             idx = parts.index("src")
+            if any(
+                p in {"tests", "test", "__tests__", "vendor", "stubs", "stub", "fixtures"}
+                for p in parts[:idx]
+            ):
+                continue
             rest = parts[idx + 1 :]
             if rest[:1] not in ("main", "test"):
                 roots.add("/".join(parts[: idx + 1]) + "/")
