@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Rust `mod foo;` is no longer dropped when a preceding attribute merely contains the word `path`.** `#[cfg(feature = "path")]` was treated as `#[path = "..."]` because the detector was `b"path" in node.text`. Only a real `#[path = "..."]` is skipped now (#153).
 - **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
 
 - **`.npmrc` / `.yarnrc` / `.pypirc` are never read.** `_auth=base64(user:pass)` and `https://user:pass@` in `.npmrc` are not `password=` assignments, so redaction left short logins intact and pass 2 could send them.
@@ -90,6 +91,7 @@ and this project adheres to Semantic Versioning.
 - **Pass-2 file selection no longer substring-matches the wrong files.** A pass-1 request for `a.py` could pack `data.py` into the prompt (`"a.py" in "data.py"`), and two requests could duplicate the same fragment. Matching is now exact path, then `/`-suffix (so `cli.py` finds `app/cli.py` and not `tests/test_cli.py`), then a repo-prefixed request — unique by canonical path (#85).
 
 - **C# namespace `using MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** The nested-type parent-file probe (`Ns.Type` → `Ns.cs`) ran for every using, so a namespace import preferred `src/MyApp.cs` over the unique-dir `src/MyApp/Models/User.cs`. That probe now runs only for `using static` and `using Alias = …` (ADR-007) (#126).
+
 - **C# `using System;` no longer resolves onto a unique scanned file in `System/`.** The unique-namespace-directory fallback treated a lone `System/Console.cs` as the BCL. `System` / `Microsoft` / `Windows` roots are now dropped as third-party, matching the pack docstring (#100).
 
 ### Infrastructure
