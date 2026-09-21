@@ -828,6 +828,16 @@ class TestRedactSecrets:
         assert "REAL_SECRET" not in redacted
         assert "BEGIN ENCRYPTED PRIVATE KEY" not in redacted
 
+    def test_redacts_truncated_pem_body_after_header(self):
+        content = (
+            "[REDACTED:PRIVATE_KEY_HEADER]\n"
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCAAAA\n"
+            "moreBase64PayloadLineXXXXYYYYZZZZ\n"
+        )
+        redacted = _redact_secrets(content)
+        assert "MIIEvQIBADANBgkqhki" not in redacted
+        assert "moreBase64PayloadLineXXXXYYYYZZZZ" not in redacted
+
 
 class TestSkeletonScan:
     """Oversized Python files are sent as signature skeletons (innovation #2)."""
