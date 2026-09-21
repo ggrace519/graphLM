@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning.
 - **`tests/src/` is not treated as a Python/Java/PHP source root.** #19 rejected `tests/stub/requests` but any nested `src`/`lib`/`python` still became a root, so `import requests` resolved onto `tests/src/requests` (#161).
 
 
+
 - **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
 
 - **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
