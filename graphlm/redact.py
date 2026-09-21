@@ -76,11 +76,17 @@ def _redact_secrets(content: str) -> str:
         redacted,
     )
 
-    # Password assignments (KEY = value, including JSON `"password": "…"`)
+    # Password assignments, including JSON `"password": "hello world"`.
+    # Quoted values may contain spaces; unquoted values still stop at
+    # whitespace.
     redacted = re.sub(
-        r"(?i)([\"']?(?:password|passwd|pwd)[\"']?\s*[=:]\s*)([\"']?)(?!none|null|false|true|''|\"\"|\$\{)"
-        r"[^\s\"',}]+\2",
-        r"\1\2[REDACTED:PASSWORD]\2",
+        r'(?i)(["\']?(?:password|passwd|pwd)["\']?\s*[=:]\s*)(["\'])(.*?)(\2)',
+        r'\1\2[REDACTED:PASSWORD]\2',
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([\"']?(?:password|passwd|pwd)[\"']?\s*[=:]\s*)(?!none|null|false|true)([^\s\"',}]+)",
+        r'\1[REDACTED:PASSWORD]',
         redacted,
     )
 

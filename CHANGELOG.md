@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
 - **Rust `mod foo;` is no longer dropped when a preceding attribute merely contains the word `path`.** `#[cfg(feature = "path")]` was treated as `#[path = "..."]` because the detector was `b"path" in node.text`. Only a real `#[path = "..."]` is skipped now (#153).
 - **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
 
