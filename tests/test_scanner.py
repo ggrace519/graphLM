@@ -244,6 +244,24 @@ class TestScanProject:
         for f in result.file_fragments:
             assert "supersecretvalue" not in f.content
 
+    def test_in_project_symlink_into_git_is_not_scanned(self, tmp_path):
+        project = tmp_path / "project"
+        git = project / ".git"
+        git.mkdir(parents=True)
+        (git / "config").write_text(
+            '[url "https://user:SuperSecretPass99@github.com/org/repo.git"]\n'
+        )
+        (project / "app.py").write_text("x = 1\n")
+        try:
+            (project / "utils.py").symlink_to(git / "config")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert paths == {"app.py"}
+        for f in result.file_fragments:
+            assert "SuperSecretPass99" not in f.content
+
     def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
         # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
         project = tmp_path / "project"
