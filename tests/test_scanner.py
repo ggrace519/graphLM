@@ -736,6 +736,8 @@ class TestRedactSecrets:
         assert "[REDACTED:PASSWORD]" in json_pw
         assign = _redact_secrets('password = "hello world secret"')
         assert "hello world secret" not in assign
+        escaped = _redact_secrets('password = "hello\\"world-secret-value"')
+        assert "world-secret-value" not in escaped
 
     def test_does_not_redact_none_password(self):
         content = "password = none"
@@ -759,6 +761,10 @@ class TestRedactSecrets:
             redacted = _redact_secrets(uri)
             assert "[REDACTED:CONN_STRING_PASSWORD]" in redacted, uri
             assert "Secret99" not in redacted, uri
+        empty_user = _redact_secrets(
+            "redis://:RedisEmptyUserSecret99@localhost:6379/0"
+        )
+        assert "RedisEmptyUserSecret99" not in empty_user
 
     def test_leaves_plain_code_untouched(self):
         content = "x = 42\nname = 'hello'\ndef foo(): pass"
