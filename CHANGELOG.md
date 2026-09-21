@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Empty-user connection URIs (`redis://:secret@host`) and escaped quotes inside quoted passwords are redacted.** The URI regex required a username; the quoted-password matcher stopped at the next raw `"`.
 - **Truncated PEM bodies are redacted after a leftover BEGIN header.** Head-truncation can cut before `END`; the full-block regex then misses and only the BEGIN line was replaced, leaving `MIIE…` in the fragment.
 - **In-project symlinks into `.git/` (and other always-excluded dirs) are not scanned.** `utils.py → .git/config` used to be read because the never-read check only screened secret *filenames*, while the walk already refuses `.git`.
 - **`tests/src/` is not treated as a Python/Java/PHP source root.** #19 rejected `tests/stub/requests` but any nested `src`/`lib`/`python` still became a root, so `import requests` resolved onto `tests/src/requests` (#161).

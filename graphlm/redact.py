@@ -86,8 +86,13 @@ def _redact_secrets(content: str) -> str:
     # Quoted values may contain spaces; unquoted values still stop at
     # whitespace.
     redacted = re.sub(
-        r'(?i)(["\']?(?:password|passwd|pwd)["\']?\s*[=:]\s*)(["\'])(.*?)(\2)',
+        r'(?i)(["\']?(?:password|passwd|pwd)["\']?\s*[=:]\s*)(")((?:\\.|[^"\\])*)(")',
         r'\1\2[REDACTED:PASSWORD]\2',
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([\"']?(?:password|passwd|pwd)[\"']?\s*[=:]\s*)(')((?:\\.|[^'\\])*)(')",
+        r"\1\2[REDACTED:PASSWORD]\2",
         redacted,
     )
     redacted = re.sub(
@@ -98,7 +103,7 @@ def _redact_secrets(content: str) -> str:
 
     # Connection strings with embedded passwords
     redacted = re.sub(
-        r'((?:mysql|postgres|postgresql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s]+:)([^@\s]+)(@)',
+        r'((?:mysql|postgres|postgresql|mongodb(?:\+srv)?|rediss?|amqps?)://(?:[^:@/\s]+)?:)([^@\s]+)(@)',
         r'\1[REDACTED:CONN_STRING_PASSWORD]\3',
         redacted,
     )
