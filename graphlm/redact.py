@@ -75,6 +75,12 @@ def _redact_secrets(content: str) -> str:
         r'[REDACTED:PRIVATE_KEY_HEADER]',
         redacted,
     )
+    # Truncated scan slice: BEGIN redacted, END gone, base64 body remains.
+    redacted = re.sub(
+        r'(\[REDACTED:PRIVATE_KEY_HEADER\](?:\r?\n[A-Za-z0-9+/=]{16,})+)',
+        r'[REDACTED:PRIVATE_KEY_HEADER]\n[REDACTED:PRIVATE_KEY_BODY]',
+        redacted,
+    )
 
     # Password assignments, including JSON `"password": "hello world"`.
     # Quoted values may contain spaces; unquoted values still stop at

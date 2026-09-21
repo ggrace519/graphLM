@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- **Truncated PEM bodies are redacted after a leftover BEGIN header.** Head-truncation can cut before `END`; the full-block regex then misses and only the BEGIN line was replaced, leaving `MIIE…` in the fragment.
 - **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
 - **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
 - **`BEGIN ENCRYPTED PRIVATE KEY` PEM bodies are redacted.** The PKCS#8 encrypted label was not in `(RSA |EC |DSA |OPENSSH )?`, so JSON keystores sent the ciphertext body.
