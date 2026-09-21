@@ -9,6 +9,20 @@ from graphlm.models import Cycle, ImportEdge
 from graphlm.scanner import FileFragment
 
 
+def _norm_path(path: str) -> str:
+    """Canonical path for cycle membership and SLOC lookup.
+
+    Faithfulness already strips a leading ``./`` and folds backslashes because
+    the model echoes those forms of the same file. Cycle scoring must do the
+    same or ``sloc_map.get("./a.py")`` misses the scanned ``a.py`` and the
+    risk collapses to 0 (#84).
+    """
+    path = path.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 def _tarjan_scc(nodes: set[str], adj: dict[str, set[str]]) -> list[list[str]]:
     """Tarjan's algorithm for strongly connected components.
 
@@ -107,6 +121,17 @@ def detect_cycles(
     """
     if not edges:
         return []
+
+    edges = [
+        ImportEdge(
+            from_path=_norm_path(e.from_path),
+            to_path=_norm_path(e.to_path),
+            kind=e.kind,
+        )
+        for e in edges
+    ]
+    if sloc_map is not None:
+        sloc_map = {_norm_path(k): v for k, v in sloc_map.items()}
 
     nodes, adj = _build_adjacency(edges)
     sccs = _tarjan_scc(nodes, adj)
