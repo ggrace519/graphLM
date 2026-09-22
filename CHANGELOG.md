@@ -7,6 +7,8 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-22
+
 ### Added
 
 - **Module importance ranking (`GRAPH.md` Importance column, TypeSafe/Jev).** The map listed modules but never said which were load-bearing — and raw import degree can't tell "imported everywhere" (a constants file) from "central to the architecture" (the orchestrator). Each module now carries a semantic **role** score (Jev: leaf → orchestrator) alongside its structural **degree** (parser ground truth); `GRAPH.md`'s Modules table gains an Importance column that fuses the two and sorts load-bearing first. The two components are stored raw in `GRAPH.json` (not a pre-blended number) so the display weighting can change without rewriting the map, and the CLI prints the top load-bearing modules. On a real project this correctly demoted a constants module from degree-#1 to importance-#5 and promoted a low-degree entry point. On **large repos** where the model describes modules at *directory* granularity (`src/pkg/sub`), importance is scored over the file-level `file_summaries` instead and rendered as a separate `## File Importance` section in `GRAPH.md` (stamped into `meta.file_importance`), and the CLI prints the top load-bearing files — a pre-registered evaluation measured the ranking gap over raw degree jump from +0.01 to +0.11 when scoring files rather than packages. Best-effort and off (both fields null) without a `TYPESAFE_API_KEY` or the `graphlm[typesafe]` extra; unlike summary scoring it is **not** disabled by `--no-redact` (it sends descriptions and a degree count, never source). When off, the Modules table is unchanged. Opt out with `--no-importance`.
@@ -343,7 +345,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ggrace519/graphLM/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ggrace519/graphLM/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ggrace519/graphLM/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ggrace519/graphLM/compare/v0.3.1...v0.4.0
