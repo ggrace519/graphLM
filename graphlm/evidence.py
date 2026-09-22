@@ -38,6 +38,17 @@ _LOW_THRESHOLD = 0.5
 # instructions over a shared state; ~15 kept one request well inside the input
 # budget in testing (≈14k input tokens/request).
 _BATCH = 15
+# A summary whose source has fewer than this many non-whitespace bytes is not
+# scored: there is nothing substantive to verify a claim against. An empty
+# ``__init__.py`` (a bare docstring) or a thin entry point (``from x import
+# main`` then ``main()``) defines nothing, so the support Noul — "do the named
+# symbols match the SOURCE?" — has no signal and returns a meaningless ~0.2 no
+# matter how accurate the summary is. Measured: the two such files in the tetris
+# fixture are 21 and 72 stripped bytes; the smallest real file that scores well
+# is ~168, and substantive modules are 1000+. Scoring a claim against near-empty
+# evidence is unfalsifiable by construction, so those files are *skipped* (like a
+# missing pass-2 fragment), never counted as weakly supported.
+_MIN_EVIDENCE_CHARS = 64
 
 # The validated SOFT Noul: it keeps strong discrimination (a mismatched file or
 # an invented symbol scores ~0.05) while tolerating the unverifiable detail that
@@ -107,7 +118,11 @@ def score(
     skipped = 0
     for summ in file_summaries:
         source = content_by_path.get(_norm(summ.path))
-        if source is None:
+        # Skip a summary with no pass-2 fragment (tree-only), and one whose source
+        # is too thin to verify a claim against (an empty __init__ / a bare entry
+        # point defines nothing — see _MIN_EVIDENCE_CHARS). Both are "no evidence
+        # to compare", counted in `skipped`, never scored as weakly supported.
+        if source is None or len(source.strip()) < _MIN_EVIDENCE_CHARS:
             skipped += 1
             continue
         to_score.append((_norm(summ.path), _claim(summ), source))

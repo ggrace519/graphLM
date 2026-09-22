@@ -45,7 +45,12 @@ class _FakeClient:
         return _Resp(nouls)
 
 
-def _frag(path: str, content: str = "code") -> FileFragment:
+def _frag(path: str, content: str | None = None) -> FileFragment:
+    # Default content must be above evidence._MIN_EVIDENCE_CHARS so a fragment is
+    # scored, not skipped as thin. Callers pass explicit thin content to test the
+    # skip predicate.
+    if content is None:
+        content = "def f():\n    return 42  # substantive enough to be scored\n" * 2
     return FileFragment(path, content, 1)
 
 
@@ -118,6 +123,39 @@ class TestScoring:
         )
         assert res.scored == 1 and res.skipped == 1
         assert fc.total_questions == 1  # only the one with a fragment
+
+    def test_thin_source_is_skipped_not_scored(self):
+        # A near-empty file (below _MIN_EVIDENCE_CHARS of stripped content) has
+        # nothing to verify a claim against — skip it, don't score a correct
+        # minimal summary as weakly supported.
+        fc = _FakeClient()
+        res = evidence.score(
+            [_summary("pkg/__init__.py"), _summary("real.py")],
+            [_frag("pkg/__init__.py", '"""Pkg."""\n'), _frag("real.py", "x" * 200)],
+            redact_secrets=True, api_key="k", client=fc,
+        )
+        assert res.scored == 1 and res.skipped == 1
+        assert fc.total_questions == 1  # only the substantive file
+        assert all(f.path != "pkg/__init__.py" for f in res.low)
+
+    def test_whitespace_only_source_is_skipped(self):
+        fc = _FakeClient()
+        res = evidence.score(
+            [_summary("blank.py")], [_frag("blank.py", "   \n\n  \t\n")],
+            redact_secrets=True, api_key="k", client=fc,
+        )
+        assert res.scored == 0 and res.skipped == 1
+        assert fc.batches == 0
+
+    def test_source_at_threshold_is_scored(self):
+        # Exactly _MIN_EVIDENCE_CHARS of stripped content is scored (boundary).
+        fc = _FakeClient()
+        src = "a" * evidence._MIN_EVIDENCE_CHARS
+        res = evidence.score(
+            [_summary("edge.py")], [_frag("edge.py", src)],
+            redact_secrets=True, api_key="k", client=fc,
+        )
+        assert res.scored == 1 and res.skipped == 0
 
     def test_all_skipped_returns_zero_scored_not_none(self):
         # Every summary tree-only → a real "nothing to compare" state, not None.
