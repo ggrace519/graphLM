@@ -536,3 +536,82 @@ class TestCLI:
         result = runner.invoke(app, [str(project), "--dry-run", "--no-skeleton"])
         assert result.exit_code == 0
         assert "Dry run complete" in result.stdout or "Dry run complete" in result.stderr
+
+
+class TestSetupCLI:
+    """--setup short-circuit and the first-run auto-trigger wiring."""
+
+    def test_setup_flag_short_circuits(self, tmp_path):
+        # --setup runs the wizard and exits; no scan, no LLM.
+        from graphlm.setup import SetupResult
+
+        with patch("graphlm.setup.run_setup", return_value=SetupResult(0)) as rs:
+            result = runner.invoke(app, ["--setup"])
+        assert result.exit_code == 0
+        assert rs.called
+        # project_dir unused: never touched the analysis path.
+        assert "Scanning" not in (result.stdout + result.stderr)
+
+    def test_setup_flag_non_tty_passes_non_interactive(self):
+        # Piped --setup must not block on input(): interactive=False, prompt=None.
+        from graphlm.setup import SetupResult
+
+        captured = {}
+
+        def fake(**kw):
+            captured.update(kw)
+            return SetupResult(0)
+
+        with (
+            patch("graphlm.setup.run_setup", side_effect=fake),
+            patch.object(sys.stdin, "isatty", return_value=False),
+        ):
+            result = runner.invoke(app, ["--setup"])
+        assert result.exit_code == 0
+        assert captured["interactive"] is False
+        assert captured["prompt"] is None
+
+    def test_auto_trigger_skipped_when_marker_present(self, small_project, tmp_path):
+        # Marker present → run_setup is never called before analysis.
+        with (
+            patch("graphlm.setup.marker_path", return_value=tmp_path / "done"),
+            patch("graphlm.setup.run_setup") as rs,
+        ):
+            (tmp_path / "done").write_text("x")
+            runner.invoke(app, [str(small_project), "--dry-run"])
+        assert not rs.called
+
+    def test_auto_trigger_fires_when_marker_absent_and_tty(self, small_project, tmp_path):
+        from graphlm.setup import SetupResult
+
+        with (
+            patch("graphlm.setup.marker_path", return_value=tmp_path / "absent"),
+            patch("graphlm.setup.run_setup", return_value=SetupResult(0, installed=False)) as rs,
+            patch.object(sys.stdin, "isatty", return_value=True),
+        ):
+            result = runner.invoke(app, [str(small_project), "--dry-run"])
+        assert rs.called
+        # No install happened → analysis proceeds.
+        assert result.exit_code == 0
+
+    def test_auto_trigger_exits_after_install(self, small_project, tmp_path):
+        # If packs were installed mid-run, exit and tell the user to re-run
+        # (the new packs aren't importable in this process).
+        from graphlm.setup import SetupResult
+
+        with (
+            patch("graphlm.setup.marker_path", return_value=tmp_path / "absent"),
+            patch(
+                "graphlm.setup.run_setup",
+                return_value=SetupResult(0, installed=True),
+            ) as rs,
+            patch.object(sys.stdin, "isatty", return_value=True),
+        ):
+            result = runner.invoke(app, [str(small_project), "--dry-run"])
+        # The mock MUST have run — otherwise the test proves nothing (a source
+        # checkout dry-run also exits 0 and would pass the assertions below).
+        assert rs.called
+        assert result.exit_code == 0
+        assert "Re-run" in (result.stdout + result.stderr)
+        # Did NOT proceed to scan (install-then-continue would use a stale venv).
+        assert "Dry run complete" not in (result.stdout + result.stderr)

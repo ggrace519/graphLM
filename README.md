@@ -44,6 +44,8 @@ Either one gives you a global `graphlm` command. Prefer plain pip? `pip install 
 
 Want your coding agent to *query* the map over MCP (see [Serve the map to your agent](#serve-the-map-to-your-agent-mcp))? Install the `mcp` extra: `uv tool install 'graphlm[mcp]'`. Parser edges for languages other than Python are opt-in extras — see [Language packs](#language-packs).
 
+**First run.** The first time you run graphlm interactively it offers a quick setup — pick the optional packs you want (language grammars, the MCP server, TypeSafe prose-scoring) and it installs them with the installer you used. Run it again any time with `graphlm --setup`. It never installs anything without asking, and a piped/CI run skips it with a one-line hint.
+
 **No PyPI, no problem.** Every release also ships the wheel and sdist as [GitHub Release](https://github.com/ggrace519/graphLM/releases/latest) assets. Grab the latest `graphlm-*.whl` from that page and `pipx install` the file (or its URL).
 
 **Hacking on graphLM itself?** Clone it and let `uv` sync the dev deps. Add the extras if you want the MCP and language-pack tests to run rather than skip:

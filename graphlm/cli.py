@@ -122,6 +122,47 @@ def _do_serve(project_dir: Path | None, output_dir: str | None) -> None:
     run_server(project.resolve(), json_path.resolve())
 
 
+def _maybe_first_run_setup() -> None:
+    """Offer the setup wizard once, on the first interactive analysis run.
+
+    No-op when the completion marker already exists. Interactive (TTY on stdin)
+    → run the wizard; non-interactive → the wizard prints a one-line ``--setup``
+    hint and returns. Either path writes the marker, so this fires at most once.
+
+    If the wizard actually installed packs, this **exits** (not returns): the
+    install rebuilt the venv this process runs from, so the freshly-installed
+    packs are not importable in-process — continuing would silently produce a
+    graph without the edges the user just asked for. Re-running picks them up.
+
+    Never raises: setup is a convenience, not a gate on the analysis.
+    """
+    import sys
+
+    try:
+        from graphlm.setup import marker_path, run_setup
+
+        if marker_path().exists():
+            return
+        interactive = sys.stdin.isatty()
+        result = run_setup(
+            echo=lambda s: typer.echo(s, err=True),
+            prompt=input if interactive else None,
+            interactive=interactive,
+        )
+        if result.installed:
+            typer.echo(
+                "Packs installed. Re-run `graphlm .` to use them (they are not "
+                "loaded into the current process).",
+                err=True,
+            )
+            raise typer.Exit(0)
+    except typer.Exit:
+        raise
+    except Exception:
+        # A first-run helper must never break the actual analysis.
+        pass
+
+
 @app.command()
 def main(
     project_dir: Path | None = typer.Argument(
@@ -171,6 +212,14 @@ def main(
         "(graphlm[mcp]) and an existing map (run graphlm first). PROJECT_DIR "
         "defaults to '.'; -o points at the map's directory as usual. Register "
         "with e.g. `claude mcp add graphlm -- graphlm --serve /path/to/repo`.",
+    ),
+    setup: bool = typer.Option(
+        False,
+        "--setup",
+        help="Run the first-run setup wizard: choose and install optional packs "
+        "(language grammars, the MCP server, TypeSafe prose scoring) with the "
+        "installer that put graphlm on PATH, then exit. Runs automatically the "
+        "first time graphlm is used interactively.",
     ),
     output_dir: str = typer.Option(
         None,
@@ -321,15 +370,39 @@ def main(
         _do_serve(project_dir, output_dir)
         raise typer.Exit(0)
 
+    # --setup short-circuits: run the wizard explicitly and exit. project_dir is
+    # unused (the wizard installs into the graphlm install, not a target repo).
+    # Honor the TTY: a piped `--setup` prints the hint instead of blocking on input.
+    if setup:
+        import sys as _sys
+
+        from graphlm.setup import run_setup
+
+        _tty = _sys.stdin.isatty()
+        setup_result = run_setup(
+            echo=lambda s: typer.echo(s, err=True),
+            prompt=input if _tty else None,
+            interactive=_tty,
+        )
+        raise typer.Exit(setup_result.code)
+
     # project_dir is optional in the signature so --install-skill / --serve can
     # run without it; for the analysis path it's required.
     if project_dir is None:
         typer.echo(
             "Error: missing PROJECT_DIR. Pass a directory to analyze, or use "
-            "--install-skill <harness> / --serve / --upgrade. See 'graphlm --help'.",
+            "--install-skill <harness> / --serve / --upgrade / --setup. "
+            "See 'graphlm --help'.",
             err=True,
         )
         raise typer.Exit(2)
+
+    # First-run auto-trigger: if setup has never completed, offer the wizard once
+    # before the first analysis. Interactive only — a non-TTY (piped/CI) run
+    # prints a one-line hint and proceeds, never blocking. The marker is written
+    # either way so this fires at most once. A --dry-run is a real analysis and
+    # is not a reason to skip: the marker will still be written.
+    _maybe_first_run_setup()
 
     typer.echo(f"Scanning {project_dir}...", err=True)
 
