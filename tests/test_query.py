@@ -390,19 +390,50 @@ class _RelClient:
 
 
 class TestSemanticFind:
-    def test_ranks_by_relevance(self, index):
-        # c0..cN follow module order in the graph fixture.
-        n = len(index.graph.modules)
-        assert n >= 2
-        # make the LAST module most relevant
-        by_key = {f"c{n-1}": 0.97, "c0": 0.05}
-        res = query.semantic_find(index, "some question", api_key="k", client=_RelClient(by_key))
-        assert res["available"] is True
-        assert res["hits"], "expected hits"
+    def test_ranks_by_relevance(self):
+        # The corpus is file_summaries (file-level); c0..cN follow summary order.
+        from graphlm.models import CodebaseGraph, FileSummary
+        g = CodebaseGraph(directory_tree="t/", file_summaries=[
+            FileSummary(path="a.py", summary="alpha"),
+            FileSummary(path="b.py", summary="beta"),
+            FileSummary(path="c.py", summary="gamma"),
+        ])
+        by_key = {"c2": 0.97, "c0": 0.05}  # make the LAST candidate most relevant
+        res = query.semantic_find(query.build_index(g), "some question",
+                                  api_key="k", client=_RelClient(by_key))
+        assert res["available"] is True and res["hits"]
         assert res["hits"][0]["relevance"] == 0.97
-        # ranked descending
+        assert res["hits"][0]["path"] == "c.py"
         rels = [h["relevance"] for h in res["hits"]]
         assert rels == sorted(rels, reverse=True)
+
+    def test_scores_files_not_directory_modules(self):
+        # A large-repo shape: directory modules + file-level summaries. Semantic
+        # search must rank FILES (the file-level corpus), not the coarse dirs (#6).
+        from graphlm.models import CodebaseGraph, ModuleDescription, FileSummary
+        g = CodebaseGraph(
+            directory_tree="src/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="a package")],
+            file_summaries=[
+                FileSummary(path="src/pkg/auth.py", summary="login and token handling"),
+                FileSummary(path="src/pkg/db.py", summary="database access layer"),
+            ],
+        )
+        res = query.semantic_find(query.build_index(g), "where is login handled?",
+                                  api_key="k", client=_RelClient({"c0": 0.95, "c1": 0.1}))
+        assert res["hits"][0]["kind"] == "file"
+        assert res["hits"][0]["path"] == "src/pkg/auth.py"  # a FILE, not src/pkg
+
+    def test_falls_back_to_modules_without_summaries(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="a.py", name="a", description="alpha"),
+                     ModuleDescription(path="b.py", name="b", description="beta")],
+        )
+        res = query.semantic_find(query.build_index(g), "q", api_key="k",
+                                  client=_RelClient({"c0": 0.9, "c1": 0.2}))
+        assert res["hits"][0]["kind"] == "module" and res["hits"][0]["path"] == "a.py"
 
     def test_no_key_signals_unavailable(self, index):
         res = query.semantic_find(index, "q", api_key=None, client=_RelClient({}))

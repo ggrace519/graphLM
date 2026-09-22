@@ -148,9 +148,9 @@ def build_server(project_dir: Path, json_path: Path) -> MCPServer:
 
     @server.tool()
     def search(question: str, limit: int = 10) -> dict[str, Any]:
-        """Semantic search: rank modules by how well they answer a natural-language
-        question ("which module handles rate limiting?"). Unlike `find` (token match),
-        this scores each module's meaning against the question with TypeSafe/Jev.
+        """Semantic search: rank files by how well they answer a natural-language
+        question ("which file handles rate limiting?"). Unlike `find` (token match),
+        this scores each file's meaning against the question with TypeSafe/Jev.
         Needs a TYPESAFE_API_KEY and the graphlm[typesafe] extra; when unavailable it
         falls back to `find` so the query still returns something useful."""
         import os
