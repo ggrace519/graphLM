@@ -420,15 +420,23 @@ def semantic_find(
     limit: int = 10,
     client: Any = None,
 ) -> dict[str, Any]:
-    """Rank modules by how well they answer a natural-language question (TypeSafe/Jev).
+    """Rank files by how well they answer a natural-language question (TypeSafe/Jev).
 
     ``find`` (above) matches tokens; this asks the *meaning* of the query. A Jev
-    Noul scores each module's description + summary against the question — "is this
-    the module you'd go to, to do or understand <query>?" — and returns the modules
-    ranked by that probability. This is the one place graphlm calls Jev at *query*
-    time rather than graph-generation time; it is the LLM-backed counterpart to the
-    zero-LLM ``find``, kept as a **separate** function (and MCP tool) so the eight
-    deterministic tools stay LLM-free.
+    Noul scores each candidate's summary + description against the question — "is
+    this where you'd go, to do or understand <query>?" — and returns the best
+    matches ranked by that probability. This is the one place graphlm calls Jev at
+    *query* time rather than graph-generation time; it is the LLM-backed counterpart
+    to the zero-LLM ``find``, kept as a **separate** function (and MCP tool) so the
+    eight deterministic tools stay LLM-free.
+
+    **Corpus: ``file_summaries`` (file-level), falling back to ``modules``.** On a
+    large repo the LLM describes ``modules`` at *directory* granularity
+    (``src/pkg/sub``), but ``file_summaries`` stays file-level everywhere — and a
+    pre-registered eval measured that scoring the file-level corpus flips argus
+    semantic search from 75% to 100% top-1 (INNOVATIONS #6). So this ranks files
+    when summaries exist, and only ranks ``modules`` when a graph has none. When a
+    file is also a described module its ``description`` is added as extra evidence.
 
     Best-effort and gated exactly like the generation-time scorers: returns
     ``{"available": False, ...}`` — never raises — when there is no ``api_key``, no
@@ -438,14 +446,35 @@ def semantic_find(
     the SDK); this function only assembles candidates and orders the result.
     """
     query = (query or "").strip()
-    modules = index.graph.modules
-    if not query or not modules:
+    if not query:
         return {"query": query, "available": True, "hits": [], "total": 0}
 
-    candidates = [
-        (_norm(m.path), m.name, m.description, _summary_for(index, m.path))
-        for m in modules
-    ]
+    mod_desc = {_norm(m.path): m.description for m in index.graph.modules}
+    mod_name = {_norm(m.path): m.name for m in index.graph.modules}
+
+    # Prefer the file-level corpus; a file that is also a module contributes its
+    # module description as extra evidence. Fall back to modules only if a graph
+    # carries no file summaries at all.
+    if index.graph.file_summaries:
+        kind = "file"
+        candidates = [
+            (
+                _norm(fs.path),
+                _norm(fs.path).rsplit("/", 1)[-1],
+                mod_desc.get(_norm(fs.path), ""),  # module desc if this file is one
+                fs.summary,
+            )
+            for fs in index.graph.file_summaries
+        ]
+    elif index.graph.modules:
+        kind = "module"
+        candidates = [
+            (_norm(m.path), m.name, m.description, _summary_for(index, m.path))
+            for m in index.graph.modules
+        ]
+    else:
+        return {"query": query, "available": True, "hits": [], "total": 0}
+
     from graphlm import evidence as _evidence
 
     scores = _evidence.score_relevance(candidates, query, api_key=api_key, client=client)
@@ -454,14 +483,15 @@ def semantic_find(
         return {"query": query, "available": False, "hits": [], "total": 0}
 
     ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
-    by_path = {_norm(m.path): m for m in modules}
+    name_of = {_norm(c[0]): c[1] for c in candidates}
+    desc_of = {_norm(c[0]): (c[2] or c[3]) for c in candidates}  # module desc, else summary
     hits = [
         {
-            "kind": "module",
+            "kind": kind,
             "path": p,
-            "name": by_path[p].name if p in by_path else p,
+            "name": name_of.get(p, p),
             "relevance": round(prob, 3),
-            "description": by_path[p].description if p in by_path else "",
+            "description": desc_of.get(p, ""),
         }
         for p, prob in ranked[: max(0, min(limit, MAX_LIMIT))]
     ]

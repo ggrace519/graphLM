@@ -2,15 +2,16 @@
 
 The `--serve` MCP map answers "where is X?" — but its `find` was a token/substring
 matcher. This adds **`search`**: an agent asks a natural-language question and Jev
-ranks modules by *meaning*, not token overlap. It is the first graphlm Jev call at
+ranks files by *meaning*, not token overlap. It is the first graphlm Jev call at
 **query time** rather than graph-generation time.
 
 ## What works (verified)
 
-- `graphlm.evidence.score_relevance(candidates, query, ...)` — a Jev Noul per module
-  ("is this the module you'd open to do/understand `<query>`?"), batched ~15/request,
+- `graphlm.evidence.score_relevance(candidates, query, ...)` — a Jev Noul per candidate
+  ("is this where you'd go to do/understand `<query>`?"), batched ~15/request,
   gated + never-raises + injectable client.
-- `graphlm.query.semantic_find(index, query, ...)` — ranks modules, returns
+- `graphlm.query.semantic_find(index, query, ...)` — ranks files (scores the file-level
+  `file_summaries`; falls back to `modules` if a graph has none), returns
   `{available, hits:[{path, name, relevance, description}], total}`. Returns
   `available: False` (never raises) when Jev is off, so callers fall back to `find`.
 - New MCP tool **`search`** in `graphlm.mcp_server`, alongside the eight zero-LLM
@@ -72,13 +73,16 @@ Full suite: **974 passed, 8 skipped**; mypy clean; 98% `evidence.py` / 99% `quer
 - Latency: one batched Jev round per query on the agent hot path (~seconds). A miss
   falls back to `find` instantly. A per-`(query, map-mtime)` cache is the obvious
   next increment but isn't built.
-- Ranks **modules** only (the unit an agent navigates to). Ranking individual
-  symbols/functions is a possible extension.
+- Ranks **files** (scoring `file_summaries`, which stay file-level on every repo).
+  A pre-registered eval showed this: on the large repo (argus, 135 files) scoring the
+  file-level corpus took semantic search from 75% → 100% top-1 and the pooled result
+  past the +10 bar it missed at module granularity (INNOVATIONS #6, this closes #173).
+  Falls back to ranking `modules` only when a graph carries no file summaries.
 
 ## Next increment
 
-Cache results per `(query, map mtime)` so repeated questions in a session are free;
-optionally widen candidates from modules to `file_summaries` for finer targets.
+Cache results per `(query, map mtime)` so repeated questions in a session are free.
+Ranking individual symbols/functions (finer than files) is a possible further extension.
 
 ## Branch note
 
