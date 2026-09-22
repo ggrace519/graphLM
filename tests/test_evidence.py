@@ -361,3 +361,35 @@ class TestDegreeForModule:
     def test_trailing_slash_normalised(self):
         fd = {"pkg/x.py": 3}
         assert evidence.degree_for_module("pkg/", fd) == 3
+class TestScoreRelevance:
+    """score_relevance: Jev Noul per module against a query (semantic_find backend)."""
+
+    def _cands(self, n=3):
+        return [(f"m{i}.py", f"mod{i}", f"does thing {i}", "") for i in range(n)]
+
+    def test_gates(self):
+        assert evidence.score_relevance(self._cands(), "q", api_key=None) is None
+        assert evidence.score_relevance([], "q", api_key="k") is None
+        assert evidence.score_relevance(self._cands(), "", api_key="k") is None
+
+    def test_scores_each_candidate(self):
+        fc = _FakeClient(scores={0: 0.9, 1: 0.2, 2: 0.05})
+        res = evidence.score_relevance(self._cands(3), "find the thing", api_key="k", client=fc)
+        assert res == {"m0.py": 0.9, "m1.py": 0.2, "m2.py": 0.05}
+
+    def test_batches_at_15(self):
+        fc = _FakeClient()
+        evidence.score_relevance(self._cands(32), "q", api_key="k", client=fc)
+        assert fc.batches == 3 and fc.total_questions == 32
+
+    def test_client_raises_returns_none(self):
+        class _Boom:
+            def system_one(self, **k):
+                raise RuntimeError("down")
+        assert evidence.score_relevance(self._cands(), "q", api_key="k", client=_Boom()) is None
+
+    def test_summary_included_when_present(self):
+        fc = _FakeClient(scores={0: 0.8})
+        cands = [("a.py", "a", "desc", "the summary text")]
+        res = evidence.score_relevance(cands, "q", api_key="k", client=fc)
+        assert res == {"a.py": 0.8}
