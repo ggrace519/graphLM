@@ -35,6 +35,7 @@ from graphlm.llm import (
 )
 from graphlm.models import (
     ArchitectureNote,
+    FileImportance,
     GraphMeta,
     ImportEdge,
     PassUsage,
@@ -45,6 +46,77 @@ from graphlm.prompts import SYSTEM_PROMPT
 from graphlm.provenance import git_commit_sha, graphlm_version, now_utc_iso
 from graphlm.render import WriteResult, write_outputs
 from graphlm.scanner import ScanResult, scan_project
+
+
+def _is_directory_granular(graph: "CodebaseGraph") -> bool:
+    """True when the LLM described modules at directory (not file) granularity.
+
+    A module path is a directory when its final segment has no file extension. On a
+    large repo the LLM emits packages (``src/pkg/sub``); on small/medium repos it
+    emits files (``src/pkg/mod.py``). We treat the graph as directory-granular when
+    *most* module paths are directories, so a stray extensionless file among real
+    file modules doesn't flip a file-granular graph onto the file-importance path.
+    """
+    mods = graph.modules
+    if not mods:
+        return False
+    dir_like = sum(1 for m in mods if "." not in m.path.replace("\\", "/").rsplit("/", 1)[-1])
+    return dir_like > len(mods) / 2
+
+
+def _score_file_importance(
+    graph: "CodebaseGraph",
+    edges: list["ImportEdge"],
+    *,
+    api_key: str | None,
+    summaries_by_path: dict[str, str],
+    evidence,  # the graphlm.evidence module (passed to avoid a re-import)
+    client=None,  # injectable Jev client (tests pass a fake; None → real)
+) -> "list[FileImportance] | None":
+    """Score file-level importance over file_summaries → sorted FileImportance list.
+
+    Builds file "modules" from ``file_summaries`` (always file-level), reuses
+    ``score_importance`` for the Jev role, fuses with per-file degree the same way
+    ``render._fused_importance`` does, and returns the files sorted most load-bearing
+    first. ``None`` when Jev is off or there are no summaries. Never raises past the
+    caller's guard.
+    """
+    summaries = graph.file_summaries
+    if not summaries:
+        return None
+
+    class _FileMod:
+        __slots__ = ("path", "description")
+
+        def __init__(self, path: str, description: str) -> None:
+            self.path = path
+            self.description = description
+
+    norm = evidence._norm
+    file_mods = [_FileMod(norm(s.path), s.summary) for s in summaries]
+    roles = evidence.score_importance(
+        file_mods, edges, api_key=api_key, summaries_by_path=summaries_by_path,
+        client=client,
+    )
+    if roles is None:
+        return None
+
+    degree = evidence.file_degree(edges)
+    scored = [(p, roles[p], degree.get(p, 0)) for _m in file_mods if (p := _m.path) in roles]
+    if not scored:
+        return None
+    # Rank-normalise degree, blend 0.6*role + 0.4*degree (render's weighting).
+    degs = sorted({d for _p, _r, d in scored})
+    dmax = len(degs) - 1
+    drank = {d: (i / dmax if dmax else 1.0) for i, d in enumerate(degs)}
+    out = [
+        FileImportance(
+            path=p, role=r, degree=d, fused=round(0.6 * (r / 3.0) + 0.4 * drank[d], 4)
+        )
+        for p, r, d in scored
+    ]
+    out.sort(key=lambda fi: (-fi.fused, fi.path))
+    return out
 
 
 def _build_meta(project_path: Path) -> GraphMeta:
@@ -476,23 +548,37 @@ def generate_graph(
         from graphlm import evidence as _evidence
 
         try:
-            roles = _evidence.score_importance(
-                graph.modules,
-                deterministic_edges or [],
-                api_key=os.environ.get("TYPESAFE_API_KEY"),
-                summaries_by_path={
-                    _evidence._norm(s.path): s.summary for s in graph.file_summaries
-                },
-            )
-            if roles is not None:
-                degree = _evidence.file_degree(deterministic_edges or [])
-                for mod in graph.modules:
-                    p = _evidence._norm(mod.path)
-                    if p in roles:
-                        mod.role = roles[p]
-                        # Resolve degree for a file OR a directory module (#170):
-                        # a package module is credited with its members' degree.
-                        mod.degree = _evidence.degree_for_module(mod.path, degree)
+            api_key = os.environ.get("TYPESAFE_API_KEY")
+            summaries_by_path = {
+                _evidence._norm(s.path): s.summary for s in graph.file_summaries
+            }
+            # On a directory-granular graph (the LLM described `modules` as packages
+            # on a large repo) the module-level role/degree are too coarse — a
+            # pre-registered eval measured the fused-vs-degree gap jump +0.011 ->
+            # +0.105 when scoring the file-level `file_summaries` instead. So score
+            # files and stamp meta.file_importance; on a file-granular graph keep the
+            # module-level fill exactly as before (INNOVATIONS #6).
+            if _is_directory_granular(graph):
+                graph.meta.file_importance = _score_file_importance(
+                    graph, deterministic_edges or [], api_key=api_key,
+                    summaries_by_path=summaries_by_path, evidence=_evidence,
+                )
+            else:
+                roles = _evidence.score_importance(
+                    graph.modules,
+                    deterministic_edges or [],
+                    api_key=api_key,
+                    summaries_by_path=summaries_by_path,
+                )
+                if roles is not None:
+                    degree = _evidence.file_degree(deterministic_edges or [])
+                    for mod in graph.modules:
+                        p = _evidence._norm(mod.path)
+                        if p in roles:
+                            mod.role = roles[p]
+                            # Resolve degree for a file OR a directory module (#170):
+                            # a package module is credited with its members' degree.
+                            mod.degree = _evidence.degree_for_module(mod.path, degree)
         except Exception as e:  # never let telemetry cost the paid graph
             logging.warning("Importance scoring failed, continuing without it: %s", e)
 

@@ -249,6 +249,24 @@ class EvidenceSupport(BaseModel):
     )
 
 
+class FileImportance(BaseModel):
+    """One file's importance, at file granularity.
+
+    Filled only when the LLM described ``modules`` at *directory* granularity (large
+    repos), where the module-level ``role``/``degree`` are too coarse. The importance
+    is then scored over ``file_summaries`` (always file-level) and stamped here in
+    ``meta`` instead of onto ``modules`` — ``modules`` is a diff-compared field, and
+    at file granularity there is no graph object that carries importance without a new
+    diff key. ``role`` is the Jev semantic score (0-3), ``degree`` the per-file in+out
+    import degree, ``fused`` the renderer's blend (0-1). See ADR-015 / INNOVATIONS #6.
+    """
+
+    path: str = Field(description="File path relative to project root.")
+    role: float = Field(description="Jev semantic role score, 0 (leaf) to 3 (orchestrator).")
+    degree: int = Field(description="In+out import degree (structural centrality).")
+    fused: float = Field(description="Fused importance (0-1), the renderer's blend.")
+
+
 class GraphMeta(BaseModel):
     """Provenance stamp: when the graph was generated and against which commit.
 
@@ -296,6 +314,13 @@ class GraphMeta(BaseModel):
         description="How well the LLM's file summaries are supported by the source "
         "the model saw (TypeSafe/Jev). Null when TypeSafe is off, --no-redact, on a "
         "dry run, or no summary had a pass-2 fragment.",
+    )
+    file_importance: Optional[list[FileImportance]] = Field(
+        default=None,
+        description="File-level importance (Jev role x degree), most load-bearing "
+        "first. Filled only on directory-granular graphs, where the module-level "
+        "role/degree are too coarse; null otherwise (module importance is on the "
+        "modules themselves). Additive optional — GRAPH_META_SCHEMA_VERSION stays 1.",
     )
 
 

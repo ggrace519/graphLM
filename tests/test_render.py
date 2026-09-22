@@ -1010,3 +1010,58 @@ class TestImportanceMixedScoring:
         order = [ln.split("`")[1] for ln in rows]
         assert order == ["scored.py", "unscored.py"]  # unscored sorts last
         assert "| — | `unscored.py`" in section  # em-dash cell
+
+
+class TestFileImportanceRender:
+    """meta.file_importance renders a File Importance section (directory-granular
+    repos); file-granular repos (no field) are byte-identical to before."""
+
+    def test_section_present_when_file_importance_set(self):
+        from graphlm.models import CodebaseGraph, GraphMeta, FileImportance, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="package")],
+            meta=GraphMeta(created_at="x", file_importance=[
+                FileImportance(path="src/pkg/main.py", role=2.9, degree=5, fused=0.95),
+                FileImportance(path="src/pkg/const.py", role=0.1, degree=8, fused=0.35),
+            ]),
+        )
+        md = render_markdown(g)
+        assert "## File Importance" in md
+        sec = md.split("## File Importance")[1].split("\n##")[0]
+        rows = [ln for ln in sec.splitlines() if ln.startswith("| 0.")]
+        # load-bearing first
+        assert rows[0].split("`")[1] == "src/pkg/main.py"
+        assert rows[1].split("`")[1] == "src/pkg/const.py"
+
+    def test_no_section_and_modules_unchanged_when_absent(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="b.py", name="B", description="second"),
+                     ModuleDescription(path="a.py", name="A", description="first")],
+        )
+        md = render_markdown(g)
+        assert "## File Importance" not in md
+        # Modules section byte-identical to the pre-feature 3-column, path-sorted form.
+        sec = md.split("## Modules")[1].split("\n##")[0].strip()
+        assert sec == (
+            "| Path | Name | Description |\n"
+            "|------|------|-------------|\n"
+            "| `a.py` | A | first |\n"
+            "| `b.py` | B | second |"
+        )
+
+    def test_summary_prefers_file_importance(self):
+        from graphlm.models import CodebaseGraph, GraphMeta, FileImportance, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="x")],
+            meta=GraphMeta(created_at="x", file_importance=[
+                FileImportance(path="src/pkg/main.py", role=2.9, degree=3, fused=0.95)]),
+        )
+        s = importance_summary(g)
+        assert "src/pkg/main.py" in s
