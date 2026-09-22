@@ -4,6 +4,62 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-014 — Prose evidence-support scoring via TypeSafe/Jev
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`graphlm/evidence.py`, `meta.evidence_support`)
+
+### Context
+
+graphlm had an exact oracle for its import *edges* (`faithfulness.py`: LLM
+`import_edges` vs. AST `deterministic_edges`) but **none** for its *prose* — the
+`file_summaries` the model writes. Live spikes showed TypeSafe's Jev (a Noul →
+calibrated probability) discriminates a supported summary from a hallucinated one
+cleanly (real+own-source 0.78, mismatched-file 0.012, injected-fake-symbol 0.051;
+12/12 real beat their corrupted twin), and even flagged a real defect (a
+truncated-mid-symbol summary scored 0.23). The `graphlm[typesafe]` extra exists
+(ADR-013) but nothing consumed it.
+
+### Decisions
+
+1. **Score prose, not edges.** A new `meta.evidence_support` (sibling of
+   `faithfulness`), filled locally after pass 2, one **SOFT Noul** per
+   `file_summary`. SOFT ("role + real symbols match; minor unverifiable detail
+   acceptable; a wrong role or invented symbol is not") — validated to keep
+   discrimination while tolerating the detail a skeletonised fragment can't
+   confirm. It is a **trust weight, not a hallucination verdict**: skeleton/
+   truncation lowers it by design, same framing as `faithfulness`.
+2. **Score against the evidence the model saw** — `pass2_files` `frag.content`
+   (redacted/skeletonised/truncated), **never** disk bytes or
+   `parsers._source_bytes` (unredacted → a third-party leak, and it would score
+   the file rather than the claim-vs-evidence). A summary with no pass-2 fragment
+   is **skipped**, never scored against content the model never received.
+3. **Off unless safe and wanted.** `None` (never a fake zero) when **any** of:
+   `--no-evidence`, `--no-redact` (TypeSafe is a *different* third party than
+   graphlm's own endpoint — unredacted source must not reach it), no
+   `TYPESAFE_API_KEY`, the `typesafe-sdk` extra absent, or a dry run.
+4. **Best-effort, never costs the graph.** It runs after the paid pass-2 call, so
+   `evidence.score` never raises (broad `except → None`, like `diff.load_baseline`)
+   **and** `generate_graph` wraps the fill in a second guard. A failure leaves the
+   field `None`; the finished graph is always returned. Additive optional →
+   `GRAPH_META_SCHEMA_VERSION` stays 1 (ADR-001).
+5. **Injectable client, function-local SDK import.** `score(..., client=None)`
+   lets the no-network test suite drive a fake; the `typesafe_sdk` import is
+   inside the run path so a base install without the extra never ImportErrors, and
+   nothing outside `evidence.py` imports it (the `mcp_server.py` rule).
+
+### Consequences
+
+- A user on the base install (no extra / no key) sees no change and no new
+  dependency; the field is simply absent.
+- Expose per-file low outliers, not just a mean — a mean of 0.81 is not
+  actionable, but "`models.py` 0.23" is (it caught a real truncation).
+- The `typesafe-sdk` extra is now a real dev-test dependency (the unit tests need
+  the real `Noul` types); the CLAUDE.md Commands block gains its `--extra typesafe`
+  line.
+
+---
+
 ## ADR-013 — First-run setup wizard; TypeSafe is an opt-in extra
 
 **Date:** 2026-09-21

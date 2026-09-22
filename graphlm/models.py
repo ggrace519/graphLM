@@ -182,6 +182,52 @@ class Faithfulness(BaseModel):
     matched: int = Field(description="Edges present on both sides.")
 
 
+class FileScore(BaseModel):
+    """One file's evidence-support probability (a low outlier worth surfacing)."""
+
+    path: str = Field(description="File path relative to project root.")
+    score: float = Field(
+        description="Probability (0-1) that the file's summary is supported by the "
+        "source the model saw. Low = the claim outruns its evidence."
+    )
+
+
+class EvidenceSupport(BaseModel):
+    """How well the LLM's prose is supported by the source the model actually saw.
+
+    Computed locally by ``graphlm.evidence.score`` — a TypeSafe/Jev Noul per
+    ``file_summary``, asking whether the summary's role + named symbols match the
+    *source that was sent* (the redacted/skeletonised/truncated ``frag.content``,
+    not the file on disk). Like ``Faithfulness``, this is a downstream-trust
+    **weight**, not a hallucination accusation: a skeletonised or truncated
+    fragment lowers the score **by design**, because the model was asked to
+    describe a file it only partially saw.
+
+    ``None`` (``meta.evidence_support`` absent) when scoring did not run — TypeSafe
+    off (no key / SDK not installed / ``--no-evidence``), redaction disabled
+    (``--no-redact`` — the source must not reach a third party unredacted), on a
+    dry run, or when no summary had a pass-2 fragment to score against. "Not
+    scored" must never read as "scored zero".
+
+    ``scored`` counts summaries actually sent to Jev; ``skipped`` counts summaries
+    whose file was not in the pass-2 set (written from the tree alone — scoring
+    them against content the model never received would manufacture a pass).
+    """
+
+    mean: Optional[float] = Field(
+        default=None,
+        description="Mean support probability over scored summaries, or null if none.",
+    )
+    scored: int = Field(description="Summaries scored (had a pass-2 fragment).")
+    skipped: int = Field(
+        description="Summaries skipped (no pass-2 fragment — not scored)."
+    )
+    low: list[FileScore] = Field(
+        default_factory=list,
+        description="Summaries below the low-support threshold, worst first.",
+    )
+
+
 class GraphMeta(BaseModel):
     """Provenance stamp: when the graph was generated and against which commit.
 
@@ -223,6 +269,12 @@ class GraphMeta(BaseModel):
         default=None,
         description="LLM import_edges vs AST deterministic_edges agreement. "
         "Null when AST was off or on a dry run.",
+    )
+    evidence_support: Optional[EvidenceSupport] = Field(
+        default=None,
+        description="How well the LLM's file summaries are supported by the source "
+        "the model saw (TypeSafe/Jev). Null when TypeSafe is off, --no-redact, on a "
+        "dry run, or no summary had a pass-2 fragment.",
     )
 
 

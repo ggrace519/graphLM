@@ -330,6 +330,13 @@ def main(
         help="Do not write the GRAPH_DIFF.* graph-vs-graph diff (what changed "
         "in the map since the prior run).",
     ),
+    no_evidence: bool = typer.Option(
+        False,
+        "--no-evidence",
+        help="Do not score the LLM's file summaries against their source with "
+        "TypeSafe/Jev (meta.evidence_support). Off anyway without a "
+        "TYPESAFE_API_KEY, the graphlm[typesafe] extra, or under --no-redact.",
+    ),
     no_show_cycles: bool = typer.Option(
         False,
         "--no-show-cycles",
@@ -430,6 +437,7 @@ def main(
             cycle_threshold=cycle_threshold,
             include_html=not no_html,
             include_diff=not no_diff,
+            include_evidence=not no_evidence,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -502,7 +510,11 @@ def main(
     # fact per line. Each is omitted when it wasn't measured (no usage from
     # the endpoint / AST off).
     if result.graph.meta is not None:
-        from graphlm.render import faithfulness_summary, usage_summary
+        from graphlm.render import (
+            evidence_summary,
+            faithfulness_summary,
+            usage_summary,
+        )
 
         usage_line = usage_summary(result.graph.meta)
         if usage_line:
@@ -510,6 +522,9 @@ def main(
         faith_line = faithfulness_summary(result.graph.meta)
         if faith_line:
             typer.echo(f"Faithfulness: {faith_line}", err=True)
+        evidence_line = evidence_summary(result.graph.meta)
+        if evidence_line:
+            typer.echo(f"Evidence: {evidence_line}", err=True)
     typer.echo("Done.", err=True)
 
 

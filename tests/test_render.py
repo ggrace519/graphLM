@@ -847,3 +847,47 @@ class TestRunTelemetryLine:
         directive_end = next(i for i, l in enumerate(lines) if "best-effort" in l)
         assert lines[directive_end + 1].startswith("> **Run telemetry.**")
         assert lines[directive_end + 2] == ""
+
+
+class TestEvidenceSummary:
+    """render.evidence_summary — the terse telemetry clause."""
+
+    def _meta(self, es):
+        from graphlm.models import GraphMeta
+
+        return GraphMeta(created_at="2026-01-01T00:00:00Z", evidence_support=es)
+
+    def test_none_when_unset(self):
+        from graphlm.render import evidence_summary
+
+        assert evidence_summary(self._meta(None)) is None
+
+    def test_with_low_outliers(self):
+        from graphlm.models import EvidenceSupport, FileScore
+        from graphlm.render import evidence_summary
+
+        es = EvidenceSupport(
+            mean=0.81, scored=20, skipped=2,
+            low=[FileScore(path="models.py", score=0.23), FileScore(path="q.py", score=0.4)],
+        )
+        text = evidence_summary(self._meta(es))
+        assert "mean 0.81" in text
+        assert "20 scored, 2 skipped" in text
+        assert "models.py 0.23" in text
+
+    def test_na_mean_when_nothing_scored(self):
+        from graphlm.models import EvidenceSupport
+        from graphlm.render import evidence_summary
+
+        es = EvidenceSupport(mean=None, scored=0, skipped=3, low=[])
+        text = evidence_summary(self._meta(es))
+        assert "mean n/a" in text
+        assert "weakest" not in text  # no low list
+
+    def test_in_telemetry_line(self):
+        from graphlm.models import EvidenceSupport
+        from graphlm.render import _render_telemetry
+
+        es = EvidenceSupport(mean=0.9, scored=5, skipped=0, low=[])
+        line = _render_telemetry(self._meta(es))
+        assert line is not None and "evidence support" in line

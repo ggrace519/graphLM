@@ -140,6 +140,7 @@ def generate_graph(
     cycle_threshold: float = 0.0,
     include_html: bool = True,
     include_diff: bool = True,
+    include_evidence: bool = True,
     skeleton: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
@@ -195,6 +196,11 @@ def generate_graph(
             graph-vs-graph diff (GRAPH_DIFF.md/json) against the prior
             GRAPH.json in that directory. On by default; see ADR-002. Never
             reached on a --dry-run (the dry-run branch returns before any write).
+        include_evidence: Whether to score the LLM's file summaries against the
+            source the model saw (TypeSafe/Jev) into meta.evidence_support. On by
+            default, but a no-op (None) unless redaction is on, a TYPESAFE_API_KEY
+            is set, and the graphlm[typesafe] extra is installed. Never on a dry
+            run (no summaries). Pass False / --no-evidence to skip.
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -426,6 +432,30 @@ def generate_graph(
     graph.meta.faithfulness = score_faithfulness(
         graph.import_edges, deterministic_edges
     )
+    # Evidence support: how well the LLM's file summaries are backed by the
+    # source the model saw (TypeSafe/Jev). Local-only, best-effort, never raises
+    # (it runs after the paid pass-2 call). Off — None, never a fake zero — when
+    # --no-evidence, --no-redact (source must not reach a third party unredacted),
+    # no TYPESAFE_API_KEY, or the graphlm[typesafe] extra is not installed. Scored
+    # against pass2_files (the fragments the model actually received).
+    if include_evidence:
+        import os
+
+        from graphlm import evidence as _evidence
+
+        # Defence in depth: evidence.score is contractually non-raising, but this
+        # runs *after* the paid pass-2 call, so a belt-and-suspenders guard keeps
+        # any future scorer bug from discarding the finished graph (same reason
+        # diff.load_baseline never raises). A failure just leaves the field None.
+        try:
+            graph.meta.evidence_support = _evidence.score(
+                graph.file_summaries,
+                pass2_files,
+                redact_secrets=redact_secrets,
+                api_key=os.environ.get("TYPESAFE_API_KEY"),
+            )
+        except Exception as e:  # never let telemetry cost the paid graph
+            logging.warning("Evidence scoring failed, continuing without it: %s", e)
 
     # Write outputs if output_dir specified
     if output_dir is not None:
