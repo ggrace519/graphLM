@@ -43,16 +43,21 @@ def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | No
 
 
 def importance_summary(graph: CodebaseGraph, top: int = 3) -> str | None:
-    """One terse clause naming the most load-bearing modules, or None if unscored.
+    """One terse clause naming the most load-bearing files/modules, or None.
 
-    Reads the fused importance (``_fused_importance``) off the graph's modules;
-    ``None`` when importance scoring did not run. Shared by ``GRAPH.md`` (indirectly,
-    via the table) and the CLI ``Importance:`` line so the ranking is single-sourced.
+    Prefers the **file-level** importance in ``meta.file_importance`` (filled on
+    directory-granular repos, INNOVATIONS #6), falling back to the module-level fusion
+    off ``graph.modules``. ``None`` when importance scoring did not run. Shared by
+    ``GRAPH.md`` and the CLI ``Importance:`` line so the ranking is single-sourced.
     """
-    importance = _fused_importance(graph.modules)
-    if not importance:
-        return None
-    ranked = sorted(importance.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    fi = graph.meta.file_importance if graph.meta else None
+    if fi:
+        ranked = [(f.path, f.fused) for f in fi[:top]]  # already sorted load-bearing first
+    else:
+        importance = _fused_importance(graph.modules)
+        if not importance:
+            return None
+        ranked = sorted(importance.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
     named = ", ".join(f"{p} ({s:.2f})" for p, s in ranked)
     return f"most load-bearing: {named}"
 
@@ -284,6 +289,25 @@ def render_markdown(graph: CodebaseGraph) -> str:
                 lines.append(
                     f"| {cell} | `{mod.path}` | {mod.name} | {mod.description} |"
                 )
+        lines.append("")
+
+    # File importance — on directory-granular repos the Modules table above is
+    # packages, so file-level load-bearing ranking (Jev, INNOVATIONS #6) gets its
+    # own section. Absent entirely when meta.file_importance is None (the common,
+    # file-granular case), so no repo without it sees any change here.
+    fi = graph.meta.file_importance if graph.meta else None
+    if fi:
+        lines.append("## File Importance\n")
+        lines.append(
+            "Most load-bearing files (Jev semantic role × structural degree), "
+            "since modules above are directory-level.\n"
+        )
+        lines.append("| Importance | File | Role | Degree |")
+        lines.append("|-----------:|------|-----:|-------:|")
+        for f in fi[:40]:
+            lines.append(
+                f"| {f.fused:.2f} | `{f.path}` | {f.role:.2f} | {f.degree} |"
+            )
         lines.append("")
 
     # Data flow
