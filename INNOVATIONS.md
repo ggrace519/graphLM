@@ -491,6 +491,53 @@ honest limitation into a self-aware feature.
 **First step.** Compute mean role-confidence + role/degree correlation per repo across
 the 4 experiment graphs; see if slate is separable from the apps by a simple rule.
 
+### 6. Score `file_summaries`, not `modules` — the file-granularity fix (HIGHEST LEVERAGE)
+**Category:** architecture | performance
+**Impact 5 · Novelty 3 · Effort 2 · Fit 5**
+**Supersedes #173. Do this before / instead of the directory-aware variants.**
+
+**The idea.** Both Jev consumers — `score_importance` and `semantic_find` — key off
+`graph.modules`. Two pre-registered evaluations this session found the *same* failure
+mode: both features win at file granularity and degrade at directory granularity. The
+root cause turned out to be one line in the pass-2 prompt — *"modules: … for each
+significant module **or component**"* — so on a large repo the LLM emits ~16 coarse
+**package** modules (`src/argus/agents`) instead of files. But the file-level data
+**already exists in the same graph**: `file_summaries` is file-level on *every* repo
+measured (argus: 16 directory modules vs **129 file-level summaries**; slate 6 vs 43;
+small repos already 1:1). The fix is not to change what the LLM emits (that would churn
+`modules→path`, a diff identity key, ADR-002 — every large-repo map would show 16
+removed / 129 added on the next run). The fix is to **score the file-level field that's
+already there.**
+
+**Inspired by.** Original — derived from the granularity split both evaluations found,
+and confirmed by inspecting `file_summaries` vs `modules` across the 4 eval graphs.
+
+**MEASURED, not hypothetical.** Re-ran the argus semantic-search eval (the 8 blind
+queries) scoring `file_summaries` instead of `modules`: **top-1 went 75% → 100%** —
+argus flipped from semantic search's *worst* repo (−12 vs token find) to a perfect
+score, now returning the exact right file (`agents/pov.py`, `core/safety/kernel.py`)
+instead of a coarse directory. Recomputed pooled: semantic ≈ **96% vs find 79% = +17
+pts**, which *clears* the +10 bar the feature missed (+8) at module granularity.
+
+**Implementation sketch.** Two consumers, decided per feature:
+- **`semantic_find`** — switch candidates from `graph.modules` to `graph.file_summaries`
+  outright (path + summary text). Return file-level hits. Clean win, no other field
+  affected. (This is the real form of #173.)
+- **`score_importance`** — subtler: it renders into a Modules table the LLM populated
+  with directories. Options: (a) when `modules` is directory-granular, score
+  `file_summaries` and render a file-level importance section; (b) keep module-level
+  role but resolve degree per file (already done, #170). Build-time decision — measure
+  whether file-level role improves the importance τ-b on argus the way it did search.
+- Neither touches `modules` itself, so the diff identity contract is untouched.
+
+**Effort.** ~1 day for search (measured, straightforward); +~half a day to decide the
+importance rendering. Risk: cost — argus has 129 summaries vs 16 modules, so ~9 batched
+Jev calls/query instead of 2 on the search hot path; the top-k output stays small, and
+a per-(query, mtime) cache (noted in #1) absorbs repeats.
+
+**First step.** Land the `semantic_find` → `file_summaries` switch (the measured win)
+and close #173 with it; evaluate the importance half separately.
+
 ## Killed ideas (and why)
 - **Reframe importance as pairwise reranking.** The rerank cookbook's 5%→18% lift is
   a *retrieval* result (shortlist of candidates, relevance unknown); importance ranks
@@ -506,12 +553,16 @@ the 4 experiment graphs; see if slate is separable from the apps by a simple rul
   perfect oracle (AST edges); a probabilistic judgment would be strictly worse.
 
 ## Suggested order of attack
-Build **#1 (semantic `find`)** first — it's the flagship, hits the agent hot path, and
-is the one genuinely new integration shape (query-time Jev). It shares nothing with the
-generation path, so it can land independently. Then **#3 (confidence gating)** as a
-half-day quick win that hardens the *shipped* importance feature against its own
-measured weakness. **#2 (verify prose fields)** is the highest-certainty value and the
-honest completion of the evidence story — do it once #1 proves the query-time pattern.
-**#4 (rename diff)** is gated on Greg approving the ADR-002 supersession — ADR first,
-code second. All of these assume `feat/module-importance` has merged (the Jev surface
-lives there); branch prototypes from it, not `develop`, until it does.
+**Status (2026-09-22):** #1 (semantic `find`) is BUILT + MERGED (#172); importance +
+its #170 fix merged (#171). Two pre-registered evaluations ran; both found the
+file-vs-directory granularity split that #6 fixes.
+
+Do **#6 (score `file_summaries`) FIRST** — it's the highest leverage by far: measured
+to flip argus semantic search 75%→100% and take the pooled result past the +10 bar it
+missed, and it fixes the same granularity weakness in *both* Jev features at once, by
+scoring data that already exists (no diff-key churn, no prompt surgery). It absorbs #173.
+Then **#2 (verify prose fields)** — highest-certainty value, honest completion of the
+evidence story. **#3 (confidence gating)** is a half-day quick win hardening importance.
+**#4 (rename diff)** stays gated on Greg approving the ADR-002 supersession — ADR first,
+code second. **#5** is a small ops nicety, last. The Jev surface now lives on `develop`;
+branch prototypes from there.
