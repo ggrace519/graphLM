@@ -368,3 +368,53 @@ class TestLoadMap:
         (tmp_path / "GRAPH.json").write_text("{not json", encoding="utf-8")
         with pytest.raises(query.MapUnavailable, match="could not be read"):
             query.load_map(tmp_path / "GRAPH.json")
+
+
+class _RelAns:
+    def __init__(self, noul): self.noul = noul
+
+
+class _RelResp:
+    def __init__(self, nouls): self.nouls = nouls
+
+
+class _RelClient:
+    """Fake Jev client: returns a relevance per question from `by_key`."""
+    def __init__(self, by_key):
+        self.by_key = by_key
+        self.calls = 0
+
+    def system_one(self, *, state, questions, timeout=None):
+        self.calls += 1
+        return _RelResp({k: _RelAns(self.by_key.get(k, 0.1)) for k in questions})
+
+
+class TestSemanticFind:
+    def test_ranks_by_relevance(self, index):
+        # c0..cN follow module order in the graph fixture.
+        n = len(index.graph.modules)
+        assert n >= 2
+        # make the LAST module most relevant
+        by_key = {f"c{n-1}": 0.97, "c0": 0.05}
+        res = query.semantic_find(index, "some question", api_key="k", client=_RelClient(by_key))
+        assert res["available"] is True
+        assert res["hits"], "expected hits"
+        assert res["hits"][0]["relevance"] == 0.97
+        # ranked descending
+        rels = [h["relevance"] for h in res["hits"]]
+        assert rels == sorted(rels, reverse=True)
+
+    def test_no_key_signals_unavailable(self, index):
+        res = query.semantic_find(index, "q", api_key=None, client=_RelClient({}))
+        assert res["available"] is False and res["hits"] == []
+
+    def test_empty_query_is_available_empty(self, index):
+        res = query.semantic_find(index, "   ", api_key="k", client=_RelClient({}))
+        assert res["available"] is True and res["hits"] == []
+
+    def test_client_error_signals_unavailable(self, index):
+        class _Boom:
+            def system_one(self, **k):
+                raise RuntimeError("jev down")
+        res = query.semantic_find(index, "q", api_key="k", client=_Boom())
+        assert res["available"] is False  # caller falls back to find

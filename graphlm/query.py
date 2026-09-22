@@ -412,6 +412,71 @@ def find(index: MapIndex, query: str, limit: int = 20) -> dict[str, Any]:
     return {"query": query, "hits": [h[2] for h in hits[:limit]], "total": len(hits)}
 
 
+def semantic_find(
+    index: MapIndex,
+    query: str,
+    *,
+    api_key: str | None,
+    limit: int = 10,
+    client: Any = None,
+) -> dict[str, Any]:
+    """Rank modules by how well they answer a natural-language question (TypeSafe/Jev).
+
+    ``find`` (above) matches tokens; this asks the *meaning* of the query. A Jev
+    Noul scores each module's description + summary against the question — "is this
+    the module you'd go to, to do or understand <query>?" — and returns the modules
+    ranked by that probability. This is the one place graphlm calls Jev at *query*
+    time rather than graph-generation time; it is the LLM-backed counterpart to the
+    zero-LLM ``find``, kept as a **separate** function (and MCP tool) so the eight
+    deterministic tools stay LLM-free.
+
+    Best-effort and gated exactly like the generation-time scorers: returns
+    ``{"available": False, ...}`` — never raises — when there is no ``api_key``, no
+    ``typesafe-sdk`` extra, or the call fails, so the caller can fall back to
+    ``find``. ``client`` is injectable so the query layer stays testable with no
+    network. The Jev call itself lives in ``evidence`` (the only module that imports
+    the SDK); this function only assembles candidates and orders the result.
+    """
+    query = (query or "").strip()
+    modules = index.graph.modules
+    if not query or not modules:
+        return {"query": query, "available": True, "hits": [], "total": 0}
+
+    candidates = [
+        (_norm(m.path), m.name, m.description, _summary_for(index, m.path))
+        for m in modules
+    ]
+    from graphlm import evidence as _evidence
+
+    scores = _evidence.score_relevance(candidates, query, api_key=api_key, client=client)
+    if scores is None:
+        # Jev unavailable — signal the caller to fall back to token `find`.
+        return {"query": query, "available": False, "hits": [], "total": 0}
+
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    by_path = {_norm(m.path): m for m in modules}
+    hits = [
+        {
+            "kind": "module",
+            "path": p,
+            "name": by_path[p].name if p in by_path else p,
+            "relevance": round(prob, 3),
+            "description": by_path[p].description if p in by_path else "",
+        }
+        for p, prob in ranked[: max(0, min(limit, MAX_LIMIT))]
+    ]
+    return {"query": query, "available": True, "hits": hits, "total": len(scores)}
+
+
+def _summary_for(index: MapIndex, path: str) -> str:
+    """The file_summary text for a path, or '' — extra evidence for relevance."""
+    target = _norm(path)
+    for fs in index.graph.file_summaries:
+        if _norm(fs.path) == target:
+            return fs.summary
+    return ""
+
+
 def cycles(index: MapIndex) -> dict[str, Any]:
     """Import cycles with risk scores, highest risk first."""
     ordered = sorted(

@@ -297,6 +297,80 @@ def score_importance(
 
 
 
+_RELEVANCE_TRUE = (
+    "This is a module you would open to do or understand what the QUERY asks about."
+)
+_RELEVANCE_FALSE = "This module is unrelated to the QUERY."
+
+
+def score_relevance(
+    candidates: Sequence[tuple[str, str, str, str]],
+    query: str,
+    *,
+    api_key: str | None,
+    client: Any | None = None,
+    timeout: float = 60.0,
+) -> dict[str, float] | None:
+    """Score each module's relevance to a natural-language query (a Jev Noul).
+
+    ``candidates`` is ``(path, name, description, summary)`` per module. Returns
+    ``{path: relevance_probability}`` (0-1), or ``None`` when scoring is off or
+    fails — no ``api_key``, no ``typesafe-sdk`` extra, or any SDK error. This
+    powers ``query.semantic_find`` (the ``--serve`` semantic search); like the
+    generation-time scorers it sends only descriptions/summaries + the query,
+    never file source, so there is no redaction gate. Never raises.
+    """
+    if not api_key or not query or not candidates:
+        return None
+    try:
+        return _run_relevance(candidates, query, api_key=api_key, client=client, timeout=timeout)
+    except Exception as e:  # SDK missing, network, auth, malformed — all None
+        logging.debug("Relevance scoring unavailable, skipping: %s", e)
+        return None
+
+
+def _run_relevance(
+    candidates: Sequence[tuple[str, str, str, str]],
+    query: str,
+    *,
+    api_key: str,
+    client: Any | None,
+    timeout: float,
+) -> dict[str, float]:
+    """Send a relevance Noul per module against the query, batched. {path: prob}."""
+    from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient  # local: optional extra
+
+    criteria = NoulCriteria(true=_RELEVANCE_TRUE, false=_RELEVANCE_FALSE)
+
+    def _question(name: str, desc: str, summary: str) -> Any:
+        instr: dict[str, Any] = {"QUERY": query, "MODULE": name, "DESCRIPTION": desc}
+        if summary:
+            instr["SUMMARY"] = summary
+        return Noul(instructions=instr, criteria=criteria)
+
+    owns_client = client is None
+    client = client if client is not None else TypeSafeClient(api_key=api_key)
+    out: dict[str, float] = {}
+    try:
+        for start in range(0, len(candidates), _BATCH):
+            chunk = candidates[start : start + _BATCH]
+            questions = {
+                f"c{start + i}": _question(name, desc, summ)
+                for i, (_p, name, desc, summ) in enumerate(chunk)
+            }
+            resp = client.system_one(
+                state={"note": "Score each MODULE's relevance to the QUERY."},
+                questions=questions,
+                timeout=timeout,
+            )
+            for i, (path, _n, _d, _s) in enumerate(chunk):
+                out[path] = float(resp.nouls[f"c{start + i}"].noul)
+    finally:
+        if owns_client:
+            _close(client)
+    return out
+
+
 def _run_scores(
     items: list[tuple[str, str, int, str | None]],
     *,

@@ -83,7 +83,7 @@ class TestServer:
     def test_registers_every_map_tool(self, tmp_path, map_dir):
         server = mcp_server.build_server(tmp_path, map_dir / "GRAPH.json")
         assert _tool_names(server) == [
-            "overview", "module", "neighbors", "dependents", "find",
+            "overview", "module", "neighbors", "dependents", "find", "search",
             "cycles", "entry_points", "staleness",
         ]
 
@@ -171,3 +171,14 @@ class TestMapCache:
         cache = mcp_server.MapCache(tmp_path / "GRAPH.json")
         with pytest.raises(mcp_server.MapUnavailable):
             cache.index()
+
+
+class TestSearchTool:
+    def test_search_falls_back_to_find_without_key(self, tmp_path, map_dir, monkeypatch):
+        # No TYPESAFE_API_KEY → semantic_find is unavailable → the tool falls back
+        # to token `find` and says so, rather than erroring.
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        server = mcp_server.build_server(tmp_path, map_dir / "GRAPH.json")
+        res = _call(server, "search", {"question": "core"})
+        assert "note" in res and "fell back" in res["note"]
+        assert "hits" in res  # still returns useful results
