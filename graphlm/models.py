@@ -210,8 +210,10 @@ class EvidenceSupport(BaseModel):
     scored" must never read as "scored zero".
 
     ``scored`` counts summaries actually sent to Jev; ``skipped`` counts summaries
-    whose file was not in the pass-2 set (written from the tree alone — scoring
-    them against content the model never received would manufacture a pass).
+    not scored because there was no evidence to compare against — the file was not
+    in the pass-2 set (written from the tree alone), or its source is too thin to
+    verify a claim (a near-empty ``__init__`` or bare entry point defines nothing,
+    so the support judgment has no signal and would score a correct summary ~0.2).
     """
 
     mean: Optional[float] = Field(
@@ -220,7 +222,8 @@ class EvidenceSupport(BaseModel):
     )
     scored: int = Field(description="Summaries scored (had a pass-2 fragment).")
     skipped: int = Field(
-        description="Summaries skipped (no pass-2 fragment — not scored)."
+        description="Summaries skipped — no pass-2 fragment, or source too thin "
+        "to verify a claim against (near-empty file). Not scored."
     )
     low: list[FileScore] = Field(
         default_factory=list,
