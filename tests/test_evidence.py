@@ -337,3 +337,27 @@ class TestScoreImportance:
             summaries_by_path={"a.py": "the real summary"},
         )
         assert res == {"a.py": 2.0}
+
+
+class TestDegreeForModule:
+    """degree_for_module resolves file OR directory modules (#170)."""
+
+    def test_exact_file_match(self):
+        fd = {"a/b.py": 5, "a/c.py": 2}
+        assert evidence.degree_for_module("a/b.py", fd) == 5
+
+    def test_directory_sums_contained_files(self):
+        fd = {"pkg/x.py": 3, "pkg/y.py": 4, "other/z.py": 9}
+        assert evidence.degree_for_module("pkg", fd) == 7
+
+    def test_directory_no_match_is_zero(self):
+        assert evidence.degree_for_module("nope", {"a/b.py": 5}) == 0
+
+    def test_prefix_guard_no_sibling_bleed(self):
+        # 'agents' must not absorb 'agents_foo/'.
+        fd = {"a/agents_foo/x.py": 2, "a/agents/y.py": 3}
+        assert evidence.degree_for_module("a/agents", fd) == 3
+
+    def test_trailing_slash_normalised(self):
+        fd = {"pkg/x.py": 3}
+        assert evidence.degree_for_module("pkg/", fd) == 3

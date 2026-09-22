@@ -241,6 +241,22 @@ def file_degree(edges: Iterable[Any]) -> dict[str, int]:
     return dict(degree)
 
 
+def degree_for_module(module_path: str, file_degree_map: dict[str, int]) -> int:
+    """Resolve a module's structural degree, whether it names a file or a directory.
+
+    The LLM describes modules at file granularity on small repos (``a/b.py``) and
+    at directory/package granularity on large ones (``a/b``). ``file_degree`` is
+    keyed by file, so a directory module would miss and read 0 (#170). Exact file
+    match first; otherwise sum the degree of every scanned file *under* that
+    directory, so a package is credited with its members' import activity.
+    """
+    p = _norm(module_path)
+    if p in file_degree_map:
+        return file_degree_map[p]
+    prefix = p.rstrip("/") + "/"
+    return sum(d for path, d in file_degree_map.items() if path.startswith(prefix))
+
+
 def score_importance(
     modules: Sequence[Any],
     edges: Iterable[Any],
@@ -278,6 +294,7 @@ def score_importance(
     except Exception as e:  # SDK missing, network, auth, malformed — all None
         logging.debug("Importance scoring unavailable, skipping: %s", e)
         return None
+
 
 
 def _run_scores(

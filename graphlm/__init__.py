@@ -490,7 +490,9 @@ def generate_graph(
                     p = _evidence._norm(mod.path)
                     if p in roles:
                         mod.role = roles[p]
-                        mod.degree = degree.get(p, 0)
+                        # Resolve degree for a file OR a directory module (#170):
+                        # a package module is credited with its members' degree.
+                        mod.degree = _evidence.degree_for_module(mod.path, degree)
         except Exception as e:  # never let telemetry cost the paid graph
             logging.warning("Importance scoring failed, continuing without it: %s", e)
 
