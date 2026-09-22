@@ -4,6 +4,70 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-013 — First-run setup wizard; TypeSafe is an opt-in extra
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`graphlm/setup.py`, `--setup` + auto-first-run on the CLI)
+
+### Context
+
+graphlm's capabilities are gated behind optional extras (`[js]`…`[php]`, `[mcp]`)
+so the base install stays lean and vendor-neutral (bring-your-own OpenAI-compatible
+endpoint). The cost is discoverability: a user never learns their JS/TS files
+produce zero parser edges because the `[js]` wheel isn't installed. Adding
+TypeSafe/Jev prose scoring sharpened the tension — its SDK talks to a *commercial
+third-party API* and needs a key, so it must never be a base dependency forced on
+every `pip install graphlm`. An earlier draft that auto-enabled it on key presence
+was rejected: it designed around one developer's local machine, not the shipped
+product.
+
+### Decisions
+
+1. **A first-run setup wizard** (`graphlm --setup`, and an automatic prompt on the
+   first interactive analysis) lists the not-yet-installed optional packs and
+   installs the chosen ones. Optional packs stay optional — **nothing here becomes
+   a base dependency**.
+2. **Reuse the upgrade installer machinery, don't reinvent it.** `setup.py` imports
+   `upgrade.detect_installer` / `installed_extras` / `_abs_no_follow` / `_spec` /
+   `_collapse_extras`. The install spec is the **union** of already-installed +
+   selected extras (`uv tool install --force` / `uv pip install --python <exe>` /
+   `pipx install --force` / `python -m pip install`), so no existing pack is dropped.
+   Same #71 rule: never `Path.resolve()` the interpreter. A source checkout is
+   refused (→ `uv sync --extra`).
+3. **Auto-trigger is interactive-only and fires once.** Marker absent AND stdin a
+   TTY → run the wizard; non-TTY (piped/CI) → print a one-line `--setup` hint and
+   proceed, never blocking. A `~/.config/graphlm/.setup-done` marker (XDG-aware,
+   symlink-refusing #33) records completion so it does not re-prompt.
+   **A piped first run consumes the one-shot**: the non-TTY path writes the marker
+   too, so a CI/piped first invocation sees the hint once and never again on that
+   machine. This is deliberate — re-emitting a setup hint on every automated run
+   would be noise exactly where it is least wanted; a user who wants the wizard runs
+   `graphlm --setup`. If the packs were **actually installed** in an auto-trigger run
+   (only possible interactively), graphlm **exits** with a "re-run" message instead of
+   continuing: the forced reinstall rebuilt the venv this process runs from, so the
+   new packs are not importable in-process and continuing would silently omit the
+   edges the user just asked for.
+4. **`run_setup` never raises past its boundary** — installer failure → manual
+   command, detection crash → fall back to `pip`. A first-run helper must not block
+   the actual analysis.
+5. **TypeSafe ships as the opt-in extra `graphlm[typesafe]`**, NOT a core dependency
+   and NOT part of `graphlm[all]` (which is languages only, like `mcp` is separate).
+   The wizard offers it and, on selection, instructs adding `TYPESAFE_API_KEY` to
+   `~/.config/graphlm/.env` (the only config `.env` graphlm loads — ADR-009). Nothing
+   imports the SDK yet; it lands ahead of the prose evidence-scoring feature.
+
+### Consequences
+
+- A random `pip install graphlm` gains no new paid dependency and no vendor coupling;
+  the base tool stays endpoint-neutral.
+- `_union_extras` must re-append `typesafe` after `_collapse_extras` (that helper only
+  knows languages/`all`/`mcp` and would silently drop an unknown extra).
+- The wizard is fully injectable (`runner`/`prompt`/`which`/`home`), so
+  `tests/test_setup.py` covers every installer branch with no network; a dev checkout
+  detects as `source`, so CI never runs a real install.
+
+---
+
 ## ADR-012 — `graphlm --upgrade` is a flag, not a subcommand
 
 **Date:** 2026-09-04

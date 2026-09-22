@@ -7,6 +7,11 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **First-run setup wizard (`graphlm --setup`, and an automatic first-use prompt).** graphlm's optional capabilities — the language-grammar packs, the `mcp` server, and the new `typesafe` prose-scoring SDK — were undiscoverable: a user never learned their JS/TS files produced zero edges because the `[js]` wheel wasn't installed. The wizard lists the not-yet-installed packs, installs the chosen ones with the **same installer that put graphlm on PATH** (uv tool / uv pip / pipx / pip, keeping any packs already present), and — for TypeSafe — tells you to add `TYPESAFE_API_KEY` to `~/.config/graphlm/.env`. It runs automatically the first time graphlm is used interactively (a `~/.config/graphlm/.setup-done` marker stops it firing again); a non-interactive/CI run prints a one-line hint and proceeds without blocking, and a source checkout is refused. No optional pack becomes a base dependency.
+- **New optional extra `graphlm[typesafe]`** (the TypeSafe/Jev SDK), offered by the setup wizard. It is opt-in — never a base dependency and not part of `graphlm[all]` — because it calls a commercial third-party API and needs a key. Nothing imports it yet; it lands ahead of the prose evidence-scoring feature.
+
 ### Fixed
 
 - **Empty-user connection URIs (`redis://:secret@host`) and escaped quotes inside quoted passwords are redacted.** The URI regex required a username; the quoted-password matcher stopped at the next raw `"`.
