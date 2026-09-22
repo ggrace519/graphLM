@@ -337,6 +337,13 @@ def main(
         "TypeSafe/Jev (meta.evidence_support). Off anyway without a "
         "TYPESAFE_API_KEY, the graphlm[typesafe] extra, or under --no-redact.",
     ),
+    no_importance: bool = typer.Option(
+        False,
+        "--no-importance",
+        help="Do not score module architectural importance with TypeSafe/Jev "
+        "(the Importance column in GRAPH.md). Off anyway without a "
+        "TYPESAFE_API_KEY or the graphlm[typesafe] extra.",
+    ),
     no_show_cycles: bool = typer.Option(
         False,
         "--no-show-cycles",
@@ -438,6 +445,7 @@ def main(
             include_html=not no_html,
             include_diff=not no_diff,
             include_evidence=not no_evidence,
+            include_importance=not no_importance,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -513,6 +521,7 @@ def main(
         from graphlm.render import (
             evidence_summary,
             faithfulness_summary,
+            importance_summary,
             usage_summary,
         )
 
@@ -525,6 +534,9 @@ def main(
         evidence_line = evidence_summary(result.graph.meta)
         if evidence_line:
             typer.echo(f"Evidence: {evidence_line}", err=True)
+        importance_line = importance_summary(result.graph)
+        if importance_line:
+            typer.echo(f"Importance: {importance_line}", err=True)
     typer.echo("Done.", err=True)
 
 

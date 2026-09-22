@@ -891,3 +891,122 @@ class TestEvidenceSummary:
         es = EvidenceSupport(mean=0.9, scored=5, skipped=0, low=[])
         line = _render_telemetry(self._meta(es))
         assert line is not None and "evidence support" in line
+
+
+class TestModuleImportanceRender:
+    """The Modules table: fused importance when scored, byte-identical fallback."""
+
+    def _modules_section(self, md: str) -> str:
+        return md.split("## Modules")[1].split("\n##")[0].strip()
+
+    def test_fallback_byte_identical_when_unscored(self):
+        # No module has a role → the Modules section must be exactly the old
+        # 3-column, path-sorted table. This golden string is the pre-feature output.
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(directory_tree="t/\n", modules=[
+            ModuleDescription(path="b.py", name="B", description="second"),
+            ModuleDescription(path="a.py", name="A", description="first"),
+        ])
+        section = self._modules_section(render_markdown(g))
+        assert section == (
+            "| Path | Name | Description |\n"
+            "|------|------|-------------|\n"
+            "| `a.py` | A | first |\n"
+            "| `b.py` | B | second |"
+        )
+
+    def test_scored_adds_column_and_sorts_load_bearing_first(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(directory_tree="t/\n", modules=[
+            ModuleDescription(path="settings.py", name="S", description="constants", role=0.1, degree=3),
+            ModuleDescription(path="app.py", name="App", description="orchestrator", role=2.9, degree=2),
+            ModuleDescription(path="board.py", name="Board", description="core", role=2.0, degree=5),
+        ])
+        section = self._modules_section(render_markdown(g))
+        assert section.startswith("| Importance | Path | Name | Description |")
+        # board (core, degree 5) outranks app (orchestrator, degree 2) via fusion.
+        rows = [ln for ln in section.splitlines() if ln.startswith("| ") and "`" in ln]
+        order = [ln.split("`")[1] for ln in rows]
+        assert order == ["board.py", "app.py", "settings.py"]
+
+    def test_fusion_none_when_no_roles(self):
+        from graphlm.models import ModuleDescription
+        from graphlm.render import _fused_importance
+        mods = [ModuleDescription(path="a.py", name="a", description="x")]
+        assert _fused_importance(mods) is None
+
+    def test_fusion_role_and_degree_combine(self):
+        from graphlm.models import ModuleDescription
+        from graphlm.render import _fused_importance, _ROLE_WEIGHT, _DEGREE_WEIGHT
+        mods = [
+            ModuleDescription(path="hi.py", name="h", description="x", role=3.0, degree=10),
+            ModuleDescription(path="lo.py", name="l", description="x", role=0.0, degree=0),
+        ]
+        f = _fused_importance(mods)
+        # top: role 3/3=1, degree rank 1 → ROLE_W*1 + DEGREE_W*1 = 1.0
+        assert f["hi.py"] == _ROLE_WEIGHT + _DEGREE_WEIGHT
+        assert f["lo.py"] == 0.0
+
+
+class TestModuleImportanceBaseline:
+    """role/degree round-trip through the diff baseline reader (additive-optional)."""
+
+    def test_old_graph_json_without_fields_loads_normal(self, tmp_path):
+        # A GRAPH.json whose modules lack role/degree must still parse and diff
+        # NORMAL (the fields default None on a diffed model, like meta did).
+        import json
+        from graphlm.diff import load_baseline, BaselineState
+        old = {
+            "directory_tree": "t/\n", "import_edges": [],
+            "modules": [{"path": "a.py", "name": "A", "description": "x"}],
+            "data_flow": [], "test_organization": [], "architecture_notes": [],
+            "file_summaries": [], "entry_points": [], "quick_reference": [],
+        }
+        p = tmp_path / "GRAPH.json"
+        p.write_text(json.dumps(old))
+        graph, state = load_baseline(p)
+        assert state == BaselineState.NORMAL
+        assert graph.modules[0].role is None
+        assert graph.modules[0].degree is None
+
+
+class TestImportanceSummary:
+    def test_none_when_unscored(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="a.py", name="a", description="x")])
+        assert importance_summary(g) is None
+
+    def test_names_top_load_bearing(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="app.py", name="a", description="x", role=2.9, degree=2),
+            ModuleDescription(path="leaf.py", name="l", description="x", role=0.1, degree=1)])
+        s = importance_summary(g)
+        assert "app.py" in s and s.index("app.py") < s.index("leaf.py")
+
+
+class TestImportanceMixedScoring:
+    """Partial Jev response: some modules scored, some not (reachable when Jev
+    omits a module from its answer). Scored branch renders, unscored get an
+    em-dash and sort last."""
+
+    def test_mixed_scored_and_unscored(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown, _fused_importance
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="unscored.py", name="u", description="y"),
+            ModuleDescription(path="scored.py", name="s", description="x", role=2.5, degree=3),
+        ])
+        # fusion covers only the scored module
+        assert set(_fused_importance(g.modules)) == {"scored.py"}
+        section = render_markdown(g).split("## Modules")[1].split("\n##")[0]
+        assert "| Importance |" in section  # scored branch taken
+        rows = [ln for ln in section.splitlines() if "`" in ln]
+        order = [ln.split("`")[1] for ln in rows]
+        assert order == ["scored.py", "unscored.py"]  # unscored sorts last
+        assert "| — | `unscored.py`" in section  # em-dash cell

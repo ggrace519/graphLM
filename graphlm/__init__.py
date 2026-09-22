@@ -141,6 +141,7 @@ def generate_graph(
     include_html: bool = True,
     include_diff: bool = True,
     include_evidence: bool = True,
+    include_importance: bool = True,
     skeleton: bool = True,
 ) -> GraphResult:
     """Generate a codebase graph for a project directory.
@@ -201,6 +202,12 @@ def generate_graph(
             default, but a no-op (None) unless redaction is on, a TYPESAFE_API_KEY
             is set, and the graphlm[typesafe] extra is installed. Never on a dry
             run (no summaries). Pass False / --no-evidence to skip.
+        include_importance: Whether to score each module's semantic architectural
+            role (TypeSafe/Jev) and fill ModuleDescription.role/.degree. On by
+            default, a no-op (both None) unless a TYPESAFE_API_KEY is set and the
+            graphlm[typesafe] extra is installed. NOT gated on redaction (it sends
+            descriptions + a degree count, never source). Pass False /
+            --no-importance to skip.
 
     Returns:
         GraphResult with the graph and output metadata.
@@ -456,6 +463,36 @@ def generate_graph(
             )
         except Exception as e:  # never let telemetry cost the paid graph
             logging.warning("Evidence scoring failed, continuing without it: %s", e)
+
+    # Module importance: fill each module's raw `role` (Jev semantic score) and
+    # `degree` (structural, from AST edges). Kept as two components — the renderer
+    # fuses them for the display order — so the weighting can change without
+    # rewriting GRAPH.json. Same best-effort discipline as evidence, but NOT gated
+    # on redaction (it sends descriptions + a degree count, never source). Off —
+    # both fields None, never fake zero — under --no-importance, no key, or no SDK.
+    if include_importance:
+        import os
+
+        from graphlm import evidence as _evidence
+
+        try:
+            roles = _evidence.score_importance(
+                graph.modules,
+                deterministic_edges or [],
+                api_key=os.environ.get("TYPESAFE_API_KEY"),
+                summaries_by_path={
+                    _evidence._norm(s.path): s.summary for s in graph.file_summaries
+                },
+            )
+            if roles is not None:
+                degree = _evidence.file_degree(deterministic_edges or [])
+                for mod in graph.modules:
+                    p = _evidence._norm(mod.path)
+                    if p in roles:
+                        mod.role = roles[p]
+                        mod.degree = degree.get(p, 0)
+        except Exception as e:  # never let telemetry cost the paid graph
+            logging.warning("Importance scoring failed, continuing without it: %s", e)
 
     # Write outputs if output_dir specified
     if output_dir is not None:

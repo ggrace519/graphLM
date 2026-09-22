@@ -22,12 +22,30 @@ class ImportEdge(BaseModel):
 
 
 class ModuleDescription(BaseModel):
-    """A single module/component in the codebase."""
+    """A single module/component in the codebase.
+
+    ``role`` and ``degree`` are the two raw components of module importance,
+    filled locally (never LLM-emitted, like ``directory_tree``). ``role`` is the
+    TypeSafe/Jev semantic role score (0 = leaf … 3 = orchestrator); ``degree`` is
+    the deterministic in+out import degree (parser ground truth). They are kept
+    separate — not pre-fused — so a reader can audit each signal and the display
+    weighting can change without rewriting ``GRAPH.json``. Both ``None`` when
+    importance scoring did not run (TypeSafe off / ``--no-importance``); "not
+    scored" must never read as zero.
+    """
 
     path: str = Field(description="File or directory path relative to project root")
     name: str = Field(description="Human-readable module name")
     description: str = Field(
         description="One-line description of what the module does"
+    )
+    role: Optional[float] = Field(
+        default=None,
+        description="Jev semantic role score, 0 (leaf) to 3 (orchestrator), or null.",
+    )
+    degree: Optional[int] = Field(
+        default=None,
+        description="In+out import degree from AST edges (structural centrality), or null.",
     )
 
 

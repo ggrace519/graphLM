@@ -4,6 +4,55 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-015 — Module importance: two raw components, fused at render time
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`evidence.score_importance`, `ModuleDescription.role`/`degree`)
+
+### Context
+
+The map lists modules but not which are load-bearing. Structural import degree
+(already computed for the Mermaid layout) conflates "imported a lot" (a constants
+leaf) with "architecturally central" (the orchestrator). A spike showed TypeSafe/Jev
+supplies the missing semantic role: a Score over a leaf→orchestrator ladder ranked
+the tetris fixture perfectly, and on a live run the two signals *disagreed usefully* —
+`settings.py` was degree-#1 (imported everywhere) but Jev-role-last (a leaf), while a
+low-degree entry point ranked high. This is the half of the "pass 2 to Jev" idea that
+worked; the refine feedback loop (a second generative pass) is a separate, still-open
+question, not part of this.
+
+### Decisions
+
+1. **Two raw components on `ModuleDescription`, not a pre-fused float.** `role`
+   (Jev, 0–3) and `degree` (structural) are stored separately in `GRAPH.json`. The
+   fusion (`0.6·role + 0.4·degree_norm`, a named renderer constant) happens in
+   `render.py` at display time — so the weighting can be retuned without rewriting
+   every module's value, and a reader can audit each signal. Mirrors how
+   `Faithfulness`/`EvidenceSupport` expose raw counts, not just a derived ratio.
+   Additive-optional → schema unchanged; an old `GRAPH.json` diffs `NORMAL`.
+2. **No `--no-redact` gate** (unlike `evidence.score`). Importance sends module
+   *descriptions* + an integer *degree*, never file source, so redaction is
+   irrelevant; gating on it would deny importance to `--no-redact` users for no
+   reason. Gated on key + `typesafe` extra + `--no-importance` only.
+3. **Best-effort, never costs the graph.** `score_importance` never raises (broad
+   `except → None`), and `generate_graph` wraps the fill in a second guard — a Jev
+   failure leaves `role`/`degree` `None`, never a fake zero, and the paid graph is
+   always returned. Filled locally after pass 2, never LLM-emitted (not in the
+   pass-2 instruction block).
+4. **Byte-identical fallback.** When importance is off (no module scored), the
+   `## Modules` table renders exactly as before (no column, path sort) — pinned by a
+   golden test, not just asserted.
+
+### Consequences
+
+- The rendered map's Modules section changes shape when Jev is on (an Importance
+  column, load-bearing-first) and is untouched when off.
+- The renderer-side fusion weight is uncalibrated beyond one fixture; keeping the
+  components raw means changing it later is a render change, not a data migration.
+- HTML node-sizing by importance is a deliberate follow-up, not in this change.
+
+---
+
 ## ADR-014 — Prose evidence-support scoring via TypeSafe/Jev
 
 **Date:** 2026-09-21
