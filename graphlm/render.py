@@ -93,16 +93,46 @@ def faithfulness_summary(meta: GraphMeta) -> str | None:
     )
 
 
+def evidence_summary(meta: GraphMeta) -> str | None:
+    """One terse clause on how well the LLM's summaries are backed by their source.
+
+    ``None`` when evidence scoring did not run (TypeSafe off, ``--no-redact``, a
+    dry run, or nothing to score). A low mean, or named low outliers, means the
+    prose claims more than the source the model saw supports — a trust weight,
+    not a hallucination verdict (a skeletonised fragment lowers it by design).
+    Shared by ``GRAPH.md`` and the CLI so the wording cannot drift.
+    """
+    e = meta.evidence_support
+    if e is None:
+        return None
+    mean = "n/a" if e.mean is None else f"{e.mean:.2f}"
+    text = (
+        f"summary evidence support: mean {mean} "
+        f"(n={e.scored} scored, {e.skipped} skipped)"
+    )
+    if e.low:
+        worst = ", ".join(f"{fs.path} {fs.score:.2f}" for fs in e.low[:3])
+        text += f"; weakest: {worst}"
+    return text
+
+
 def _render_telemetry(meta: GraphMeta) -> str | None:
     """Render the run-telemetry blockquote line under the directive, or None.
 
-    Both halves are optional (a dry run has neither; ``--no-ast`` has no
-    faithfulness; an endpoint may report no usage) — whichever is present is
-    shown, and the line is omitted entirely when neither is. Terse on purpose:
-    this is read by agents deciding how much to trust the LLM's edge table.
+    Each part is optional (a dry run has none; ``--no-ast`` has no faithfulness;
+    TypeSafe off has no evidence support; an endpoint may report no usage) —
+    whichever are present are shown, and the line is omitted entirely when none
+    is. Terse on purpose: this is read by agents deciding how much to trust the
+    LLM's edge table and prose.
     """
     parts = [
-        p for p in (usage_summary(meta), faithfulness_summary(meta)) if p is not None
+        p
+        for p in (
+            usage_summary(meta),
+            faithfulness_summary(meta),
+            evidence_summary(meta),
+        )
+        if p is not None
     ]
     if not parts:
         return None

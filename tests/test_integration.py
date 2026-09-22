@@ -860,3 +860,109 @@ class TestRunTelemetry:
         assert result.graph.meta.usage is None
         assert result.graph.meta.faithfulness is None
         assert "**Run telemetry.**" not in render_markdown_of(result.graph)
+
+
+class TestEvidenceIntegration:
+    """The evidence-support fill-site in generate_graph — the behaviors nothing
+    else catches (the wizard lesson: test the wiring, not just the module).
+
+    generate_graph calls graphlm.evidence.score after the paid pass-2. These
+    tests spy on that call to assert gating and resilience at the integration
+    boundary, without any TypeSafe network."""
+
+    def _summ_graph(self):
+        return _make_graph(
+            file_summaries=[
+                {"path": "app/main.py", "summary": "entry", "symbols": []},
+                {"path": "app/routes.py", "summary": "routes", "symbols": []},
+            ]
+        )
+
+    def _run(self, httpx_mock, tmp_path, **kwargs):
+        _mock_pass1_response(httpx_mock, CYCLIC_FILES)
+        _mock_pass2_response(httpx_mock, self._summ_graph())
+        return generate_graph(
+            CYCLIC,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            **kwargs,
+        )
+
+    def test_score_called_and_result_stamped(self, httpx_mock, tmp_path, monkeypatch):
+        from graphlm.models import EvidenceSupport, FileScore
+
+        seen = {}
+
+        def fake_score(summaries, pass2_files, *, redact_secrets, api_key):
+            seen["summaries"] = [s.path for s in summaries]
+            seen["redact"] = redact_secrets
+            return EvidenceSupport(
+                mean=0.8, scored=2, skipped=0,
+                low=[FileScore(path="app/routes.py", score=0.3)],
+            )
+
+        monkeypatch.setattr("graphlm.evidence.score", fake_score)
+        result = self._run(httpx_mock, tmp_path)
+        assert result.graph.meta.evidence_support is not None
+        assert result.graph.meta.evidence_support.mean == 0.8
+        assert seen["summaries"] == ["app/main.py", "app/routes.py"]
+        assert seen["redact"] is True  # redaction on by default
+        # Rendered into GRAPH.md telemetry line, including the low-outlier clause
+        # (the only link between a low score and what a reader sees).
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert "summary evidence support" in md
+        assert "weakest: app/routes.py 0.30" in md
+
+    def test_no_evidence_flag_skips_scoring(self, httpx_mock, tmp_path, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = self._run(httpx_mock, tmp_path, include_evidence=False)
+        assert called["n"] == 0
+        assert result.graph.meta.evidence_support is None
+
+    def test_no_redact_gates_off_in_scorer(self, httpx_mock, tmp_path, monkeypatch):
+        # With --no-redact, generate_graph still CALLS score, but score returns
+        # None because redact_secrets is False (the gate lives in the scorer).
+        seen = {}
+
+        def fake_score(summaries, pass2_files, *, redact_secrets, api_key):
+            seen["redact"] = redact_secrets
+            # Mirror the real gate: no scoring without redaction.
+            return None if not redact_secrets else object()
+
+        monkeypatch.setattr("graphlm.evidence.score", fake_score)
+        result = self._run(httpx_mock, tmp_path, redact_secrets=False)
+        assert seen["redact"] is False
+        assert result.graph.meta.evidence_support is None
+
+    def test_scorer_raising_does_not_discard_graph(self, httpx_mock, tmp_path, monkeypatch):
+        # The scorer runs after the paid pass-2. If it somehow raises, the graph
+        # must still be returned and written — the score is best-effort telemetry.
+        def boom(*a, **k):
+            raise RuntimeError("typesafe exploded")
+
+        monkeypatch.setattr("graphlm.evidence.score", boom)
+        # generate_graph must not propagate — the real score() never raises, but
+        # this guards the fill-site against a future scorer that does.
+        try:
+            result = self._run(httpx_mock, tmp_path)
+        except RuntimeError:
+            import pytest
+            pytest.fail("scorer exception discarded the paid graph")
+        assert isinstance(result.graph, CodebaseGraph)
+        assert (tmp_path / "GRAPH.json").exists()
+
+    def test_dry_run_never_scores(self, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = generate_graph(CYCLIC, dry_run=True)
+        assert called["n"] == 0
+        assert result.graph.meta.evidence_support is None
