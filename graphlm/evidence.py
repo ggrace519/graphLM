@@ -64,6 +64,28 @@ _FALSE = (
     "The stated role is wrong, or the CLAIM names symbols the SOURCE does not define."
 )
 
+# Module-importance role ladder for the Jev Score. An ordered list (index 0 =
+# least load-bearing); ``ScoreAnswer.score`` is the probability-weighted average
+# over the level indices, so a module lands on [0, 3]. Validated on the tetris
+# fixture: a constants module scored ~0.0, core game logic ~1.99, the entry point
+# ~2.99. Each level stands on its own (a Score rubric requirement).
+_ROLE_LADDER = [
+    "A leaf: pure constants, configuration, or type declarations, or a small "
+    "self-contained helper. It may be imported, but it imports little and is not "
+    "where the application's behaviour lives.",
+    "A supporting component: real logic that other modules use, but a piece the "
+    "app depends on rather than the place that wires the app together.",
+    "A core module: substantial behaviour central to the project's domain, that "
+    "several other modules depend on.",
+    "An orchestrator or entry point: it wires the application together, drives the "
+    "main flow, or is where execution starts.",
+]
+_ROLE_INSTRUCTIONS = (
+    "Rate this MODULE's architectural role in the project — how load-bearing it is. "
+    "Judge the semantic role from the DESCRIPTION (and SUMMARY if given) together "
+    "with its IMPORT_DEGREE, not the degree number alone."
+)
+
 
 def _norm(path: str) -> str:
     """Forward slashes, no leading ``./`` — match FileFragment.rel_path spelling."""
@@ -201,3 +223,122 @@ def _close(client: Any) -> None:
             closer()
     except Exception:
         pass
+
+
+def file_degree(edges: Iterable[Any]) -> dict[str, int]:
+    """In+out import degree per file from AST edges — structural centrality.
+
+    Distinct from ``mermaid``'s degree, which is *directory-collapsed* for the
+    diagram; this is per-file, for module importance. Paths are normalised so an
+    edge's ``./a.py`` and a module's ``a.py`` agree.
+    """
+    from collections import defaultdict
+
+    degree: dict[str, int] = defaultdict(int)
+    for edge in edges:
+        degree[_norm(edge.from_path)] += 1
+        degree[_norm(edge.to_path)] += 1
+    return dict(degree)
+
+
+def degree_for_module(module_path: str, file_degree_map: dict[str, int]) -> int:
+    """Resolve a module's structural degree, whether it names a file or a directory.
+
+    The LLM describes modules at file granularity on small repos (``a/b.py``) and
+    at directory/package granularity on large ones (``a/b``). ``file_degree`` is
+    keyed by file, so a directory module would miss and read 0 (#170). Exact file
+    match first; otherwise sum the degree of every scanned file *under* that
+    directory, so a package is credited with its members' import activity.
+    """
+    p = _norm(module_path)
+    if p in file_degree_map:
+        return file_degree_map[p]
+    prefix = p.rstrip("/") + "/"
+    return sum(d for path, d in file_degree_map.items() if path.startswith(prefix))
+
+
+def score_importance(
+    modules: Sequence[Any],
+    edges: Iterable[Any],
+    *,
+    api_key: str | None,
+    client: Any | None = None,
+    timeout: float = 60.0,
+    summaries_by_path: dict[str, str] | None = None,
+) -> dict[str, float] | None:
+    """Score each module's semantic architectural role (0–3) with a Jev Score.
+
+    Returns ``{normalised_path: role_score}`` (the probability-weighted level, 0 =
+    leaf … 3 = orchestrator), or ``None`` when scoring is off or fails. Unlike
+    :func:`score`, there is **no redaction gate** — this sends module *descriptions*
+    and an integer *degree*, never file source, so redaction is irrelevant here.
+    Gated only on a key, the ``typesafe-sdk`` extra, and having modules. Never
+    raises: any SDK problem returns ``None`` (the caller keeps the graph).
+
+    ``summaries_by_path`` optionally supplies a file's summary text per path; when
+    present it is added to the question as more grounded evidence than the module's
+    own description alone.
+    """
+    if not api_key or not modules:
+        return None
+
+    degree = file_degree(edges)
+    items: list[tuple[str, str, int, str | None]] = []  # path, desc, degree, summary
+    for mod in modules:
+        p = _norm(mod.path)
+        summ = summaries_by_path.get(p) if summaries_by_path else None
+        items.append((p, mod.description, degree.get(p, 0), summ))
+
+    try:
+        return _run_scores(items, api_key=api_key, client=client, timeout=timeout)
+    except Exception as e:  # SDK missing, network, auth, malformed — all None
+        logging.debug("Importance scoring unavailable, skipping: %s", e)
+        return None
+
+
+
+def _run_scores(
+    items: list[tuple[str, str, int, str | None]],
+    *,
+    api_key: str,
+    client: Any | None,
+    timeout: float,
+) -> dict[str, float]:
+    """Send the role Score per module, batched. Returns {path: role_score}.
+
+    Raises on any SDK problem; ``score_importance`` turns that into ``None``.
+    Function-local SDK import (the optional-extra rule).
+    """
+    from typesafe_sdk import Score, TypeSafeClient  # local: optional extra
+
+    def _question(desc: str, degree: int, summary: str | None) -> Any:
+        instr: dict[str, Any] = {
+            "task": _ROLE_INSTRUCTIONS,
+            "DESCRIPTION": desc,
+            "IMPORT_DEGREE": degree,
+        }
+        if summary:
+            instr["SUMMARY"] = summary
+        return Score(instructions=instr, criteria=_ROLE_LADDER)
+
+    owns_client = client is None
+    client = client if client is not None else TypeSafeClient(api_key=api_key)
+    out: dict[str, float] = {}
+    try:
+        for start in range(0, len(items), _BATCH):
+            chunk = items[start : start + _BATCH]
+            questions = {
+                f"m{start + i}": _question(desc, deg, summ)
+                for i, (_p, desc, deg, summ) in enumerate(chunk)
+            }
+            resp = client.system_one(
+                state={"note": "Each question describes one MODULE."},
+                questions=questions,
+                timeout=timeout,
+            )
+            for i, (path, _d, _deg, _s) in enumerate(chunk):
+                out[path] = float(resp.scores[f"m{start + i}"].score)
+    finally:
+        if owns_client:
+            _close(client)
+    return out

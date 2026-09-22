@@ -7,7 +7,54 @@ import os
 from pathlib import Path
 
 from graphlm.mermaid import render_mermaid
-from graphlm.models import CodebaseGraph, Cycle, GraphMeta
+from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
+
+# Module-importance display weighting. Applied HERE, at render time, to the two
+# raw components stored on each module (Jev ``role`` 0–3, structural ``degree``) —
+# never baked into GRAPH.json — so the blend can be retuned without rewriting the
+# map. Role leads (semantic centrality is the point; degree corrects for a module
+# that under- or over-describes itself). Not yet calibrated beyond one fixture;
+# kept as named constants for exactly that reason.
+_ROLE_WEIGHT = 0.6
+_DEGREE_WEIGHT = 0.4
+
+
+def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | None:
+    """Fuse each module's role + degree into a 0–1 importance, or None if unscored.
+
+    Returns ``None`` when no module has a ``role`` (importance scoring was off) —
+    the signal to render exactly as before. Degree is rank-normalised across the
+    scored modules (absolute counts vary wildly by repo size); role is scaled 0–3
+    → 0–1. A module with a role but (defensively) no degree uses degree 0.
+    """
+    scored = [m for m in modules if m.role is not None]
+    if not scored:
+        return None
+    degrees = sorted({(m.degree or 0) for m in scored})
+    # rank-normalise degree: smallest → 0, largest → 1 (ties share a rank)
+    dmax = len(degrees) - 1
+    drank = {d: (i / dmax if dmax else 1.0) for i, d in enumerate(degrees)}
+    out: dict[str, float] = {}
+    for m in scored:
+        role_n = (m.role or 0.0) / 3.0
+        deg_n = drank.get(m.degree or 0, 0.0)
+        out[m.path] = _ROLE_WEIGHT * role_n + _DEGREE_WEIGHT * deg_n
+    return out
+
+
+def importance_summary(graph: CodebaseGraph, top: int = 3) -> str | None:
+    """One terse clause naming the most load-bearing modules, or None if unscored.
+
+    Reads the fused importance (``_fused_importance``) off the graph's modules;
+    ``None`` when importance scoring did not run. Shared by ``GRAPH.md`` (indirectly,
+    via the table) and the CLI ``Importance:`` line so the ranking is single-sourced.
+    """
+    importance = _fused_importance(graph.modules)
+    if not importance:
+        return None
+    ranked = sorted(importance.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    named = ", ".join(f"{p} ({s:.2f})" for p, s in ranked)
+    return f"most load-bearing: {named}"
 
 
 def _render_directive(meta: GraphMeta) -> str:
@@ -214,10 +261,29 @@ def render_markdown(graph: CodebaseGraph) -> str:
     # Modules
     if graph.modules:
         lines.append("## Modules\n")
-        lines.append("| Path | Name | Description |")
-        lines.append("|------|------|-------------|")
-        for mod in sorted(graph.modules, key=lambda m: m.path):
-            lines.append(f"| `{mod.path}` | {mod.name} | {mod.description} |")
+        importance = _fused_importance(graph.modules)
+        if importance is None:
+            # Importance scoring was off — render exactly as before (no column,
+            # path sort). This branch must stay byte-identical to the pre-feature
+            # output; a test pins it.
+            lines.append("| Path | Name | Description |")
+            lines.append("|------|------|-------------|")
+            for mod in sorted(graph.modules, key=lambda m: m.path):
+                lines.append(f"| `{mod.path}` | {mod.name} | {mod.description} |")
+        else:
+            # Load-bearing first (fused importance desc), path as a stable tiebreak.
+            lines.append("| Importance | Path | Name | Description |")
+            lines.append("|-----------:|------|------|-------------|")
+            ordered = sorted(
+                graph.modules,
+                key=lambda m: (-importance.get(m.path, -1.0), m.path),
+            )
+            for mod in ordered:
+                score = importance.get(mod.path)
+                cell = "—" if score is None else f"{score:.2f}"
+                lines.append(
+                    f"| {cell} | `{mod.path}` | {mod.name} | {mod.description} |"
+                )
         lines.append("")
 
     # Data flow

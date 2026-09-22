@@ -966,3 +966,83 @@ class TestEvidenceIntegration:
         result = generate_graph(CYCLIC, dry_run=True)
         assert called["n"] == 0
         assert result.graph.meta.evidence_support is None
+
+
+class TestImportanceIntegration:
+    """Module-importance fill-site in generate_graph (LLM mocked, Jev faked)."""
+
+    def _graph(self):
+        return _make_graph(modules=[
+            {"path": "app/main.py", "name": "main", "description": "entry point"},
+            {"path": "app/routes.py", "name": "routes", "description": "routing"},
+        ])
+
+    def _run(self, httpx_mock, tmp_path, **kwargs):
+        _mock_pass1_response(httpx_mock, CYCLIC_FILES)
+        _mock_pass2_response(httpx_mock, self._graph())
+        return generate_graph(
+            CYCLIC, base_url="http://test.local/v1", api_key="test-key",
+            model="test-model", output_dir=tmp_path, **kwargs,
+        )
+
+    def test_role_and_degree_filled(self, httpx_mock, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_score_importance(modules, edges, *, api_key, client=None, timeout=60, summaries_by_path=None):
+            seen["paths"] = [m.path for m in modules]
+            return {"app/main.py": 2.9, "app/routes.py": 1.5}
+
+        monkeypatch.setattr("graphlm.evidence.score_importance", fake_score_importance)
+        result = self._run(httpx_mock, tmp_path)
+        by = {m.path: m for m in result.graph.modules}
+        assert by["app/main.py"].role == 2.9
+        assert by["app/routes.py"].role == 1.5
+        # degree filled from AST edges (deterministic), non-None for scored modules.
+        assert by["app/main.py"].degree is not None
+
+    def test_no_importance_flag_leaves_fields_none(self, httpx_mock, tmp_path, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = self._run(httpx_mock, tmp_path, include_importance=False)
+        assert called["n"] == 0
+        assert all(m.role is None and m.degree is None for m in result.graph.modules)
+        # Rendered Modules table falls back to the old format (no Importance column).
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert "| Importance |" not in md.split("## Modules")[1].split("\n##")[0]
+
+    def test_no_redact_does_not_gate_importance(self, httpx_mock, tmp_path, monkeypatch):
+        # Unlike evidence, importance still runs under --no-redact (no source sent).
+        seen = {"called": False}
+
+        def fake(modules, edges, **k):
+            seen["called"] = True
+            return {"app/main.py": 2.0}
+
+        monkeypatch.setattr("graphlm.evidence.score_importance", fake)
+        self._run(httpx_mock, tmp_path, redact_secrets=False)
+        assert seen["called"] is True
+
+    def test_scorer_raising_keeps_graph(self, httpx_mock, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("jev down")),
+        )
+        try:
+            result = self._run(httpx_mock, tmp_path)
+        except RuntimeError:
+            import pytest
+            pytest.fail("importance scorer exception discarded the paid graph")
+        assert isinstance(result.graph, CodebaseGraph)
+        assert all(m.role is None for m in result.graph.modules)
+
+    def test_dry_run_never_scores(self, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = generate_graph(CYCLIC, dry_run=True)
+        assert called["n"] == 0

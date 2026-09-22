@@ -246,3 +246,118 @@ class TestFlatten:
     def test_norm_strips_dot_slash_and_backslashes(self):
         assert evidence._norm("./a/b.py") == "a/b.py"
         assert evidence._norm("a\\b.py") == "a/b.py"
+
+
+class _ScoreAns:
+    def __init__(self, score: float) -> None:
+        self.score = score
+
+
+class _ScoreResp:
+    def __init__(self, scores: dict) -> None:
+        self.scores = scores
+
+
+class _FakeScoreClient:
+    """Returns a per-question role Score; `by_index` maps question idx -> score."""
+
+    def __init__(self, by_index: dict[int, float] | None = None, default: float = 1.5):
+        self.by_index = by_index or {}
+        self.default = default
+        self.batches = 0
+        self.total = 0
+
+    def system_one(self, *, state, questions, timeout=None):  # noqa: ANN001
+        self.batches += 1
+        self.total += len(questions)
+        return _ScoreResp(
+            {k: _ScoreAns(self.by_index.get(int(k[1:]), self.default)) for k in questions}
+        )
+
+
+def _mod(path, desc="does things"):
+    from graphlm.models import ModuleDescription
+    return ModuleDescription(path=path, name=path, description=desc)
+
+
+def _edge(a, b):
+    from graphlm.models import ImportEdge
+    return ImportEdge(from_path=a, to_path=b, kind="import")
+
+
+class TestFileDegree:
+    def test_in_plus_out(self):
+        deg = evidence.file_degree([_edge("a.py", "b.py"), _edge("c.py", "b.py")])
+        assert deg == {"a.py": 1, "b.py": 2, "c.py": 1}
+
+    def test_normalises_paths(self):
+        deg = evidence.file_degree([_edge("./a.py", "sub/b.py")])
+        assert deg == {"a.py": 1, "sub/b.py": 1}
+
+    def test_empty(self):
+        assert evidence.file_degree([]) == {}
+
+
+class TestScoreImportance:
+    def test_gates(self):
+        assert evidence.score_importance([_mod("a.py")], [], api_key=None) is None
+        assert evidence.score_importance([], [], api_key="k") is None
+
+    def test_scores_modules(self):
+        fc = _FakeScoreClient(by_index={0: 2.9, 1: 0.1})
+        res = evidence.score_importance(
+            [_mod("app.py"), _mod("settings.py")],
+            [_edge("app.py", "settings.py")],
+            api_key="k", client=fc,
+        )
+        assert res == {"app.py": 2.9, "settings.py": 0.1}
+
+    def test_no_redact_param_at_all(self):
+        # score_importance has no redact_secrets param — it sends no source.
+        import inspect
+        assert "redact_secrets" not in inspect.signature(evidence.score_importance).parameters
+
+    def test_batches_at_15(self):
+        mods = [_mod(f"m{i}.py") for i in range(32)]
+        fc = _FakeScoreClient()
+        evidence.score_importance(mods, [], api_key="k", client=fc)
+        assert fc.batches == 3 and fc.total == 32
+
+    def test_client_raises_returns_none(self):
+        class _Boom:
+            def system_one(self, **k):  # noqa: ANN001
+                raise RuntimeError("down")
+        assert evidence.score_importance([_mod("a.py")], [], api_key="k", client=_Boom()) is None
+
+    def test_summary_passed_when_present(self):
+        # summaries_by_path threads a summary into the question without error.
+        fc = _FakeScoreClient(by_index={0: 2.0})
+        res = evidence.score_importance(
+            [_mod("a.py")], [], api_key="k", client=fc,
+            summaries_by_path={"a.py": "the real summary"},
+        )
+        assert res == {"a.py": 2.0}
+
+
+class TestDegreeForModule:
+    """degree_for_module resolves file OR directory modules (#170)."""
+
+    def test_exact_file_match(self):
+        fd = {"a/b.py": 5, "a/c.py": 2}
+        assert evidence.degree_for_module("a/b.py", fd) == 5
+
+    def test_directory_sums_contained_files(self):
+        fd = {"pkg/x.py": 3, "pkg/y.py": 4, "other/z.py": 9}
+        assert evidence.degree_for_module("pkg", fd) == 7
+
+    def test_directory_no_match_is_zero(self):
+        assert evidence.degree_for_module("nope", {"a/b.py": 5}) == 0
+
+    def test_prefix_guard_no_sibling_bleed(self):
+        # 'agents' must not absorb 'agents_foo/'.
+        fd = {"a/agents_foo/x.py": 2, "a/agents/y.py": 3}
+        assert evidence.degree_for_module("a/agents", fd) == 3
+
+    def test_trailing_slash_normalised(self):
+        fd = {"pkg/x.py": 3}
+        assert evidence.degree_for_module("pkg/", fd) == 3
