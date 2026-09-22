@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "graphlm"
-version = "0.4.2"
+version = "0.5.0"
 description = "Generate codebase graphs (Markdown + JSON + interactive HTML) from any project directory using an OpenAI-compatible LLM"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -68,7 +68,13 @@ go = ["tree-sitter-go>=0.23,<0.24"]
 # PHP Tree-sitter grammar. Resolver in `graphlm/parsers/php.py`.
 # language_php() (not language()) — the wheel also ships php_only.
 php = ["tree-sitter-php>=0.23,<0.25"]
-# Every language pack. Does not include `mcp`.
+# TypeSafe/Jev SDK for prose evidence-scoring (a downstream-trust weight on the
+# LLM's summaries). Opt-in — it talks to a commercial third-party API and needs
+# a TYPESAFE_API_KEY, so it is never a base dependency. Offered by the first-run
+# setup wizard (`graphlm --setup`). Not aggregated by `all` (that is languages
+# only; `mcp` is likewise separate). Consumed by `graphlm/evidence.py`.
+typesafe = ["typesafe-sdk>=0.7,<0.8"]
+# Every language pack. Does not include `mcp` or `typesafe`.
 all = ["graphlm[js]", "graphlm[java]", "graphlm[rust]", "graphlm[csharp]", "graphlm[cpp]", "graphlm[go]", "graphlm[php]"]
 
 [project.urls]
@@ -105,7 +111,7 @@ packages = ["graphlm"]
 # creates and pushes the publishing tag. See CONTRIBUTING.md for the full flow.
 # NOTE: keep current_version in step with project.version above.
 [tool.bumpversion]
-current_version = "0.4.2"
+current_version = "0.5.0"
 commit = false
 tag = false
 allow_dirty = false

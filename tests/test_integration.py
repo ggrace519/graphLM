@@ -63,6 +63,34 @@ class TestFullPipeline:
         assert len(md_files) >= 1
         assert len(json_files) >= 1
 
+    def test_pass1_null_requested_files_still_writes_a_graph(
+        self, httpx_mock, small_project, tmp_path
+    ):
+        # {"requested_files": null} is valid JSON and used to TypeError after
+        # the paid pass-1 call (#115).
+        httpx_mock.add_response(
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({"requested_files": None})
+                        },
+                        "index": 0,
+                    }
+                ]
+            }
+        )
+        _mock_pass2_response(httpx_mock, _make_graph())
+        result = generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        assert isinstance(result.graph, CodebaseGraph)
+        assert (tmp_path / "GRAPH.md").exists()
+
     def test_directory_tree_filled_locally_not_from_llm(
         self, httpx_mock, small_project, tmp_path
     ):
@@ -114,6 +142,35 @@ class TestFullPipeline:
         )
         # Both passes' clients were built with the explicit timeout.
         assert seen and all(t == 42.0 for t in seen)
+
+    def test_timeout_env_honoured_when_endpoint_is_explicit(
+        self, httpx_mock, small_project, tmp_path, monkeypatch
+    ):
+        # GRAPHLM_TIMEOUT must still apply when the endpoint triple is passed
+        # as args (CLI -b/-k/-m). Settings(base_url, api_key, model) used to
+        # take the dataclass default 300 and skip the env (#92).
+        monkeypatch.setenv("GRAPHLM_TIMEOUT", "600")
+        import graphlm.llm as llm_mod
+
+        seen: list[float | None] = []
+        real_client = llm_mod.httpx.Client
+
+        def spy_client(*args, **kwargs):
+            seen.append(kwargs.get("timeout"))
+            return real_client(*args, **kwargs)
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", spy_client)
+
+        _mock_pass1_response(httpx_mock, ["main.py"])
+        _mock_pass2_response(httpx_mock, _make_graph())
+        generate_graph(
+            small_project,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+        )
+        assert seen and all(t == 600.0 for t in seen)
 
     def test_max_output_tokens_independent_of_input_admission(
         self, large_project, monkeypatch
@@ -702,7 +759,17 @@ class TestRunTelemetry:
         assert meta.usage.pass2.completion_tokens == 400
         # The estimate is graphlm's own figure for the same prompt, so the
         # real-vs-estimated ratio is derivable from the stamp alone.
+        from graphlm.context import (
+            MESSAGE_OVERHEAD_TOKENS,
+            assemble_pass1_prompt,
+            estimate_tokens,
+        )
+
         assert meta.usage.pass1.estimated_prompt_tokens == result.pass1_context_tokens
+        assert meta.usage.pass1.estimated_prompt_tokens == (
+            estimate_tokens(assemble_pass1_prompt(result.graph.directory_tree))
+            + MESSAGE_OVERHEAD_TOKENS
+        )
         assert meta.usage.pass2.estimated_prompt_tokens == result.pass2_context_tokens
         assert meta.usage.pass2.estimated_prompt_tokens > 0
 
@@ -793,3 +860,189 @@ class TestRunTelemetry:
         assert result.graph.meta.usage is None
         assert result.graph.meta.faithfulness is None
         assert "**Run telemetry.**" not in render_markdown_of(result.graph)
+
+
+class TestEvidenceIntegration:
+    """The evidence-support fill-site in generate_graph — the behaviors nothing
+    else catches (the wizard lesson: test the wiring, not just the module).
+
+    generate_graph calls graphlm.evidence.score after the paid pass-2. These
+    tests spy on that call to assert gating and resilience at the integration
+    boundary, without any TypeSafe network."""
+
+    def _summ_graph(self):
+        return _make_graph(
+            file_summaries=[
+                {"path": "app/main.py", "summary": "entry", "symbols": []},
+                {"path": "app/routes.py", "summary": "routes", "symbols": []},
+            ]
+        )
+
+    def _run(self, httpx_mock, tmp_path, **kwargs):
+        _mock_pass1_response(httpx_mock, CYCLIC_FILES)
+        _mock_pass2_response(httpx_mock, self._summ_graph())
+        return generate_graph(
+            CYCLIC,
+            base_url="http://test.local/v1",
+            api_key="test-key",
+            model="test-model",
+            output_dir=tmp_path,
+            **kwargs,
+        )
+
+    def test_score_called_and_result_stamped(self, httpx_mock, tmp_path, monkeypatch):
+        from graphlm.models import EvidenceSupport, FileScore
+
+        seen = {}
+
+        def fake_score(summaries, pass2_files, *, redact_secrets, api_key):
+            seen["summaries"] = [s.path for s in summaries]
+            seen["redact"] = redact_secrets
+            return EvidenceSupport(
+                mean=0.8, scored=2, skipped=0,
+                low=[FileScore(path="app/routes.py", score=0.3)],
+            )
+
+        monkeypatch.setattr("graphlm.evidence.score", fake_score)
+        result = self._run(httpx_mock, tmp_path)
+        assert result.graph.meta.evidence_support is not None
+        assert result.graph.meta.evidence_support.mean == 0.8
+        assert seen["summaries"] == ["app/main.py", "app/routes.py"]
+        assert seen["redact"] is True  # redaction on by default
+        # Rendered into GRAPH.md telemetry line, including the low-outlier clause
+        # (the only link between a low score and what a reader sees).
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert "summary evidence support" in md
+        assert "weakest: app/routes.py 0.30" in md
+
+    def test_no_evidence_flag_skips_scoring(self, httpx_mock, tmp_path, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = self._run(httpx_mock, tmp_path, include_evidence=False)
+        assert called["n"] == 0
+        assert result.graph.meta.evidence_support is None
+
+    def test_no_redact_gates_off_in_scorer(self, httpx_mock, tmp_path, monkeypatch):
+        # With --no-redact, generate_graph still CALLS score, but score returns
+        # None because redact_secrets is False (the gate lives in the scorer).
+        seen = {}
+
+        def fake_score(summaries, pass2_files, *, redact_secrets, api_key):
+            seen["redact"] = redact_secrets
+            # Mirror the real gate: no scoring without redaction.
+            return None if not redact_secrets else object()
+
+        monkeypatch.setattr("graphlm.evidence.score", fake_score)
+        result = self._run(httpx_mock, tmp_path, redact_secrets=False)
+        assert seen["redact"] is False
+        assert result.graph.meta.evidence_support is None
+
+    def test_scorer_raising_does_not_discard_graph(self, httpx_mock, tmp_path, monkeypatch):
+        # The scorer runs after the paid pass-2. If it somehow raises, the graph
+        # must still be returned and written — the score is best-effort telemetry.
+        def boom(*a, **k):
+            raise RuntimeError("typesafe exploded")
+
+        monkeypatch.setattr("graphlm.evidence.score", boom)
+        # generate_graph must not propagate — the real score() never raises, but
+        # this guards the fill-site against a future scorer that does.
+        try:
+            result = self._run(httpx_mock, tmp_path)
+        except RuntimeError:
+            import pytest
+            pytest.fail("scorer exception discarded the paid graph")
+        assert isinstance(result.graph, CodebaseGraph)
+        assert (tmp_path / "GRAPH.json").exists()
+
+    def test_dry_run_never_scores(self, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = generate_graph(CYCLIC, dry_run=True)
+        assert called["n"] == 0
+        assert result.graph.meta.evidence_support is None
+
+
+class TestImportanceIntegration:
+    """Module-importance fill-site in generate_graph (LLM mocked, Jev faked)."""
+
+    def _graph(self):
+        return _make_graph(modules=[
+            {"path": "app/main.py", "name": "main", "description": "entry point"},
+            {"path": "app/routes.py", "name": "routes", "description": "routing"},
+        ])
+
+    def _run(self, httpx_mock, tmp_path, **kwargs):
+        _mock_pass1_response(httpx_mock, CYCLIC_FILES)
+        _mock_pass2_response(httpx_mock, self._graph())
+        return generate_graph(
+            CYCLIC, base_url="http://test.local/v1", api_key="test-key",
+            model="test-model", output_dir=tmp_path, **kwargs,
+        )
+
+    def test_role_and_degree_filled(self, httpx_mock, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_score_importance(modules, edges, *, api_key, client=None, timeout=60, summaries_by_path=None):
+            seen["paths"] = [m.path for m in modules]
+            return {"app/main.py": 2.9, "app/routes.py": 1.5}
+
+        monkeypatch.setattr("graphlm.evidence.score_importance", fake_score_importance)
+        result = self._run(httpx_mock, tmp_path)
+        by = {m.path: m for m in result.graph.modules}
+        assert by["app/main.py"].role == 2.9
+        assert by["app/routes.py"].role == 1.5
+        # degree filled from AST edges (deterministic), non-None for scored modules.
+        assert by["app/main.py"].degree is not None
+
+    def test_no_importance_flag_leaves_fields_none(self, httpx_mock, tmp_path, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = self._run(httpx_mock, tmp_path, include_importance=False)
+        assert called["n"] == 0
+        assert all(m.role is None and m.degree is None for m in result.graph.modules)
+        # Rendered Modules table falls back to the old format (no Importance column).
+        md = (tmp_path / "GRAPH.md").read_text()
+        assert "| Importance |" not in md.split("## Modules")[1].split("\n##")[0]
+
+    def test_no_redact_does_not_gate_importance(self, httpx_mock, tmp_path, monkeypatch):
+        # Unlike evidence, importance still runs under --no-redact (no source sent).
+        seen = {"called": False}
+
+        def fake(modules, edges, **k):
+            seen["called"] = True
+            return {"app/main.py": 2.0}
+
+        monkeypatch.setattr("graphlm.evidence.score_importance", fake)
+        self._run(httpx_mock, tmp_path, redact_secrets=False)
+        assert seen["called"] is True
+
+    def test_scorer_raising_keeps_graph(self, httpx_mock, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("jev down")),
+        )
+        try:
+            result = self._run(httpx_mock, tmp_path)
+        except RuntimeError:
+            import pytest
+            pytest.fail("importance scorer exception discarded the paid graph")
+        assert isinstance(result.graph, CodebaseGraph)
+        assert all(m.role is None for m in result.graph.modules)
+
+    def test_dry_run_never_scores(self, monkeypatch):
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "graphlm.evidence.score_importance",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1),
+        )
+        result = generate_graph(CYCLIC, dry_run=True)
+        assert called["n"] == 0

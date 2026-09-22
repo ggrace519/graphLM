@@ -198,6 +198,20 @@ class TestRustPack:
         assert not any(e.to_path.endswith("elsewhere.rs") for e in edges)
         assert "rust" in partial
 
+    def test_cfg_feature_path_is_not_a_path_attr(self, tmp_path):
+        """#[cfg(feature = \"path\")] must not skip mod foo (#153)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "lib.rs").write_text('#[cfg(feature = "path")]\nmod foo;\n')
+        (src / "foo.rs").write_text("pub fn x() {}\n")
+        frags = [
+            FileFragment("src/lib.rs", '#[cfg(feature = "path")]\nmod foo;\n', 2),
+            FileFragment("src/foo.rs", "pub fn x() {}\n", 1),
+        ]
+        edges = build_dependency_graph(frags, project_dir=tmp_path)
+        got = {(e.from_path, e.to_path, e.kind) for e in edges}
+        assert ("src/lib.rs", "src/foo.rs", "include") in got
+
     def test_use_glob_resolves_to_module_file(self, tmp_path):
         src = tmp_path / "src"
         src.mkdir()

@@ -143,8 +143,30 @@ def build_server(project_dir: Path, json_path: Path) -> MCPServer:
     def find(query_text: str, limit: int = 20) -> dict[str, Any]:
         """Search the map for a phrase — "where is the app factory", a symbol
         name, a module name. Ranked hits across quick-reference entries, modules,
-        entry points, symbols, and file summaries."""
+        entry points, symbols, and file summaries. Token-based (no LLM)."""
         return query.find(index(), query_text, limit=limit)
+
+    @server.tool()
+    def search(question: str, limit: int = 10) -> dict[str, Any]:
+        """Semantic search: rank files by how well they answer a natural-language
+        question ("which file handles rate limiting?"). Unlike `find` (token match),
+        this scores each file's meaning against the question with TypeSafe/Jev.
+        Needs a TYPESAFE_API_KEY and the graphlm[typesafe] extra; when unavailable it
+        falls back to `find` so the query still returns something useful."""
+        import os
+
+        result = query.semantic_find(
+            index(), question, api_key=os.environ.get("TYPESAFE_API_KEY"), limit=limit
+        )
+        if not result.get("available", True):
+            # Jev off — transparently fall back to token search, and say so.
+            fallback = query.find(index(), question, limit=limit)
+            fallback["note"] = (
+                "Semantic search needs a TYPESAFE_API_KEY and the graphlm[typesafe] "
+                "extra; fell back to token `find`."
+            )
+            return fallback
+        return result
 
     @server.tool()
     def cycles() -> dict[str, Any]:

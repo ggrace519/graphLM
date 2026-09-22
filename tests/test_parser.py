@@ -365,6 +365,18 @@ class TestBuildDependencyGraph:
         # import requests is third-party — it must resolve to nothing, not the stub.
         assert edges == []
 
+    def test_source_roots_rejects_tests_src_shadow(self, tmp_path):
+        """tests/src/requests must not satisfy import requests (#161)."""
+        (tmp_path / "app.py").write_text("import requests\n")
+        stub = tmp_path / "tests" / "src" / "requests"
+        stub.mkdir(parents=True)
+        (stub / "__init__.py").write_text("")
+        from graphlm.scanner import scan_project
+
+        scan = scan_project(tmp_path)
+        edges = build_dependency_graph(scan.file_fragments, project_dir=tmp_path)
+        assert edges == []
+
     def test_cyclic_project_includes_cycle_edges(self):
         from graphlm.scanner import scan_project
 

@@ -226,6 +226,65 @@ class TestWriteOutputs:
             assert json_path.exists()
             assert html_path is None
 
+    def test_refuses_to_write_through_graph_json_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            out = tmp / "out"
+            out.mkdir()
+            canary = tmp / "canary.txt"
+            canary.write_text("USER DATA")
+            (out / "GRAPH.json").symlink_to(canary)
+            try:
+                write_outputs(graph, out, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert canary.read_text() == "USER DATA"
+            assert (out / "GRAPH.json").is_symlink()
+
+    def test_refuses_to_write_through_output_dir_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            real = tmp / "real"
+            real.mkdir()
+            link = tmp / "link"
+            try:
+                link.symlink_to(real)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(graph, link, html=False, diff=False)
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (real / "GRAPH.md").exists()
+
+    def test_refuses_to_write_through_ancestor_directory_symlink(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            victim = tmp / "victim"
+            victim.mkdir()
+            decoy = tmp / "decoy"
+            try:
+                decoy.symlink_to(victim)
+            except (OSError, NotImplementedError):
+                return
+            try:
+                write_outputs(
+                    graph, decoy / "pwned", html=False, diff=False
+                )
+            except ValueError as e:
+                assert "symlink" in str(e).lower()
+            else:
+                raise AssertionError("expected ValueError")
+            assert not (victim / "pwned").exists()
+            assert not (victim / "pwned" / "GRAPH.md").exists()
+
     def test_creates_output_directory(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
@@ -441,6 +500,27 @@ class TestMermaidModuleGraph:
         assert "LLM-inferred import edges" in md
         assert "ground truth" not in md
         assert "n_pkg --> n_lib" in _mermaid_block(md)
+
+    def test_dot_slash_llm_paths_do_not_collapse_to_dot(self):
+        # ./a.py rpartition("/") used to yield "." (#96).
+        graph = CodebaseGraph(
+            directory_tree="p/",
+            deterministic_edges=None,
+            import_edges=[_edge("./a.py", "./b.py"), _edge("./b.py", "./a.py")],
+            import_cycles=[
+                Cycle(
+                    nodes=["a.py", "b.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                )
+            ],
+        )
+        text = "\n".join(render_mermaid(graph))
+        assert 'n_["."]' not in text
+        assert 'n_a_py["a.py"]' in text
+        assert 'n_b_py["b.py"]' in text
+        assert "n_a_py --> n_b_py" in text
 
     def test_ast_edges_win_over_llm_edges(self):
         graph = CodebaseGraph(
@@ -767,3 +847,221 @@ class TestRunTelemetryLine:
         directive_end = next(i for i, l in enumerate(lines) if "best-effort" in l)
         assert lines[directive_end + 1].startswith("> **Run telemetry.**")
         assert lines[directive_end + 2] == ""
+
+
+class TestEvidenceSummary:
+    """render.evidence_summary — the terse telemetry clause."""
+
+    def _meta(self, es):
+        from graphlm.models import GraphMeta
+
+        return GraphMeta(created_at="2026-01-01T00:00:00Z", evidence_support=es)
+
+    def test_none_when_unset(self):
+        from graphlm.render import evidence_summary
+
+        assert evidence_summary(self._meta(None)) is None
+
+    def test_with_low_outliers(self):
+        from graphlm.models import EvidenceSupport, FileScore
+        from graphlm.render import evidence_summary
+
+        es = EvidenceSupport(
+            mean=0.81, scored=20, skipped=2,
+            low=[FileScore(path="models.py", score=0.23), FileScore(path="q.py", score=0.4)],
+        )
+        text = evidence_summary(self._meta(es))
+        assert "mean 0.81" in text
+        assert "20 scored, 2 skipped" in text
+        assert "models.py 0.23" in text
+
+    def test_na_mean_when_nothing_scored(self):
+        from graphlm.models import EvidenceSupport
+        from graphlm.render import evidence_summary
+
+        es = EvidenceSupport(mean=None, scored=0, skipped=3, low=[])
+        text = evidence_summary(self._meta(es))
+        assert "mean n/a" in text
+        assert "weakest" not in text  # no low list
+
+    def test_in_telemetry_line(self):
+        from graphlm.models import EvidenceSupport
+        from graphlm.render import _render_telemetry
+
+        es = EvidenceSupport(mean=0.9, scored=5, skipped=0, low=[])
+        line = _render_telemetry(self._meta(es))
+        assert line is not None and "evidence support" in line
+
+
+class TestModuleImportanceRender:
+    """The Modules table: fused importance when scored, byte-identical fallback."""
+
+    def _modules_section(self, md: str) -> str:
+        return md.split("## Modules")[1].split("\n##")[0].strip()
+
+    def test_fallback_byte_identical_when_unscored(self):
+        # No module has a role → the Modules section must be exactly the old
+        # 3-column, path-sorted table. This golden string is the pre-feature output.
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(directory_tree="t/\n", modules=[
+            ModuleDescription(path="b.py", name="B", description="second"),
+            ModuleDescription(path="a.py", name="A", description="first"),
+        ])
+        section = self._modules_section(render_markdown(g))
+        assert section == (
+            "| Path | Name | Description |\n"
+            "|------|------|-------------|\n"
+            "| `a.py` | A | first |\n"
+            "| `b.py` | B | second |"
+        )
+
+    def test_scored_adds_column_and_sorts_load_bearing_first(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(directory_tree="t/\n", modules=[
+            ModuleDescription(path="settings.py", name="S", description="constants", role=0.1, degree=3),
+            ModuleDescription(path="app.py", name="App", description="orchestrator", role=2.9, degree=2),
+            ModuleDescription(path="board.py", name="Board", description="core", role=2.0, degree=5),
+        ])
+        section = self._modules_section(render_markdown(g))
+        assert section.startswith("| Importance | Path | Name | Description |")
+        # board (core, degree 5) outranks app (orchestrator, degree 2) via fusion.
+        rows = [ln for ln in section.splitlines() if ln.startswith("| ") and "`" in ln]
+        order = [ln.split("`")[1] for ln in rows]
+        assert order == ["board.py", "app.py", "settings.py"]
+
+    def test_fusion_none_when_no_roles(self):
+        from graphlm.models import ModuleDescription
+        from graphlm.render import _fused_importance
+        mods = [ModuleDescription(path="a.py", name="a", description="x")]
+        assert _fused_importance(mods) is None
+
+    def test_fusion_role_and_degree_combine(self):
+        from graphlm.models import ModuleDescription
+        from graphlm.render import _fused_importance, _ROLE_WEIGHT, _DEGREE_WEIGHT
+        mods = [
+            ModuleDescription(path="hi.py", name="h", description="x", role=3.0, degree=10),
+            ModuleDescription(path="lo.py", name="l", description="x", role=0.0, degree=0),
+        ]
+        f = _fused_importance(mods)
+        # top: role 3/3=1, degree rank 1 → ROLE_W*1 + DEGREE_W*1 = 1.0
+        assert f["hi.py"] == _ROLE_WEIGHT + _DEGREE_WEIGHT
+        assert f["lo.py"] == 0.0
+
+
+class TestModuleImportanceBaseline:
+    """role/degree round-trip through the diff baseline reader (additive-optional)."""
+
+    def test_old_graph_json_without_fields_loads_normal(self, tmp_path):
+        # A GRAPH.json whose modules lack role/degree must still parse and diff
+        # NORMAL (the fields default None on a diffed model, like meta did).
+        import json
+        from graphlm.diff import load_baseline, BaselineState
+        old = {
+            "directory_tree": "t/\n", "import_edges": [],
+            "modules": [{"path": "a.py", "name": "A", "description": "x"}],
+            "data_flow": [], "test_organization": [], "architecture_notes": [],
+            "file_summaries": [], "entry_points": [], "quick_reference": [],
+        }
+        p = tmp_path / "GRAPH.json"
+        p.write_text(json.dumps(old))
+        graph, state = load_baseline(p)
+        assert state == BaselineState.NORMAL
+        assert graph.modules[0].role is None
+        assert graph.modules[0].degree is None
+
+
+class TestImportanceSummary:
+    def test_none_when_unscored(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="a.py", name="a", description="x")])
+        assert importance_summary(g) is None
+
+    def test_names_top_load_bearing(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="app.py", name="a", description="x", role=2.9, degree=2),
+            ModuleDescription(path="leaf.py", name="l", description="x", role=0.1, degree=1)])
+        s = importance_summary(g)
+        assert "app.py" in s and s.index("app.py") < s.index("leaf.py")
+
+
+class TestImportanceMixedScoring:
+    """Partial Jev response: some modules scored, some not (reachable when Jev
+    omits a module from its answer). Scored branch renders, unscored get an
+    em-dash and sort last."""
+
+    def test_mixed_scored_and_unscored(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown, _fused_importance
+        g = CodebaseGraph(directory_tree="t/", modules=[
+            ModuleDescription(path="unscored.py", name="u", description="y"),
+            ModuleDescription(path="scored.py", name="s", description="x", role=2.5, degree=3),
+        ])
+        # fusion covers only the scored module
+        assert set(_fused_importance(g.modules)) == {"scored.py"}
+        section = render_markdown(g).split("## Modules")[1].split("\n##")[0]
+        assert "| Importance |" in section  # scored branch taken
+        rows = [ln for ln in section.splitlines() if "`" in ln]
+        order = [ln.split("`")[1] for ln in rows]
+        assert order == ["scored.py", "unscored.py"]  # unscored sorts last
+        assert "| — | `unscored.py`" in section  # em-dash cell
+
+
+class TestFileImportanceRender:
+    """meta.file_importance renders a File Importance section (directory-granular
+    repos); file-granular repos (no field) are byte-identical to before."""
+
+    def test_section_present_when_file_importance_set(self):
+        from graphlm.models import CodebaseGraph, GraphMeta, FileImportance, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="package")],
+            meta=GraphMeta(created_at="x", file_importance=[
+                FileImportance(path="src/pkg/main.py", role=2.9, degree=5, fused=0.95),
+                FileImportance(path="src/pkg/const.py", role=0.1, degree=8, fused=0.35),
+            ]),
+        )
+        md = render_markdown(g)
+        assert "## File Importance" in md
+        sec = md.split("## File Importance")[1].split("\n##")[0]
+        rows = [ln for ln in sec.splitlines() if ln.startswith("| 0.")]
+        # load-bearing first
+        assert rows[0].split("`")[1] == "src/pkg/main.py"
+        assert rows[1].split("`")[1] == "src/pkg/const.py"
+
+    def test_no_section_and_modules_unchanged_when_absent(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        from graphlm.render import render_markdown
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="b.py", name="B", description="second"),
+                     ModuleDescription(path="a.py", name="A", description="first")],
+        )
+        md = render_markdown(g)
+        assert "## File Importance" not in md
+        # Modules section byte-identical to the pre-feature 3-column, path-sorted form.
+        sec = md.split("## Modules")[1].split("\n##")[0].strip()
+        assert sec == (
+            "| Path | Name | Description |\n"
+            "|------|------|-------------|\n"
+            "| `a.py` | A | first |\n"
+            "| `b.py` | B | second |"
+        )
+
+    def test_summary_prefers_file_importance(self):
+        from graphlm.models import CodebaseGraph, GraphMeta, FileImportance, ModuleDescription
+        from graphlm.render import importance_summary
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="x")],
+            meta=GraphMeta(created_at="x", file_importance=[
+                FileImportance(path="src/pkg/main.py", role=2.9, degree=3, fused=0.95)]),
+        )
+        s = importance_summary(g)
+        assert "src/pkg/main.py" in s

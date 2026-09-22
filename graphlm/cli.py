@@ -46,7 +46,10 @@ def output_destination(project_dir: Path, output_dir: str | None) -> Path:
     """
     if output_dir:
         return Path(output_dir)
-    return Path(project_dir) / GRAPHLM_OUTPUT_DIRNAME
+    # Resolve so `graphlm /symlink/to/project` writes into the real
+    # checkout's `.graphlm/` rather than being refused as an ancestor
+    # symlink after the paid LLM calls (#154). `-o` stays literal.
+    return Path(project_dir).resolve() / GRAPHLM_OUTPUT_DIRNAME
 
 
 def _do_install_skill(
@@ -119,6 +122,47 @@ def _do_serve(project_dir: Path | None, output_dir: str | None) -> None:
     run_server(project.resolve(), json_path.resolve())
 
 
+def _maybe_first_run_setup() -> None:
+    """Offer the setup wizard once, on the first interactive analysis run.
+
+    No-op when the completion marker already exists. Interactive (TTY on stdin)
+    → run the wizard; non-interactive → the wizard prints a one-line ``--setup``
+    hint and returns. Either path writes the marker, so this fires at most once.
+
+    If the wizard actually installed packs, this **exits** (not returns): the
+    install rebuilt the venv this process runs from, so the freshly-installed
+    packs are not importable in-process — continuing would silently produce a
+    graph without the edges the user just asked for. Re-running picks them up.
+
+    Never raises: setup is a convenience, not a gate on the analysis.
+    """
+    import sys
+
+    try:
+        from graphlm.setup import marker_path, run_setup
+
+        if marker_path().exists():
+            return
+        interactive = sys.stdin.isatty()
+        result = run_setup(
+            echo=lambda s: typer.echo(s, err=True),
+            prompt=input if interactive else None,
+            interactive=interactive,
+        )
+        if result.installed:
+            typer.echo(
+                "Packs installed. Re-run `graphlm .` to use them (they are not "
+                "loaded into the current process).",
+                err=True,
+            )
+            raise typer.Exit(0)
+    except typer.Exit:
+        raise
+    except Exception:
+        # A first-run helper must never break the actual analysis.
+        pass
+
+
 @app.command()
 def main(
     project_dir: Path | None = typer.Argument(
@@ -168,6 +212,14 @@ def main(
         "(graphlm[mcp]) and an existing map (run graphlm first). PROJECT_DIR "
         "defaults to '.'; -o points at the map's directory as usual. Register "
         "with e.g. `claude mcp add graphlm -- graphlm --serve /path/to/repo`.",
+    ),
+    setup: bool = typer.Option(
+        False,
+        "--setup",
+        help="Run the first-run setup wizard: choose and install optional packs "
+        "(language grammars, the MCP server, TypeSafe prose scoring) with the "
+        "installer that put graphlm on PATH, then exit. Runs automatically the "
+        "first time graphlm is used interactively.",
     ),
     output_dir: str = typer.Option(
         None,
@@ -278,6 +330,20 @@ def main(
         help="Do not write the GRAPH_DIFF.* graph-vs-graph diff (what changed "
         "in the map since the prior run).",
     ),
+    no_evidence: bool = typer.Option(
+        False,
+        "--no-evidence",
+        help="Do not score the LLM's file summaries against their source with "
+        "TypeSafe/Jev (meta.evidence_support). Off anyway without a "
+        "TYPESAFE_API_KEY, the graphlm[typesafe] extra, or under --no-redact.",
+    ),
+    no_importance: bool = typer.Option(
+        False,
+        "--no-importance",
+        help="Do not score module architectural importance with TypeSafe/Jev "
+        "(the Importance column in GRAPH.md). Off anyway without a "
+        "TYPESAFE_API_KEY or the graphlm[typesafe] extra.",
+    ),
     no_show_cycles: bool = typer.Option(
         False,
         "--no-show-cycles",
@@ -318,15 +384,39 @@ def main(
         _do_serve(project_dir, output_dir)
         raise typer.Exit(0)
 
+    # --setup short-circuits: run the wizard explicitly and exit. project_dir is
+    # unused (the wizard installs into the graphlm install, not a target repo).
+    # Honor the TTY: a piped `--setup` prints the hint instead of blocking on input.
+    if setup:
+        import sys as _sys
+
+        from graphlm.setup import run_setup
+
+        _tty = _sys.stdin.isatty()
+        setup_result = run_setup(
+            echo=lambda s: typer.echo(s, err=True),
+            prompt=input if _tty else None,
+            interactive=_tty,
+        )
+        raise typer.Exit(setup_result.code)
+
     # project_dir is optional in the signature so --install-skill / --serve can
     # run without it; for the analysis path it's required.
     if project_dir is None:
         typer.echo(
             "Error: missing PROJECT_DIR. Pass a directory to analyze, or use "
-            "--install-skill <harness> / --serve / --upgrade. See 'graphlm --help'.",
+            "--install-skill <harness> / --serve / --upgrade / --setup. "
+            "See 'graphlm --help'.",
             err=True,
         )
         raise typer.Exit(2)
+
+    # First-run auto-trigger: if setup has never completed, offer the wizard once
+    # before the first analysis. Interactive only — a non-TTY (piped/CI) run
+    # prints a one-line hint and proceeds, never blocking. The marker is written
+    # either way so this fires at most once. A --dry-run is a real analysis and
+    # is not a reason to skip: the marker will still be written.
+    _maybe_first_run_setup()
 
     typer.echo(f"Scanning {project_dir}...", err=True)
 
@@ -354,6 +444,8 @@ def main(
             cycle_threshold=cycle_threshold,
             include_html=not no_html,
             include_diff=not no_diff,
+            include_evidence=not no_evidence,
+            include_importance=not no_importance,
         )
     except ValueError as e:
         typer.echo(f"Configuration error: {e}", err=True)
@@ -396,7 +488,11 @@ def main(
         raise typer.Exit(0)
 
     dest = output_destination(project_dir, output_dir)
-    written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+    try:
+        written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
     md_path, json_path, html_path = written
     typer.echo(f"Markdown:  {md_path}", err=True)
     typer.echo(f"JSON:      {json_path}", err=True)
@@ -422,7 +518,12 @@ def main(
     # fact per line. Each is omitted when it wasn't measured (no usage from
     # the endpoint / AST off).
     if result.graph.meta is not None:
-        from graphlm.render import faithfulness_summary, usage_summary
+        from graphlm.render import (
+            evidence_summary,
+            faithfulness_summary,
+            importance_summary,
+            usage_summary,
+        )
 
         usage_line = usage_summary(result.graph.meta)
         if usage_line:
@@ -430,6 +531,12 @@ def main(
         faith_line = faithfulness_summary(result.graph.meta)
         if faith_line:
             typer.echo(f"Faithfulness: {faith_line}", err=True)
+        evidence_line = evidence_summary(result.graph.meta)
+        if evidence_line:
+            typer.echo(f"Evidence: {evidence_line}", err=True)
+        importance_line = importance_summary(result.graph)
+        if importance_line:
+            typer.echo(f"Importance: {importance_line}", err=True)
     typer.echo("Done.", err=True)
 
 

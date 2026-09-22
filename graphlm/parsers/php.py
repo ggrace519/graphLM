@@ -47,6 +47,8 @@ class _PhpImport:
     specifier: str  # FQN with \\ or a relative path
     kind: str  # "import" | "include"
     is_relative: bool = True
+    # True for ``use function`` / ``use const`` — parent-file probe (ADR-011).
+    strip_member: bool = False
 
 
 def _fqn_text(node) -> str:
@@ -71,6 +73,13 @@ def _string_content(node) -> str | None:
     if node is None:
         return None
     if node.type == "encapsed_string":
+        # Interpolation (`"config.php$id"`) is not a string literal —
+        # taking the first string_content chunk made a false include
+        # of the prefix file (#147).
+        if any(
+            c.type not in ('"', "'", "string_content") for c in node.children
+        ):
+            return None
         for child in node.children:
             if child.type == "string_content":
                 text = child.text.decode("utf-8")
@@ -86,32 +95,89 @@ def _string_content(node) -> str | None:
 
 
 def _extract(tree) -> list[_PhpImport]:
+    """``use`` and quoted require/include anywhere, including under ``if`` (#114)."""
     out: list[_PhpImport] = []
-    for node in tree.root_node.children:
-        if node.type == "namespace_use_declaration":
+
+    def _unwrap_string(node):
+        """String argument of require, unwrapping parens and ``or die``.
+
+        Concatenation (``__DIR__ . "/x.php"``, operator ``.``) stays a
+        policy drop. Logical ``or`` / ``||`` / ``and`` / ``&&`` wrap a
+        real string literal (``require 'b.php' or die();``, #135).
+        """
+        if node.type in ("encapsed_string", "string"):
+            return node
+        if node.type == "parenthesized_expression":
             for child in node.children:
-                if child.type == "namespace_use_clause":
-                    fqn = _use_fqn(child)
-                    if fqn:
-                        out.append(_PhpImport(specifier=fqn, kind="import"))
-            continue
-        if node.type != "expression_statement":
-            continue
+                found = _unwrap_string(child)
+                if found is not None:
+                    return found
+            return None
+        if node.type == "binary_expression":
+            ops = {c.type for c in node.children}
+            if "." in ops:
+                return None
+            if ops & {"or", "||", "and", "&&"}:
+                for child in node.children:
+                    found = _unwrap_string(child)
+                    if found is not None:
+                        return found
+        return None
+
+    def _take_require(node) -> None:
+        expr = None
         for child in node.children:
-            if child.type not in _REQUIRE_TYPES:
-                continue
-            expr = None
-            for gc in child.children:
-                if gc.type in ("encapsed_string", "string"):
-                    expr = gc
-                    break
-            literal = _string_content(expr)
-            if literal:
-                spec = literal.replace("\\", "/").strip()
-                if spec:
-                    out.append(_PhpImport(specifier=spec, kind="include"))
-            else:
-                out.append(_PhpImport(specifier="", kind="include", is_relative=False))
+            found = _unwrap_string(child)
+            if found is not None:
+                expr = found
+                break
+        literal = _string_content(expr)
+        if literal:
+            spec = literal.replace("\\", "/").strip()
+            if spec:
+                out.append(_PhpImport(specifier=spec, kind="include"))
+                return
+        out.append(_PhpImport(specifier="", kind="include", is_relative=False))
+
+    def _visit(node) -> None:
+        if node.type == "namespace_use_declaration":
+            prefix = ""
+            # ``use function`` / ``use const`` may sit on the declaration
+            # (grouped) or on the clause (plain).
+            decl_strip = any(c.type in ("function", "const") for c in node.children)
+            for child in node.children:
+                if child.type == "namespace_name":
+                    prefix = child.text.decode("utf-8").strip("\\")
+
+            def _clauses(n) -> None:
+                if n.type == "namespace_use_clause":
+                    fqn = _use_fqn(n)
+                    if fqn:
+                        if prefix and "\\" not in fqn:
+                            fqn = prefix + "\\" + fqn
+                        clause_strip = decl_strip or any(
+                            gc.type in ("function", "const") for gc in n.children
+                        )
+                        out.append(
+                            _PhpImport(
+                                specifier=fqn,
+                                kind="import",
+                                strip_member=clause_strip,
+                            )
+                        )
+                    return
+                for child in n.children:
+                    _clauses(child)
+
+            _clauses(node)
+            return
+        if node.type in _REQUIRE_TYPES:
+            _take_require(node)
+            return
+        for child in node.children:
+            _visit(child)
+
+    _visit(tree.root_node)
     return out
 
 
@@ -123,6 +189,11 @@ def _source_roots(known: set[str]) -> tuple[str, ...]:
         parts = _posix_rel(path).split("/")[:-1]
         if "src" in parts:
             idx = parts.index("src")
+            if any(
+                p in {"tests", "test", "__tests__", "vendor", "stubs", "stub", "fixtures"}
+                for p in parts[:idx]
+            ):
+                continue
             roots.add("/".join(parts[: idx + 1]) + "/")
     return tuple(sorted(roots, key=len))
 
@@ -176,12 +247,20 @@ def _norm_rel(path: str) -> str | None:
     return "/".join(parts)
 
 
-def _resolve_use(fqn: str, known: set[str], roots: tuple[str, ...]) -> list[str]:
+def _resolve_use(
+    fqn: str,
+    known: set[str],
+    roots: tuple[str, ...],
+    strip_member: bool = False,
+) -> list[str]:
     parts = [p for p in fqn.replace("\\", "/").split("/") if p]
     if not parts:
         return []
     candidates = ["/".join(parts) + ".php"]
-    if len(parts) >= 2:
+    # Parent-file probe is for ``use function`` / ``use const`` only
+    # (ADR-011). A class ``use App\Models\User`` must not hit Models.php
+    # when User.php is absent (#129).
+    if strip_member and len(parts) >= 2:
         candidates.append("/".join(parts[:-1]) + ".php")
     hit = _first_known_rooted(tuple(candidates), known, roots)
     return [hit] if hit else []
@@ -207,7 +286,9 @@ def _resolve_import(
         return []
     if imp.kind == "include":
         return _resolve_require(imp.specifier, from_path, known)
-    return _resolve_use(imp.specifier, known, roots)
+    return _resolve_use(
+        imp.specifier, known, roots, strip_member=imp.strip_member
+    )
 
 
 def _edge_kind(imp: _PhpImport) -> str:

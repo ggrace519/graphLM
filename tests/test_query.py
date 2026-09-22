@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
 
 from graphlm import query
+
+# Semantic-find tests that reach ``_run_relevance`` need the real
+# ``typesafe_sdk`` types (``Noul``/``NoulCriteria``) even with a fake client
+# injected — the fake only substitutes the network call, not the request
+# objects. So they skip without the extra, exactly like ``tests/test_evidence.py``
+# and the language-pack tests. The gating tests below (no key / empty query)
+# short-circuit before that import and run unconditionally.
+_HAS_TYPESAFE = importlib.util.find_spec("typesafe_sdk") is not None
 from graphlm.models import (
     ArchitectureNote,
     CodebaseGraph,
@@ -124,6 +133,20 @@ class TestResolvePath:
         assert match is None and len(cands) > 1  # no "/py" suffix; many substring hits
         match, cands = query.resolve_path(index, "core")
         assert match == "app/core.py"  # unique substring
+
+    def test_dotted_query_does_not_substring_match_data_py(self):
+        """'a.py' in 'data.py' must not uniquely resolve (#140)."""
+        idx = query.build_index(
+            CodebaseGraph(
+                directory_tree="",
+                import_edges=[_edge("data.py", "z.py")],
+                modules=[
+                    ModuleDescription(path="data.py", name="data", description="DATA"),
+                ],
+            )
+        )
+        match, cands = query.resolve_path(idx, "a.py")
+        assert match is None and cands == []
 
     def test_ambiguous_suffix_returns_only_suffix_candidates(self):
         idx = query.build_index(
@@ -354,3 +377,90 @@ class TestLoadMap:
         (tmp_path / "GRAPH.json").write_text("{not json", encoding="utf-8")
         with pytest.raises(query.MapUnavailable, match="could not be read"):
             query.load_map(tmp_path / "GRAPH.json")
+
+
+class _RelAns:
+    def __init__(self, noul): self.noul = noul
+
+
+class _RelResp:
+    def __init__(self, nouls): self.nouls = nouls
+
+
+class _RelClient:
+    """Fake Jev client: returns a relevance per question from `by_key`."""
+    def __init__(self, by_key):
+        self.by_key = by_key
+        self.calls = 0
+
+    def system_one(self, *, state, questions, timeout=None):
+        self.calls += 1
+        return _RelResp({k: _RelAns(self.by_key.get(k, 0.1)) for k in questions})
+
+
+@pytest.mark.skipif(not _HAS_TYPESAFE, reason="needs the typesafe extra for the real Noul types")
+class TestSemanticFind:
+    def test_ranks_by_relevance(self):
+        # The corpus is file_summaries (file-level); c0..cN follow summary order.
+        from graphlm.models import CodebaseGraph, FileSummary
+        g = CodebaseGraph(directory_tree="t/", file_summaries=[
+            FileSummary(path="a.py", summary="alpha"),
+            FileSummary(path="b.py", summary="beta"),
+            FileSummary(path="c.py", summary="gamma"),
+        ])
+        by_key = {"c2": 0.97, "c0": 0.05}  # make the LAST candidate most relevant
+        res = query.semantic_find(query.build_index(g), "some question",
+                                  api_key="k", client=_RelClient(by_key))
+        assert res["available"] is True and res["hits"]
+        assert res["hits"][0]["relevance"] == 0.97
+        assert res["hits"][0]["path"] == "c.py"
+        rels = [h["relevance"] for h in res["hits"]]
+        assert rels == sorted(rels, reverse=True)
+
+    def test_scores_files_not_directory_modules(self):
+        # A large-repo shape: directory modules + file-level summaries. Semantic
+        # search must rank FILES (the file-level corpus), not the coarse dirs (#6).
+        from graphlm.models import CodebaseGraph, ModuleDescription, FileSummary
+        g = CodebaseGraph(
+            directory_tree="src/",
+            modules=[ModuleDescription(path="src/pkg", name="pkg", description="a package")],
+            file_summaries=[
+                FileSummary(path="src/pkg/auth.py", summary="login and token handling"),
+                FileSummary(path="src/pkg/db.py", summary="database access layer"),
+            ],
+        )
+        res = query.semantic_find(query.build_index(g), "where is login handled?",
+                                  api_key="k", client=_RelClient({"c0": 0.95, "c1": 0.1}))
+        assert res["hits"][0]["kind"] == "file"
+        assert res["hits"][0]["path"] == "src/pkg/auth.py"  # a FILE, not src/pkg
+
+    def test_falls_back_to_modules_without_summaries(self):
+        from graphlm.models import CodebaseGraph, ModuleDescription
+        g = CodebaseGraph(
+            directory_tree="t/",
+            modules=[ModuleDescription(path="a.py", name="a", description="alpha"),
+                     ModuleDescription(path="b.py", name="b", description="beta")],
+        )
+        res = query.semantic_find(query.build_index(g), "q", api_key="k",
+                                  client=_RelClient({"c0": 0.9, "c1": 0.2}))
+        assert res["hits"][0]["kind"] == "module" and res["hits"][0]["path"] == "a.py"
+
+    def test_client_error_signals_unavailable(self, index):
+        class _Boom:
+            def system_one(self, **k):
+                raise RuntimeError("jev down")
+        res = query.semantic_find(index, "q", api_key="k", client=_Boom())
+        assert res["available"] is False  # caller falls back to find
+
+
+class TestSemanticFindGating:
+    """The unavailable/empty paths short-circuit *before* the SDK import, so
+    they run without the typesafe extra (no ``skipif``)."""
+
+    def test_no_key_signals_unavailable(self, index):
+        res = query.semantic_find(index, "q", api_key=None, client=_RelClient({}))
+        assert res["available"] is False and res["hits"] == []
+
+    def test_empty_query_is_available_empty(self, index):
+        res = query.semantic_find(index, "   ", api_key="k", client=_RelClient({}))
+        assert res["available"] is True and res["hits"] == []

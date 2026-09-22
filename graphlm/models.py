@@ -22,12 +22,30 @@ class ImportEdge(BaseModel):
 
 
 class ModuleDescription(BaseModel):
-    """A single module/component in the codebase."""
+    """A single module/component in the codebase.
+
+    ``role`` and ``degree`` are the two raw components of module importance,
+    filled locally (never LLM-emitted, like ``directory_tree``). ``role`` is the
+    TypeSafe/Jev semantic role score (0 = leaf … 3 = orchestrator); ``degree`` is
+    the deterministic in+out import degree (parser ground truth). They are kept
+    separate — not pre-fused — so a reader can audit each signal and the display
+    weighting can change without rewriting ``GRAPH.json``. Both ``None`` when
+    importance scoring did not run (TypeSafe off / ``--no-importance``); "not
+    scored" must never read as zero.
+    """
 
     path: str = Field(description="File or directory path relative to project root")
     name: str = Field(description="Human-readable module name")
     description: str = Field(
         description="One-line description of what the module does"
+    )
+    role: Optional[float] = Field(
+        default=None,
+        description="Jev semantic role score, 0 (leaf) to 3 (orchestrator), or null.",
+    )
+    degree: Optional[int] = Field(
+        default=None,
+        description="In+out import degree from AST edges (structural centrality), or null.",
     )
 
 
@@ -182,6 +200,73 @@ class Faithfulness(BaseModel):
     matched: int = Field(description="Edges present on both sides.")
 
 
+class FileScore(BaseModel):
+    """One file's evidence-support probability (a low outlier worth surfacing)."""
+
+    path: str = Field(description="File path relative to project root.")
+    score: float = Field(
+        description="Probability (0-1) that the file's summary is supported by the "
+        "source the model saw. Low = the claim outruns its evidence."
+    )
+
+
+class EvidenceSupport(BaseModel):
+    """How well the LLM's prose is supported by the source the model actually saw.
+
+    Computed locally by ``graphlm.evidence.score`` — a TypeSafe/Jev Noul per
+    ``file_summary``, asking whether the summary's role + named symbols match the
+    *source that was sent* (the redacted/skeletonised/truncated ``frag.content``,
+    not the file on disk). Like ``Faithfulness``, this is a downstream-trust
+    **weight**, not a hallucination accusation: a skeletonised or truncated
+    fragment lowers the score **by design**, because the model was asked to
+    describe a file it only partially saw.
+
+    ``None`` (``meta.evidence_support`` absent) when scoring did not run — TypeSafe
+    off (no key / SDK not installed / ``--no-evidence``), redaction disabled
+    (``--no-redact`` — the source must not reach a third party unredacted), on a
+    dry run, or when no summary had a pass-2 fragment to score against. "Not
+    scored" must never read as "scored zero".
+
+    ``scored`` counts summaries actually sent to Jev; ``skipped`` counts summaries
+    not scored because there was no evidence to compare against — the file was not
+    in the pass-2 set (written from the tree alone), or its source is too thin to
+    verify a claim (a near-empty ``__init__`` or bare entry point defines nothing,
+    so the support judgment has no signal and would score a correct summary ~0.2).
+    """
+
+    mean: Optional[float] = Field(
+        default=None,
+        description="Mean support probability over scored summaries, or null if none.",
+    )
+    scored: int = Field(description="Summaries scored (had a pass-2 fragment).")
+    skipped: int = Field(
+        description="Summaries skipped — no pass-2 fragment, or source too thin "
+        "to verify a claim against (near-empty file). Not scored."
+    )
+    low: list[FileScore] = Field(
+        default_factory=list,
+        description="Summaries below the low-support threshold, worst first.",
+    )
+
+
+class FileImportance(BaseModel):
+    """One file's importance, at file granularity.
+
+    Filled only when the LLM described ``modules`` at *directory* granularity (large
+    repos), where the module-level ``role``/``degree`` are too coarse. The importance
+    is then scored over ``file_summaries`` (always file-level) and stamped here in
+    ``meta`` instead of onto ``modules`` — ``modules`` is a diff-compared field, and
+    at file granularity there is no graph object that carries importance without a new
+    diff key. ``role`` is the Jev semantic score (0-3), ``degree`` the per-file in+out
+    import degree, ``fused`` the renderer's blend (0-1). See ADR-015 / INNOVATIONS #6.
+    """
+
+    path: str = Field(description="File path relative to project root.")
+    role: float = Field(description="Jev semantic role score, 0 (leaf) to 3 (orchestrator).")
+    degree: int = Field(description="In+out import degree (structural centrality).")
+    fused: float = Field(description="Fused importance (0-1), the renderer's blend.")
+
+
 class GraphMeta(BaseModel):
     """Provenance stamp: when the graph was generated and against which commit.
 
@@ -223,6 +308,19 @@ class GraphMeta(BaseModel):
         default=None,
         description="LLM import_edges vs AST deterministic_edges agreement. "
         "Null when AST was off or on a dry run.",
+    )
+    evidence_support: Optional[EvidenceSupport] = Field(
+        default=None,
+        description="How well the LLM's file summaries are supported by the source "
+        "the model saw (TypeSafe/Jev). Null when TypeSafe is off, --no-redact, on a "
+        "dry run, or no summary had a pass-2 fragment.",
+    )
+    file_importance: Optional[list[FileImportance]] = Field(
+        default=None,
+        description="File-level importance (Jev role x degree), most load-bearing "
+        "first. Filled only on directory-granular graphs, where the module-level "
+        "role/degree are too coarse; null otherwise (module importance is on the "
+        "modules themselves). Additive optional — GRAPH_META_SCHEMA_VERSION stays 1.",
     )
 
 

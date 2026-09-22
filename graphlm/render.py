@@ -3,10 +3,63 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from graphlm.mermaid import render_mermaid
-from graphlm.models import CodebaseGraph, Cycle, GraphMeta
+from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
+
+# Module-importance display weighting. Applied HERE, at render time, to the two
+# raw components stored on each module (Jev ``role`` 0–3, structural ``degree``) —
+# never baked into GRAPH.json — so the blend can be retuned without rewriting the
+# map. Role leads (semantic centrality is the point; degree corrects for a module
+# that under- or over-describes itself). Not yet calibrated beyond one fixture;
+# kept as named constants for exactly that reason.
+_ROLE_WEIGHT = 0.6
+_DEGREE_WEIGHT = 0.4
+
+
+def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | None:
+    """Fuse each module's role + degree into a 0–1 importance, or None if unscored.
+
+    Returns ``None`` when no module has a ``role`` (importance scoring was off) —
+    the signal to render exactly as before. Degree is rank-normalised across the
+    scored modules (absolute counts vary wildly by repo size); role is scaled 0–3
+    → 0–1. A module with a role but (defensively) no degree uses degree 0.
+    """
+    scored = [m for m in modules if m.role is not None]
+    if not scored:
+        return None
+    degrees = sorted({(m.degree or 0) for m in scored})
+    # rank-normalise degree: smallest → 0, largest → 1 (ties share a rank)
+    dmax = len(degrees) - 1
+    drank = {d: (i / dmax if dmax else 1.0) for i, d in enumerate(degrees)}
+    out: dict[str, float] = {}
+    for m in scored:
+        role_n = (m.role or 0.0) / 3.0
+        deg_n = drank.get(m.degree or 0, 0.0)
+        out[m.path] = _ROLE_WEIGHT * role_n + _DEGREE_WEIGHT * deg_n
+    return out
+
+
+def importance_summary(graph: CodebaseGraph, top: int = 3) -> str | None:
+    """One terse clause naming the most load-bearing files/modules, or None.
+
+    Prefers the **file-level** importance in ``meta.file_importance`` (filled on
+    directory-granular repos, INNOVATIONS #6), falling back to the module-level fusion
+    off ``graph.modules``. ``None`` when importance scoring did not run. Shared by
+    ``GRAPH.md`` and the CLI ``Importance:`` line so the ranking is single-sourced.
+    """
+    fi = graph.meta.file_importance if graph.meta else None
+    if fi:
+        ranked = [(f.path, f.fused) for f in fi[:top]]  # already sorted load-bearing first
+    else:
+        importance = _fused_importance(graph.modules)
+        if not importance:
+            return None
+        ranked = sorted(importance.items(), key=lambda kv: (-kv[1], kv[0]))[:top]
+    named = ", ".join(f"{p} ({s:.2f})" for p, s in ranked)
+    return f"most load-bearing: {named}"
 
 
 def _render_directive(meta: GraphMeta) -> str:
@@ -92,16 +145,46 @@ def faithfulness_summary(meta: GraphMeta) -> str | None:
     )
 
 
+def evidence_summary(meta: GraphMeta) -> str | None:
+    """One terse clause on how well the LLM's summaries are backed by their source.
+
+    ``None`` when evidence scoring did not run (TypeSafe off, ``--no-redact``, a
+    dry run, or nothing to score). A low mean, or named low outliers, means the
+    prose claims more than the source the model saw supports — a trust weight,
+    not a hallucination verdict (a skeletonised fragment lowers it by design).
+    Shared by ``GRAPH.md`` and the CLI so the wording cannot drift.
+    """
+    e = meta.evidence_support
+    if e is None:
+        return None
+    mean = "n/a" if e.mean is None else f"{e.mean:.2f}"
+    text = (
+        f"summary evidence support: mean {mean} "
+        f"(n={e.scored} scored, {e.skipped} skipped)"
+    )
+    if e.low:
+        worst = ", ".join(f"{fs.path} {fs.score:.2f}" for fs in e.low[:3])
+        text += f"; weakest: {worst}"
+    return text
+
+
 def _render_telemetry(meta: GraphMeta) -> str | None:
     """Render the run-telemetry blockquote line under the directive, or None.
 
-    Both halves are optional (a dry run has neither; ``--no-ast`` has no
-    faithfulness; an endpoint may report no usage) — whichever is present is
-    shown, and the line is omitted entirely when neither is. Terse on purpose:
-    this is read by agents deciding how much to trust the LLM's edge table.
+    Each part is optional (a dry run has none; ``--no-ast`` has no faithfulness;
+    TypeSafe off has no evidence support; an endpoint may report no usage) —
+    whichever are present are shown, and the line is omitted entirely when none
+    is. Terse on purpose: this is read by agents deciding how much to trust the
+    LLM's edge table and prose.
     """
     parts = [
-        p for p in (usage_summary(meta), faithfulness_summary(meta)) if p is not None
+        p
+        for p in (
+            usage_summary(meta),
+            faithfulness_summary(meta),
+            evidence_summary(meta),
+        )
+        if p is not None
     ]
     if not parts:
         return None
@@ -183,10 +266,48 @@ def render_markdown(graph: CodebaseGraph) -> str:
     # Modules
     if graph.modules:
         lines.append("## Modules\n")
-        lines.append("| Path | Name | Description |")
-        lines.append("|------|------|-------------|")
-        for mod in sorted(graph.modules, key=lambda m: m.path):
-            lines.append(f"| `{mod.path}` | {mod.name} | {mod.description} |")
+        importance = _fused_importance(graph.modules)
+        if importance is None:
+            # Importance scoring was off — render exactly as before (no column,
+            # path sort). This branch must stay byte-identical to the pre-feature
+            # output; a test pins it.
+            lines.append("| Path | Name | Description |")
+            lines.append("|------|------|-------------|")
+            for mod in sorted(graph.modules, key=lambda m: m.path):
+                lines.append(f"| `{mod.path}` | {mod.name} | {mod.description} |")
+        else:
+            # Load-bearing first (fused importance desc), path as a stable tiebreak.
+            lines.append("| Importance | Path | Name | Description |")
+            lines.append("|-----------:|------|------|-------------|")
+            ordered = sorted(
+                graph.modules,
+                key=lambda m: (-importance.get(m.path, -1.0), m.path),
+            )
+            for mod in ordered:
+                score = importance.get(mod.path)
+                cell = "—" if score is None else f"{score:.2f}"
+                lines.append(
+                    f"| {cell} | `{mod.path}` | {mod.name} | {mod.description} |"
+                )
+        lines.append("")
+
+    # File importance — on directory-granular repos the Modules table above is
+    # packages, so file-level load-bearing ranking (Jev, INNOVATIONS #6) gets its
+    # own section. Absent entirely when meta.file_importance is None (the common,
+    # file-granular case), so no repo without it sees any change here.
+    fi = graph.meta.file_importance if graph.meta else None
+    if fi:
+        lines.append("## File Importance\n")
+        lines.append(
+            "Most load-bearing files (Jev semantic role × structural degree), "
+            "since modules above are directory-level.\n"
+        )
+        lines.append("| Importance | File | Role | Degree |")
+        lines.append("|-----------:|------|-----:|-------:|")
+        for f in fi[:40]:
+            lines.append(
+                f"| {f.fused:.2f} | `{f.path}` | {f.role:.2f} | {f.degree} |"
+            )
         lines.append("")
 
     # Data flow
@@ -352,6 +473,29 @@ class WriteResult(tuple):
         return (tuple(self), {"diff_md": self.diff_md, "diff_json": self.diff_json})
 
 
+def _refuse_symlink(path: Path) -> None:
+    """Refuse to write through a symlink (same contract as ``skills.py``, #33).
+
+    ``Path.write_text`` follows the link, so a cloned repo that plants
+    ``.graphlm/GRAPH.json`` → ``~/.bashrc`` (or ``.graphlm`` → ``$HOME``)
+    would overwrite a file graphlm did not create. Ancestor directory
+    symlinks are the same hole: ``decoy → victim`` plus ``-o decoy/out``
+    would mkdir and write inside ``victim``.
+    """
+    if path.is_symlink():
+        raise ValueError(
+            f"refusing to write through a symlink at {path} — graphlm won't "
+            "overwrite a file it didn't create. Remove the symlink and re-run."
+        )
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ValueError(
+                f"refusing to write through a symlink at {parent} — graphlm "
+                "won't overwrite a file it didn't create. Remove the symlink "
+                "and re-run."
+            )
+
+
 def write_outputs(
     graph: CodebaseGraph,
     output_dir: Path,
@@ -388,11 +532,19 @@ def write_outputs(
         render_diff_markdown,
     )
 
-    output_dir = output_dir.resolve()
+    # Do not Path.resolve() — that follows a directory symlink and would
+    # write GRAPH.* into the resolved target (e.g. .graphlm → $HOME).
+    output_dir = Path(output_dir)
+    if not output_dir.is_absolute():
+        output_dir = Path.cwd() / output_dir
+    output_dir = Path(os.path.normpath(output_dir))
+    _refuse_symlink(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = output_dir / f"{md_suffix}.md"
     json_path = output_dir / f"{json_suffix}.json"
+    _refuse_symlink(md_path)
+    _refuse_symlink(json_path)
 
     # Read the prior graph BEFORE overwriting GRAPH.json (ADR-002 decision 1 —
     # ordering: baseline read must precede the write).
@@ -407,6 +559,7 @@ def write_outputs(
     html_path: Path | None = None
     if html:
         html_path = output_dir / f"{html_suffix}.html"
+        _refuse_symlink(html_path)
         html_path.write_text(_render_html(graph), encoding="utf-8")
 
     diff_md_path: Path | None = None
@@ -416,6 +569,8 @@ def write_outputs(
         graph_diff = compute_diff(old_graph, graph, baseline_state)
         diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
         diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
+        _refuse_symlink(diff_md_path)
+        _refuse_symlink(diff_json_path)
         diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
         diff_json_path.write_bytes(render_diff_json(graph_diff))
 

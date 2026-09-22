@@ -4,6 +4,175 @@ Significant, hard-to-reverse decisions for graphLM. Newest first.
 
 ---
 
+## ADR-015 — Module importance: two raw components, fused at render time
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`evidence.score_importance`, `ModuleDescription.role`/`degree`)
+
+### Context
+
+The map lists modules but not which are load-bearing. Structural import degree
+(already computed for the Mermaid layout) conflates "imported a lot" (a constants
+leaf) with "architecturally central" (the orchestrator). A spike showed TypeSafe/Jev
+supplies the missing semantic role: a Score over a leaf→orchestrator ladder ranked
+the tetris fixture perfectly, and on a live run the two signals *disagreed usefully* —
+`settings.py` was degree-#1 (imported everywhere) but Jev-role-last (a leaf), while a
+low-degree entry point ranked high. This is the half of the "pass 2 to Jev" idea that
+worked; the refine feedback loop (a second generative pass) is a separate, still-open
+question, not part of this.
+
+### Decisions
+
+1. **Two raw components on `ModuleDescription`, not a pre-fused float.** `role`
+   (Jev, 0–3) and `degree` (structural) are stored separately in `GRAPH.json`. The
+   fusion (`0.6·role + 0.4·degree_norm`, a named renderer constant) happens in
+   `render.py` at display time — so the weighting can be retuned without rewriting
+   every module's value, and a reader can audit each signal. Mirrors how
+   `Faithfulness`/`EvidenceSupport` expose raw counts, not just a derived ratio.
+   Additive-optional → schema unchanged; an old `GRAPH.json` diffs `NORMAL`.
+2. **No `--no-redact` gate** (unlike `evidence.score`). Importance sends module
+   *descriptions* + an integer *degree*, never file source, so redaction is
+   irrelevant; gating on it would deny importance to `--no-redact` users for no
+   reason. Gated on key + `typesafe` extra + `--no-importance` only.
+3. **Best-effort, never costs the graph.** `score_importance` never raises (broad
+   `except → None`), and `generate_graph` wraps the fill in a second guard — a Jev
+   failure leaves `role`/`degree` `None`, never a fake zero, and the paid graph is
+   always returned. Filled locally after pass 2, never LLM-emitted (not in the
+   pass-2 instruction block).
+4. **Byte-identical fallback.** When importance is off (no module scored), the
+   `## Modules` table renders exactly as before (no column, path sort) — pinned by a
+   golden test, not just asserted.
+
+### Consequences
+
+- The rendered map's Modules section changes shape when Jev is on (an Importance
+  column, load-bearing-first) and is untouched when off.
+- The renderer-side fusion weight is uncalibrated beyond one fixture; keeping the
+  components raw means changing it later is a render change, not a data migration.
+- HTML node-sizing by importance is a deliberate follow-up, not in this change.
+
+---
+
+## ADR-014 — Prose evidence-support scoring via TypeSafe/Jev
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`graphlm/evidence.py`, `meta.evidence_support`)
+
+### Context
+
+graphlm had an exact oracle for its import *edges* (`faithfulness.py`: LLM
+`import_edges` vs. AST `deterministic_edges`) but **none** for its *prose* — the
+`file_summaries` the model writes. Live spikes showed TypeSafe's Jev (a Noul →
+calibrated probability) discriminates a supported summary from a hallucinated one
+cleanly (real+own-source 0.78, mismatched-file 0.012, injected-fake-symbol 0.051;
+12/12 real beat their corrupted twin), and even flagged a real defect (a
+truncated-mid-symbol summary scored 0.23). The `graphlm[typesafe]` extra exists
+(ADR-013) but nothing consumed it.
+
+### Decisions
+
+1. **Score prose, not edges.** A new `meta.evidence_support` (sibling of
+   `faithfulness`), filled locally after pass 2, one **SOFT Noul** per
+   `file_summary`. SOFT ("role + real symbols match; minor unverifiable detail
+   acceptable; a wrong role or invented symbol is not") — validated to keep
+   discrimination while tolerating the detail a skeletonised fragment can't
+   confirm. It is a **trust weight, not a hallucination verdict**: skeleton/
+   truncation lowers it by design, same framing as `faithfulness`.
+2. **Score against the evidence the model saw** — `pass2_files` `frag.content`
+   (redacted/skeletonised/truncated), **never** disk bytes or
+   `parsers._source_bytes` (unredacted → a third-party leak, and it would score
+   the file rather than the claim-vs-evidence). A summary with no pass-2 fragment
+   is **skipped**, never scored against content the model never received.
+3. **Off unless safe and wanted.** `None` (never a fake zero) when **any** of:
+   `--no-evidence`, `--no-redact` (TypeSafe is a *different* third party than
+   graphlm's own endpoint — unredacted source must not reach it), no
+   `TYPESAFE_API_KEY`, the `typesafe-sdk` extra absent, or a dry run.
+4. **Best-effort, never costs the graph.** It runs after the paid pass-2 call, so
+   `evidence.score` never raises (broad `except → None`, like `diff.load_baseline`)
+   **and** `generate_graph` wraps the fill in a second guard. A failure leaves the
+   field `None`; the finished graph is always returned. Additive optional →
+   `GRAPH_META_SCHEMA_VERSION` stays 1 (ADR-001).
+5. **Injectable client, function-local SDK import.** `score(..., client=None)`
+   lets the no-network test suite drive a fake; the `typesafe_sdk` import is
+   inside the run path so a base install without the extra never ImportErrors, and
+   nothing outside `evidence.py` imports it (the `mcp_server.py` rule).
+
+### Consequences
+
+- A user on the base install (no extra / no key) sees no change and no new
+  dependency; the field is simply absent.
+- Expose per-file low outliers, not just a mean — a mean of 0.81 is not
+  actionable, but "`models.py` 0.23" is (it caught a real truncation).
+- The `typesafe-sdk` extra is now a real dev-test dependency (the unit tests need
+  the real `Noul` types); the CLAUDE.md Commands block gains its `--extra typesafe`
+  line.
+
+---
+
+## ADR-013 — First-run setup wizard; TypeSafe is an opt-in extra
+
+**Date:** 2026-09-21
+**Status:** Accepted — implemented (`graphlm/setup.py`, `--setup` + auto-first-run on the CLI)
+
+### Context
+
+graphlm's capabilities are gated behind optional extras (`[js]`…`[php]`, `[mcp]`)
+so the base install stays lean and vendor-neutral (bring-your-own OpenAI-compatible
+endpoint). The cost is discoverability: a user never learns their JS/TS files
+produce zero parser edges because the `[js]` wheel isn't installed. Adding
+TypeSafe/Jev prose scoring sharpened the tension — its SDK talks to a *commercial
+third-party API* and needs a key, so it must never be a base dependency forced on
+every `pip install graphlm`. An earlier draft that auto-enabled it on key presence
+was rejected: it designed around one developer's local machine, not the shipped
+product.
+
+### Decisions
+
+1. **A first-run setup wizard** (`graphlm --setup`, and an automatic prompt on the
+   first interactive analysis) lists the not-yet-installed optional packs and
+   installs the chosen ones. Optional packs stay optional — **nothing here becomes
+   a base dependency**.
+2. **Reuse the upgrade installer machinery, don't reinvent it.** `setup.py` imports
+   `upgrade.detect_installer` / `installed_extras` / `_abs_no_follow` / `_spec` /
+   `_collapse_extras`. The install spec is the **union** of already-installed +
+   selected extras (`uv tool install --force` / `uv pip install --python <exe>` /
+   `pipx install --force` / `python -m pip install`), so no existing pack is dropped.
+   Same #71 rule: never `Path.resolve()` the interpreter. A source checkout is
+   refused (→ `uv sync --extra`).
+3. **Auto-trigger is interactive-only and fires once.** Marker absent AND stdin a
+   TTY → run the wizard; non-TTY (piped/CI) → print a one-line `--setup` hint and
+   proceed, never blocking. A `~/.config/graphlm/.setup-done` marker (XDG-aware,
+   symlink-refusing #33) records completion so it does not re-prompt.
+   **A piped first run consumes the one-shot**: the non-TTY path writes the marker
+   too, so a CI/piped first invocation sees the hint once and never again on that
+   machine. This is deliberate — re-emitting a setup hint on every automated run
+   would be noise exactly where it is least wanted; a user who wants the wizard runs
+   `graphlm --setup`. If the packs were **actually installed** in an auto-trigger run
+   (only possible interactively), graphlm **exits** with a "re-run" message instead of
+   continuing: the forced reinstall rebuilt the venv this process runs from, so the
+   new packs are not importable in-process and continuing would silently omit the
+   edges the user just asked for.
+4. **`run_setup` never raises past its boundary** — installer failure → manual
+   command, detection crash → fall back to `pip`. A first-run helper must not block
+   the actual analysis.
+5. **TypeSafe ships as the opt-in extra `graphlm[typesafe]`**, NOT a core dependency
+   and NOT part of `graphlm[all]` (which is languages only, like `mcp` is separate).
+   The wizard offers it and, on selection, instructs adding `TYPESAFE_API_KEY` to
+   `~/.config/graphlm/.env` (the only config `.env` graphlm loads — ADR-009). Nothing
+   imports the SDK yet; it lands ahead of the prose evidence-scoring feature.
+
+### Consequences
+
+- A random `pip install graphlm` gains no new paid dependency and no vendor coupling;
+  the base tool stays endpoint-neutral.
+- `_union_extras` must re-append `typesafe` after `_collapse_extras` (that helper only
+  knows languages/`all`/`mcp` and would silently drop an unknown extra).
+- The wizard is fully injectable (`runner`/`prompt`/`which`/`home`), so
+  `tests/test_setup.py` covers every installer branch with no network; a dev checkout
+  detects as `source`, so CI never runs a real install.
+
+---
+
 ## ADR-012 — `graphlm --upgrade` is a flag, not a subcommand
 
 **Date:** 2026-09-04

@@ -134,10 +134,13 @@ def build_index(graph: CodebaseGraph) -> MapIndex:
 def resolve_path(index: MapIndex, path: str) -> tuple[Optional[str], list[str]]:
     """Map a user-supplied path onto a known map path.
 
-    Returns ``(match, candidates)``: an exact (or unique suffix/substring)
-    match, or ``None`` plus the candidate list when the query is ambiguous or
-    unknown. Suffix match first so ``cli.py`` finds ``graphlm/cli.py`` even in
-    a repo that also has ``tests/test_cli.py``.
+    Returns ``(match, candidates)``: an exact (or unique suffix / unique
+    extensionless substring) match, or ``None`` plus the candidate list
+    when the query is ambiguous or unknown. Suffix match first so
+    ``cli.py`` finds ``graphlm/cli.py`` even in a repo that also has
+    ``tests/test_cli.py``. File-like queries (a basename containing
+    ``.``) skip the unanchored substring fallback so ``a.py`` cannot
+    uniquely match ``data.py`` (#140).
     """
     q = _norm(path)
     if q in index.known_paths:
@@ -157,6 +160,11 @@ def resolve_path(index: MapIndex, path: str) -> tuple[Optional[str], list[str]]:
     )
     if prefixed:
         return prefixed[0], []
+    # Unanchored substring is for extensionless names (`core` →
+    # `app/core.py`). A dotted query already had its suffix/prefix
+    # chance; `'a.py' in 'data.py'` is the #85 footgun (#140).
+    if "." in q.rsplit("/", 1)[-1]:
+        return None, []
     lowered = q.lower()
     contains = [p for p in known if lowered in p.lower()]
     if len(contains) == 1:
@@ -402,6 +410,101 @@ def find(index: MapIndex, query: str, limit: int = 20) -> dict[str, Any]:
 
     hits.sort(key=lambda h: (-h[0], h[1]))
     return {"query": query, "hits": [h[2] for h in hits[:limit]], "total": len(hits)}
+
+
+def semantic_find(
+    index: MapIndex,
+    query: str,
+    *,
+    api_key: str | None,
+    limit: int = 10,
+    client: Any = None,
+) -> dict[str, Any]:
+    """Rank files by how well they answer a natural-language question (TypeSafe/Jev).
+
+    ``find`` (above) matches tokens; this asks the *meaning* of the query. A Jev
+    Noul scores each candidate's summary + description against the question — "is
+    this where you'd go, to do or understand <query>?" — and returns the best
+    matches ranked by that probability. This is the one place graphlm calls Jev at
+    *query* time rather than graph-generation time; it is the LLM-backed counterpart
+    to the zero-LLM ``find``, kept as a **separate** function (and MCP tool) so the
+    eight deterministic tools stay LLM-free.
+
+    **Corpus: ``file_summaries`` (file-level), falling back to ``modules``.** On a
+    large repo the LLM describes ``modules`` at *directory* granularity
+    (``src/pkg/sub``), but ``file_summaries`` stays file-level everywhere — and a
+    pre-registered eval measured that scoring the file-level corpus flips argus
+    semantic search from 75% to 100% top-1 (INNOVATIONS #6). So this ranks files
+    when summaries exist, and only ranks ``modules`` when a graph has none. When a
+    file is also a described module its ``description`` is added as extra evidence.
+
+    Best-effort and gated exactly like the generation-time scorers: returns
+    ``{"available": False, ...}`` — never raises — when there is no ``api_key``, no
+    ``typesafe-sdk`` extra, or the call fails, so the caller can fall back to
+    ``find``. ``client`` is injectable so the query layer stays testable with no
+    network. The Jev call itself lives in ``evidence`` (the only module that imports
+    the SDK); this function only assembles candidates and orders the result.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"query": query, "available": True, "hits": [], "total": 0}
+
+    mod_desc = {_norm(m.path): m.description for m in index.graph.modules}
+    mod_name = {_norm(m.path): m.name for m in index.graph.modules}
+
+    # Prefer the file-level corpus; a file that is also a module contributes its
+    # module description as extra evidence. Fall back to modules only if a graph
+    # carries no file summaries at all.
+    if index.graph.file_summaries:
+        kind = "file"
+        candidates = [
+            (
+                _norm(fs.path),
+                _norm(fs.path).rsplit("/", 1)[-1],
+                mod_desc.get(_norm(fs.path), ""),  # module desc if this file is one
+                fs.summary,
+            )
+            for fs in index.graph.file_summaries
+        ]
+    elif index.graph.modules:
+        kind = "module"
+        candidates = [
+            (_norm(m.path), m.name, m.description, _summary_for(index, m.path))
+            for m in index.graph.modules
+        ]
+    else:
+        return {"query": query, "available": True, "hits": [], "total": 0}
+
+    from graphlm import evidence as _evidence
+
+    scores = _evidence.score_relevance(candidates, query, api_key=api_key, client=client)
+    if scores is None:
+        # Jev unavailable — signal the caller to fall back to token `find`.
+        return {"query": query, "available": False, "hits": [], "total": 0}
+
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    name_of = {_norm(c[0]): c[1] for c in candidates}
+    desc_of = {_norm(c[0]): (c[2] or c[3]) for c in candidates}  # module desc, else summary
+    hits = [
+        {
+            "kind": kind,
+            "path": p,
+            "name": name_of.get(p, p),
+            "relevance": round(prob, 3),
+            "description": desc_of.get(p, ""),
+        }
+        for p, prob in ranked[: max(0, min(limit, MAX_LIMIT))]
+    ]
+    return {"query": query, "available": True, "hits": hits, "total": len(scores)}
+
+
+def _summary_for(index: MapIndex, path: str) -> str:
+    """The file_summary text for a path, or '' — extra evidence for relevance."""
+    target = _norm(path)
+    for fs in index.graph.file_summaries:
+        if _norm(fs.path) == target:
+            return fs.summary
+    return ""
 
 
 def cycles(index: MapIndex) -> dict[str, Any]:

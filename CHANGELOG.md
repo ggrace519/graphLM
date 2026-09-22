@@ -7,7 +7,114 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-22
+
+### Added
+
+- **Module importance ranking (`GRAPH.md` Importance column, TypeSafe/Jev).** The map listed modules but never said which were load-bearing — and raw import degree can't tell "imported everywhere" (a constants file) from "central to the architecture" (the orchestrator). Each module now carries a semantic **role** score (Jev: leaf → orchestrator) alongside its structural **degree** (parser ground truth); `GRAPH.md`'s Modules table gains an Importance column that fuses the two and sorts load-bearing first. The two components are stored raw in `GRAPH.json` (not a pre-blended number) so the display weighting can change without rewriting the map, and the CLI prints the top load-bearing modules. On a real project this correctly demoted a constants module from degree-#1 to importance-#5 and promoted a low-degree entry point. On **large repos** where the model describes modules at *directory* granularity (`src/pkg/sub`), importance is scored over the file-level `file_summaries` instead and rendered as a separate `## File Importance` section in `GRAPH.md` (stamped into `meta.file_importance`), and the CLI prints the top load-bearing files — a pre-registered evaluation measured the ranking gap over raw degree jump from +0.01 to +0.11 when scoring files rather than packages. Best-effort and off (both fields null) without a `TYPESAFE_API_KEY` or the `graphlm[typesafe]` extra; unlike summary scoring it is **not** disabled by `--no-redact` (it sends descriptions and a degree count, never source). When off, the Modules table is unchanged. Opt out with `--no-importance`.
+- **Summary evidence-support scoring (`meta.evidence_support`, TypeSafe/Jev).** graphlm could vouch for its import *edges* (the LLM's edge list vs. the parser's ground truth) but nothing checked whether the model's *prose* — the per-file summaries — was actually backed by the source it read. Each summary is now scored against the exact fragment the model saw (redacted/skeletonised text, not the file on disk) as a calibrated 0–1 support probability, and the mean plus the weakest files are stamped into `GRAPH.json` and shown on the CLI. Like edge-faithfulness it is a *trust weight*, not a hallucination verdict — a skeletonised or truncated fragment honestly scores lower. Best-effort and off by default unless the `graphlm[typesafe]` extra is installed, a `TYPESAFE_API_KEY` is set, and redaction is on (the source must not reach a third party unredacted); it never runs on a dry run and never blocks or discards a graph. Near-empty files (a bare-docstring `__init__.py`, a thin entry point that defines nothing) are skipped rather than scored — there is nothing to verify a claim against, so scoring them produced a meaningless ~0.2 that falsely flagged correct minimal summaries as weak (#168). Opt out with `--no-evidence`.
+- **First-run setup wizard (`graphlm --setup`, and an automatic first-use prompt).** graphlm's optional capabilities — the language-grammar packs, the `mcp` server, and the new `typesafe` prose-scoring SDK — were undiscoverable: a user never learned their JS/TS files produced zero edges because the `[js]` wheel wasn't installed. The wizard lists the not-yet-installed packs, installs the chosen ones with the **same installer that put graphlm on PATH** (uv tool / uv pip / pipx / pip, keeping any packs already present), and — for TypeSafe — tells you to add `TYPESAFE_API_KEY` to `~/.config/graphlm/.env`. It runs automatically the first time graphlm is used interactively (a `~/.config/graphlm/.setup-done` marker stops it firing again); a non-interactive/CI run prints a one-line hint and proceeds without blocking, and a source checkout is refused. No optional pack becomes a base dependency.
+- **New optional extra `graphlm[typesafe]`** (the TypeSafe/Jev SDK), offered by the setup wizard and consumed by the evidence-support scoring above. It is opt-in — never a base dependency and not part of `graphlm[all]` — because it calls a commercial third-party API and needs a key.
+
 ### Fixed
+
+- **Empty-user connection URIs (`redis://:secret@host`) and escaped quotes inside quoted passwords are redacted.** The URI regex required a username; the quoted-password matcher stopped at the next raw `"`.
+- **Truncated PEM bodies are redacted after a leftover BEGIN header.** Head-truncation can cut before `END`; the full-block regex then misses and only the BEGIN line was replaced, leaving `MIIE…` in the fragment.
+- **In-project symlinks into a `.graphlmignore` / `--exclude` tree are not scanned.** `config.yaml → secrets/prod.yaml` used to be read because the symlink guard only screened never-read names and `_ALWAYS_EXCLUDE`, not the user's exclude set.
+- **In-project symlinks into `.git/` (and other always-excluded dirs) are not scanned.** `utils.py → .git/config` used to be read because the never-read check only screened secret *filenames*, while the walk already refuses `.git`.
+- **`tests/src/` is not treated as a Python/Java/PHP source root.** #19 rejected `tests/stub/requests` but any nested `src`/`lib`/`python` still became a root, so `import requests` resolved onto `tests/src/requests` (#161).
+
+
+
+
+- **`graphlm /symlink/to/project` writes GRAPH.* into the real checkout.** The ancestor-symlink write refusal treated the symlink project path as a planted decoy and exited 2 after the paid LLM calls. The default destination now `resolve()`s the project; `-o` stays literal (#154).
+
+- **Quoted passwords that contain spaces are redacted.** The value class was `[^\s…]`, so `"password": "hello world secret"` in JSON and `password = "hello world"` survived.
+- **Rust `mod foo;` is no longer dropped when a preceding attribute merely contains the word `path`.** `#[cfg(feature = "path")]` was treated as `#[path = "..."]` because the detector was `b"path" in node.text`. Only a real `#[path = "..."]` is skipped now (#153).
+
+- **TLS/SRV connection-string passwords are redacted.** The URI regex required `mongodb://` / `redis://` / `amqp://` with no suffix, so `mongodb+srv://`, `rediss://`, and `amqps://` (Atlas / Redis TLS / AMQP TLS) kept the password.
+
+- **`.npmrc` / `.yarnrc` / `.pypirc` are never read.** `_auth=base64(user:pass)` and `https://user:pass@` in `.npmrc` are not `password=` assignments, so redaction left short logins intact and pass 2 could send them.
+- **`.keystore` and backups of secret extensions (`app.jks.bak`, `server.key~`) are never read.** Android `debug.keystore` missed the `.jks` list, and backup matching only covered exact names, so binary keystore bytes were scanned.
+
+- **`BEGIN ENCRYPTED PRIVATE KEY` PEM bodies are redacted.** The PKCS#8 encrypted label was not in `(RSA |EC |DSA |OPENSSH )?`, so JSON keystores sent the ciphertext body.
+
+- **PHP interpolated double-quoted `require "config.php$id"` is not a static include.** The extractor took the first `string_content` chunk and emitted `a.php → config.php`. Interpolation is now a policy drop (same as concat) and marks known-partial (#147).
+
+- **`.htpasswd`, singular `secret.yaml`, and `*.env` / `foo.env.local` are never read.** `*secrets*` missed `secret.yaml`; `.htpasswd` is not `*password*`; `config.env` is not a leading `.env`. Those files were scanned with hashes and keys intact.
+
+- **JSON `"secret"` / `"token"` / `"auth"` colon assignments and PEM bodies are redacted.** PR 139 covered `"password"` / `"api_key"`; the generic secret regex still required `=`, and private-key redaction only rewrote BEGIN/END, so `client_secret.json` and a PEM body in JSON survived.
+
+
+- **`write_outputs` refuses to write through a symlink, including ancestor directory links.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, and a parent `decoy → victim` plus `-o decoy/out` still wrote GRAPH.* into `victim`. Same contract as skill install (#33): remove the symlink and re-run.
+
+- **GRAPH.html no longer lets `{_PALETTE}` in graph data steal the template placeholder.** Palette substitution ran after JSON embed, so a node path or description containing `{_PALETTE}` spliced the color array into `graphData` and left `const _PALETTE = {_PALETTE}`. Palette is substituted first (#141).
+
+- **`--serve` path resolution no longer maps `a.py` onto `data.py`.** After exact/suffix/prefix matching, `resolve_path` used unanchored `query in path`, so a unique `'a.py' in 'data.py'` returned the wrong module as `found: True`. File-like queries (basename containing `.`) skip that fallback; extensionless unique names like `core` still match (#140).
+
+- **JSON `"password"` / `"api_key"` assignments are redacted.** The assignment regexes required the keyword to sit immediately before `=`/`:`, so `"password": "…"` in `appsettings.json` survived. Optional quotes around the key are now accepted.
+
+- **Backups of `.netrc` / `_netrc` / `.pgpass` / `.flaskenv` are never read.** Exact-name matching skipped `.netrc.bak` / `.pgpass~` / `.flaskenv.bak`; netrc and pgpass secrets are not `password=` assignments, so redaction left them intact.
+
+- **PHP `require 'x.php' or die()` is extracted.** The quoted path is a string literal; tree-sitter wraps it in a logical `binary_expression`. The unwraper treated every binary as concat (`__DIR__ . "/x.php"`), so a common include form produced no edge. Logical `or` / `||` are unwrapped; concat still drops (#135).
+
+- **C# namespace alias `using Models = MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** #126 stopped the nested-type parent probe for a plain namespace using; aliases still ran it first, so a namespace alias preferred `MyApp.cs` over unique-dir `Models/User.cs`. Aliases now unique-dir first and only parent-probe when that misses (#134).
+
+- **Dotenv editor backups and non-dot suffixes (`.env~`, `.env-local`) are never read.** Never-read required `.env` or `.env.<suffix>`, so vim `.env~` and `.env-local` / `.env_backup` were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
+
+- **PHP class `use App\Models\User` no longer resolves onto `Models.php`.** The parent-file probe (last-segment strip) ran for every FQN, so a missing `User.php` became a false edge to the parent type. That probe now runs only for `use function` / `use const` (ADR-011) (#129).
+
+- **C++ `#include "foo.h"` no longer resolves onto a sibling `foo.c`.** The extension probe stripped `.h` and retried `.c`/`.hpp`/…, so a missing local header became a false include of the implementation file (and a self-edge from `foo.c`). The probe now runs only for extensionless `#include "foo"` (ADR-008) (#128).
+
+- **`.envrc` and `.flaskenv` are never read.** They are dotenv-class secret stores that are not `.env.<suffix>`, so they were scanned; assignment redaction cannot catch arbitrary `VAR=secret` lines.
+- **GitHub fine-grained PATs (`github_pat_`) are redacted.** The dedicated GitHub regex only matched classic `ghp_` / `gho_` / … prefixes, so a bare `github_pat_…` in a comment survived.
+
+- **Go raw-string import literals are extracted.** `import \`./rel\`` is valid Go; the extractor only accepted interpreted `"..."` strings, so those edges were missing (#122).
+
+- **PHP `require("x.php")` and grouped `use A\{B, C}` are extracted.** Parenthesized require wrapped the string in `parenthesized_expression` and was treated as a policy drop (#120). Grouped PSR-12 `use` nested clauses under `namespace_use_group` and produced no edges (#121).
+
+
+- **In-project symlinks to never-read files are not scanned.** `crypto.py → .env` (or `id_rsa`) used to be read because the never-read check used the *link name* while `read_text` followed the target. The resolved target is now screened too.
+
+- **PHP quoted `require`/`include` inside `if` or a function is extracted.** Only root `expression_statement` nodes were visited, so `if (true) { require "b.php"; }` produced no include edge and did not mark known-partial (#114).
+
+- **C# `using` inside `namespace { }` is extracted.** StyleCop SA1200 puts usings in the block; the walker only looked at root / file-scoped namespace children, so those edges were missing (#113).
+
+- **Pass 1 `requested_files: null` no longer aborts after a paid LLM call.** Free-form JSON with `null` or a string used to `TypeError` in `filter_requested_files` (or silently match zero files). Non-list / non-string entries are now treated as “request nothing” and pass 2 still runs (#115).
+
+- **`write_outputs` refuses to write through a symlink.** `GRAPH.json` (or `.graphlm` itself) as a symlink used to be followed, so a cloned repo could clobber a file outside the output dir. Same contract as skill install (#33): remove the symlink and re-run.
+
+- **`latest.py` is ranked as source, not as a test.** After #94, `_rank_file` still used `"test" in stem`, so `latest.py` (rank 10) lost to markdown (rank 8) under a tight `max_files` cap and never reached pass 2 / AST (#109).
+
+- **`.netrc` / `_netrc` / `.pgpass` are never read.** They hold passwords in layouts the assignment regex does not match (`machine host login user password SECRET`, `host:port:db:user:SECRET`), so they were scanned verbatim.
+- **OpenSSH vim/emacs private-key backups (`id_rsa~`, `#id_rsa#`) are never read.** The `.bak` / `.old` prefix rule missed editor backup names, and redaction still only strips BEGIN/END, so the key body was scanned.
+- **OpenSSH private-key *backups* are never read.** Exact-name matching skipped `id_rsa.bak` / `id_ed25519.old`, and redaction only strips BEGIN/END, so the key body was still sent. Names that start with `id_rsa.` / `id_rsa-` (except `.pub`) are now never-read too.
+
+- **In-project directory symlinks no longer explode or ghost the pass-1 tree.** `_walk_dir` followed `Path.is_dir()` into a `sub/loop → root` cycle (165 lines of `loop/sub/loop/...`) and listed `alias/mod.py` for a `alias → pkg` link that `os.walk` never reads. Directory symlinks are skipped in the tree, matching `followlinks=False` (#97).
+
+- **C/C++ quoted `#include` inside `#ifdef` is extracted.** Only root-child `preproc_include` nodes were visited, so a guarded `#include "bar.h"` never became an AST edge. The walker now visits nested preprocessor nodes (byte offsets only, never `start_point`) (#99).
+
+- **Pass-2's file cap keeps the files pass 1 asked for first.** `filter_requested_files` sorted by path then sliced, so `--max-pass2-files` dropped `z.py` in favour of `a.py`. The cap now follows request order; the kept set is still sorted for deterministic output (#98).
+
+- **GRAPH.html and the Mermaid module graph honour `./`-prefixed LLM paths.** Cycle nodes from `detect_cycles` are normalised (#84) but renderers still compared raw `./a.py`, so `--no-ast` cycles got no red ring and collapsed to a bogus `.` node. Node ids, link pairs, and directory collapse now strip `./` (#96).
+
+- **Go stdlib imports no longer resolve onto a unique local package directory.** `import "fmt"` with a scanned `fmt/fmt.go` (or `import "encoding/json"` with `json/json.go`) emitted a do-not-contradict AST edge. Specifiers with no `.` are treated as stdlib and dropped; dotted module paths still suffix-strip per ADR-010 (#95).
+
+- **`--no-tests` no longer drops modules whose names merely contain `test`.** `latest.py`, `contest.py`, and `testing.py` were skipped because the scanner used `"test" in stem`. It now matches real test conventions (`test_*`, `*_test`, `*.test.*`, `tests/` / `test/` / `__tests__/`) and the tree walk uses the same predicate (#94).
+
+- **`GRAPHLM_TIMEOUT` is honoured when the LLM endpoint is passed on the CLI.** `-b/-k/-m` (or `generate_graph(base_url=..., api_key=..., model=...)`) used to build a `Settings` with the dataclass default 300s and skip the env, so a raised timeout never reached pass 2. Timeout now resolves like `--max-context`: flag > env > 300 (#92).
+
+- **OpenSSH private-key filenames are never read.** `id_rsa` / `id_ed25519` / `id_ecdsa` (and the `_sk` variants) have no extension, so they missed both the `.key`/`.pem` list and the `*private*` name glob. The key body was scanned (only the BEGIN/END headers were redacted). Those names are now on the never-read list; `id_rsa.pub` stays scannable.
+
+- **GRAPH.html no longer lets a `</script>` in graph data close the inline script tag.** Node paths and descriptions are hostile input (scanned files / LLM text). They are now JSON-embedded with `<`/`>`/`&` and U+2028/U+2029 escaped so the D3 payload cannot break out of `<script>`.
+
+- **Cycle risk scores no longer collapse to 0 on `./`-prefixed edge paths.** `--no-ast` runs Tarjan on the LLM's `import_edges`, which often carry a `./` prefix; SLOC lookup is keyed by scanner paths without it, so every `sloc_map.get` missed and `log10(total_lines) * length` became 0. Paths are now normalised the same way as faithfulness before scoring (#84).
+
+- **Pass-1 token estimate is now of the prompt actually sent.** `pass1_tokens()` used to score a two-sentence stub plus the raw tree, so `--dry-run`'s `Pass 1 context` line and `meta.usage.pass1.estimated_prompt_tokens` under-counted by ~7x and could not audit the `estimate_tokens` heuristic. It now uses `assemble_pass1_prompt` plus the same message-overhead reserve as pass 2 (#86).
+
+- **Pass-2 file selection no longer substring-matches the wrong files.** A pass-1 request for `a.py` could pack `data.py` into the prompt (`"a.py" in "data.py"`), and two requests could duplicate the same fragment. Matching is now exact path, then `/`-suffix (so `cli.py` finds `app/cli.py` and not `tests/test_cli.py`), then a repo-prefixed request — unique by canonical path (#85).
+
+- **C# namespace `using MyApp.Models;` no longer resolves onto a parent `MyApp.cs`.** The nested-type parent-file probe (`Ns.Type` → `Ns.cs`) ran for every using, so a namespace import preferred `src/MyApp.cs` over the unique-dir `src/MyApp/Models/User.cs`. That probe now runs only for `using static` and `using Alias = …` (ADR-007) (#126).
 
 - **C# `using System;` no longer resolves onto a unique scanned file in `System/`.** The unique-namespace-directory fallback treated a lone `System/Console.cs` as the BCL. `System` / `Microsoft` / `Windows` roots are now dropped as third-party, matching the pack docstring (#100).
 
@@ -238,7 +345,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ggrace519/graphLM/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ggrace519/graphLM/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ggrace519/graphLM/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ggrace519/graphLM/compare/v0.3.1...v0.4.0

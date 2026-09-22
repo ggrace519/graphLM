@@ -223,7 +223,14 @@ def _is_inline_mod(node) -> bool:
 
 
 def _attr_is_path(node) -> bool:
-    return b"path" in node.text
+    """True only for ``#[path = "..."]``, not ``#[cfg(feature = "path")]`` (#153)."""
+    for child in node.children:
+        if child.type != "attribute":
+            continue
+        for gc in child.children:
+            if gc.type == "identifier":
+                return gc.text == b"path"
+    return False
 
 
 def _preceding_attrs(node) -> list:
