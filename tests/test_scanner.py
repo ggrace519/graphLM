@@ -262,6 +262,26 @@ class TestScanProject:
         for f in result.file_fragments:
             assert "SuperSecretPass99" not in f.content
 
+    def test_in_project_symlink_into_graphlmignore_dir_is_not_scanned(self, tmp_path):
+        project = tmp_path / "project"
+        secrets = project / "secrets"
+        secrets.mkdir(parents=True)
+        (secrets / "prod.yaml").write_text(
+            "STRIPE: sk-live-SHOULD-NOT-LEAK-1234567890\n"
+        )
+        (project / ".graphlmignore").write_text("secrets\n")
+        (project / "app.py").write_text("x = 1\n")
+        try:
+            (project / "config.yaml").symlink_to(secrets / "prod.yaml")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = scan_project(project)
+        paths = {f.rel_path for f in result.file_fragments}
+        assert "config.yaml" not in paths
+        assert "secrets/prod.yaml" not in paths
+        for f in result.file_fragments:
+            assert "SHOULD-NOT-LEAK" not in f.content
+
     def test_in_project_dir_symlink_cycle_does_not_explode_tree(self, tmp_path):
         # sub/loop -> project root used to emit hundreds of loop/sub/loop lines (#97).
         project = tmp_path / "project"
