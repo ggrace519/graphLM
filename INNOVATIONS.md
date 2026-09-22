@@ -317,3 +317,201 @@ defect on the way. #3 and #5 share the tags query and should be one branch pair.
 #4 is the flagship but depends on nothing above except the hash field; start it
 once #2 has settled what a "file's content" means, and land #8 after the JS/TS
 pack so contracts are polyglot from day one.
+
+---
+
+# Jev-focused addendum — deepening the TypeSafe integration
+*Generated 2026-09-21 · based on commit `1de4d39` (feat/module-importance) · scope: "Jev uses and enhancements for the greatest impact"*
+
+## Where the Jev integration stands today (verified this session)
+
+graphlm now uses TypeSafe/Jev in three places, all at **graph-generation** time, all
+best-effort and gated (key + `graphlm[typesafe]` extra), never blocking the graph:
+
+- **`evidence.score`** — a SOFT Noul per `file_summary`: is the prose backed by the
+  source the model saw? → `meta.evidence_support`. Shipped (#167).
+- **`evidence.score_importance`** — a Score per module over a leaf→orchestrator role
+  ladder, fused with structural degree → `ModuleDescription.role`/`degree`, rendered
+  as the `## Modules` Importance column. On `feat/module-importance` (unmerged).
+- **`faithfulness.score`** — pure set intersection, not Jev (LLM edges vs AST edges).
+
+A pre-registered evaluation this session (4 repos, hand-labeled by degree-blind
+sub-agents) showed importance **beats raw import degree** at finding load-bearing
+files (mean τ-b gap +0.27 on file-granular repos; on `softreq`, degree was
+*negatively* correlated with truth), and is stable across LLM drafts (≤0.10 role
+swing). Evidence support flags only 2.3% of summaries with one glue-file false
+positive. So the *judgment* primitives work; the open question is **where else Jev
+earns its call.**
+
+### The gaps that motivate the proposals below
+1. **`--serve`'s `find` is a substring/path matcher** (`query.resolve_path`), on the
+   agent hot path — the one place a Jev call would happen at *query* time, not
+   generation time.
+2. **Six of nine substantive `CodebaseGraph` fields have no oracle** — only
+   `import_edges`, `file_summaries`, and `modules` are Jev-checked. `data_flow`,
+   `architecture_notes`, `entry_points`, `quick_reference`, `test_organization`,
+   `database_schema` are unverified LLM prose.
+3. **Jev confidence is discarded.** Every Choice/Score returns a `.confidence`;
+   graphlm reads none of it. A low-confidence role score is displayed as fact.
+4. **The diff can't detect renames** (ADR-002 decision 2 locks it as remove+add).
+
+## What the best in this space are doing (TypeSafe patterns graphlm hasn't used)
+
+From the TypeSafe docs (patterns.md, use-case-map.md, cookbooks):
+- **Confidence-gated routing** — use `.confidence` as a second decision axis to
+  withhold or escalate uncertain judgments. graphlm uses none of it.
+- **Verification** (citation-check cookbook) — a Noul per claim against its evidence;
+  graphlm applies this to summaries only, not to notes/flows/entry-points.
+- **Entity matching** (entity_alignment cookbook) — a 3-level Score
+  (different / maybe-same / same) with companion Nouls, *threshold-free*, settling
+  89% of pairs automatically. Directly applicable to rename detection in the diff.
+- **Semantic search** (semantic_find, rerank cookbooks) — a Noul with fixed criteria
+  scores candidates against a natural-language query more *consistently* than a
+  general LLM. NB: the rerank cookbook's 5%→18% top-1 lift is a *retrieval* result and
+  does **not** transfer to importance ranking (all modules are in scope, not a
+  candidate shortlist) — cited only for the query-time search shape.
+
+## Proposals (ranked)
+
+### 1. Semantic `find` for `graphlm --serve` — a Jev call at query time
+**Category:** feature | wow
+**Impact 5 · Novelty 5 · Effort 3 · Fit 5**
+
+**The idea.** `--serve` exposes the map to a coding agent over MCP, but `find` is a
+deterministic path/substring match (`query.resolve_path`). Add a **semantic** find:
+the agent asks "which module handles rate-limiting?" and a Jev Noul scores each
+module's `description`+`summary` against that natural-language query, returning the
+best matches with probabilities. This is the *only* Jev use at **query** time rather
+than generation time — a genuinely different integration shape from everything built
+so far — and "which file does X" is the question agents actually ask a codebase map.
+**Inspired by.** TypeSafe `semantic_find` + `rerank` cookbooks (Noul-per-candidate
+against a query). Original application to an MCP code-map server.
+**Implementation sketch.** New `query.semantic_find(index, query, *, api_key, client)`
+in `query.py` (the pure-function layer, already SDK-free and testable). It batches a
+Noul per module — instructions carry the query + the module's description/summary,
+criteria "this module is where you'd go to do/understand <query>". Returns ranked
+`(path, probability)`. Expose as a **new MCP tool `search`** (NOT a silent change to
+`find` — `--serve` is documented as eight *zero-LLM* tools; `search` is the opt-in
+LLM one, gated on the key + extra, falling back to a clear "needs graphlm[typesafe]
++ key" ToolError). `mcp_server.py` wraps it like the others.
+**Effort.** ~1 day. Risk: latency on a hot path — mitigate by batching (~15/req, the
+proven size) and caching per (query, map-mtime). A miss falls back to the existing
+`find`.
+**First step.** Write `query.semantic_find` + a no-network unit test with an injected
+fake client (the `test_evidence.py` pattern), before touching `mcp_server.py`.
+
+### 2. Verify the six unverified prose fields (`data_flow`, `architecture_notes`, …)
+**Category:** feature | ops
+**Impact 4 · Novelty 2 · Effort 2 · Fit 5**
+
+**The idea.** `evidence.score` verifies `file_summaries` only. Extend the exact same
+Noul-against-evidence shape to the graph's other LLM-authored claims — most valuably
+`data_flow` (the least trustworthy structural field: pure LLM inference, no AST
+backing) and `architecture_notes` (the highest-level claims, entirely unchecked).
+Each gets a support probability into `meta`, and low-confidence ones surface in the
+telemetry line and (optionally) get dropped. Completes the verification story this
+session started.
+**Inspired by.** TypeSafe citation-check cookbook. Directly generalizes the shipped
+`evidence.score`.
+**Implementation sketch.** Generalize `evidence.score` into a `verify_claims(claims,
+evidence_by_path, *, kind, api_key, client)` that takes a claim + its evidence set and
+the SOFT criteria per claim kind. For `data_flow` (source→dest+description) the
+evidence is the source+dest files' `frag.content`; for `architecture_notes` the
+evidence is the whole scanned tree + edges (a note is a global claim). New
+`meta.claim_verification: {data_flow: …, notes: …}`. Same never-raise/gate discipline.
+**Effort.** ~1 day. Risk: `architecture_notes` are *global* claims with no single
+evidence file — may need the edge table + tree as evidence, which is larger context;
+measure token cost per note.
+**First step.** `verify_claims` for `data_flow` only (well-scoped evidence), scored on
+the 4 experiment repos to check the flag rate before extending to notes.
+
+### 3. Confidence-gated display of Jev judgments
+**Category:** DX | reliability
+**Impact 3 · Novelty 3 · Effort 1 · Fit 5**
+
+**The idea.** Every Jev Score/Choice returns `.confidence`; graphlm discards it. A
+role score of 2.4 at confidence 0.5 is a guess shown as fact. Capture confidence
+alongside `role`, and in the renderer *withhold or mark* low-confidence importance
+(show "—" or a "·" marker instead of a number below a confidence floor) rather than
+presenting an uncertain rank as authoritative. Directly addresses the "modest
+absolute τ / marginal at directory granularity" weakness the evaluation found —
+don't assert what Jev isn't sure of.
+**Inspired by.** TypeSafe confidence-gated-routing pattern.
+**Implementation sketch.** `score_importance` already calls `system_one`; capture
+`resp.scores[k].confidence` beside `.score`, thread an optional
+`ModuleDescription.role_confidence`. In `render._fused_importance`, gate: below
+`_CONFIDENCE_FLOOR` the module renders with a muted/marked importance, not a hard
+number. Additive-optional field; byte-identical fallback preserved.
+**Effort.** ~half a day. Risk: none material — it's read-only additive signal.
+**First step.** Add `role_confidence` capture in `_run_scores`, print the confidence
+distribution across the 4 experiment repos to pick a defensible floor before gating.
+
+### 4. Rename-aware diff via entity-alignment Score — supersede ADR-002 decision 2
+**Category:** feature | architecture
+**Impact 4 · Novelty 4 · Effort 3 · Fit 4**
+
+**The idea.** ADR-002 decision 2 **locks** the graph-vs-graph diff as added/removed
+only with structural identity keys — "renames are remove+add (no rename heuristics —
+locked)." That lock predates Jev. A rename today shows as one deletion + one addition,
+noise on every refactor. A TypeSafe **entity-alignment Score** ("do these two module
+descriptions describe the same component? different / maybe / same") can match an
+added module to a removed one across a path change, threshold-free — turning churn
+into a clean "renamed A → B". **This proposal explicitly asks to supersede ADR-002
+decision 2 for renames**, and argues the supersession: the ADR rejected rename
+heuristics because *string* heuristics are unreliable and would create false diff
+identity; a calibrated semantic Score is a different instrument, gated and best-effort,
+that can be wrong without corrupting the structural keys (it annotates, it doesn't
+change the identity contract).
+**Inspired by.** TypeSafe `entity_alignment` cookbook (3-level Score + companion
+Nouls, 89% auto-settled). Supersedes ADR-002 decision 2.
+**Implementation sketch.** In `diff.py`, after computing added/removed module sets,
+run a Jev Score over the cartesian product of (removed × added) *only when both sets
+are non-empty and small* — instructions carry both descriptions, levels
+different/maybe/same. A "same" pair (rounded) becomes a `renamed` entry in
+`GraphDiff`; "maybe" is reported but not auto-applied. Gated + never-raise; when Jev
+is off the diff is byte-identical to today (the ADR behavior is the fallback). New
+ADR-016 recording the supersession.
+**Effort.** ~1.5 days incl. the ADR + guarding the cartesian blow-up (cap the pair
+count; skip when either set is large). Risk: pairing cost is O(removed×added) — cap it.
+**First step.** Write ADR-016 (the supersession argument) and get Greg's sign-off
+BEFORE code — this changes a locked decision.
+
+### 5. Confidence-driven escalation stamp (the "know when Jev didn't help" signal)
+**Category:** ops
+**Impact 2 · Novelty 3 · Effort 2 · Fit 4**
+
+**The idea.** The evaluation showed Jev degrades to "no worse than degree" on a
+non-app domain (slate, a compiler). graphlm can *detect* that itself: when the
+importance Score's confidence is low across most modules AND role barely diverges
+from degree, stamp `meta` with a "low semantic signal — importance is degree-like on
+this repo" note, so a reading agent knows not to over-trust the ranking. Turns the
+honest limitation into a self-aware feature.
+**Inspired by.** Original — derived from the slate probe result this session.
+**Effort.** ~half a day. Risk: defining "low signal" without overfitting to slate.
+**First step.** Compute mean role-confidence + role/degree correlation per repo across
+the 4 experiment graphs; see if slate is separable from the apps by a simple rule.
+
+## Killed ideas (and why)
+- **Reframe importance as pairwise reranking.** The rerank cookbook's 5%→18% lift is
+  a *retrieval* result (shortlist of candidates, relevance unknown); importance ranks
+  a fixed in-scope module set — a different task, the number won't transfer. Absolute
+  Noul/Score is already right.
+- **Hierarchical classification of the module tree.** The argus granularity mismatch
+  is a *join* problem (file labels vs directory modules), not something a hierarchical
+  judgment fixes; no evidence flat scoring is the limiter.
+- **Jev-generated architecture notes.** Jev doesn't generate; and the refine-loop
+  spike this session proved feeding judgments back to the generative model is
+  net-neutral-to-negative. Verify notes (proposal #2), don't generate them.
+- **Replace `faithfulness` with a Jev call.** It's an exact set intersection with a
+  perfect oracle (AST edges); a probabilistic judgment would be strictly worse.
+
+## Suggested order of attack
+Build **#1 (semantic `find`)** first — it's the flagship, hits the agent hot path, and
+is the one genuinely new integration shape (query-time Jev). It shares nothing with the
+generation path, so it can land independently. Then **#3 (confidence gating)** as a
+half-day quick win that hardens the *shipped* importance feature against its own
+measured weakness. **#2 (verify prose fields)** is the highest-certainty value and the
+honest completion of the evidence story — do it once #1 proves the query-time pattern.
+**#4 (rename diff)** is gated on Greg approving the ADR-002 supersession — ADR first,
+code second. All of these assume `feat/module-importance` has merged (the Jev surface
+lives there); branch prototypes from it, not `develop`, until it does.
