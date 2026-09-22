@@ -140,6 +140,12 @@ class Cycle:
     edges: list[ImportEdge]
     length: int
     risk_score: float
+    # True when *every* node in the cycle is a test file (``is_test_path``).
+    # Such cycles are usually intentional test scaffolding, so the renderers
+    # group/label them separately from production cycles rather than hiding
+    # them. Defaults False so older baselines (and hand-built cycles) validate
+    # unchanged — additive-optional, GRAPH_META_SCHEMA_VERSION stays 1.
+    test_only: bool = False
 
 
 # Bump when the persisted metadata shape changes. graphlm reads its own prior

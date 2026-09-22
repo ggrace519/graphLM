@@ -24,6 +24,9 @@ from graphlm.models import CodebaseGraph, ImportEdge
 # Red used for cycle members — the same hue as the ``in_cycle`` ring in
 # ``GRAPH.html`` so the two pictures agree.
 CYCLE_COLOR = "#e11"
+# Muted amber for directories whose only cycle is test-only (usually intentional
+# test scaffolding) — distinct from the alarming red of a production cycle.
+TEST_CYCLE_COLOR = "#b8860b"
 
 _UNSAFE_ID_CHARS = re.compile(r"[^A-Za-z0-9_]")
 
@@ -132,6 +135,21 @@ def render_mermaid(graph: CodebaseGraph, *, max_nodes: int = 40) -> list[str]:
     cycle_dirs = {
         _collapse_dir(node) for cycle in graph.import_cycles for node in cycle.nodes
     }
+    # Directories whose only cycle involvement is a test-only cycle get a muted
+    # outline instead of the alarming red — the cycle is usually intentional test
+    # scaffolding. A dir touched by *any* production cycle stays red.
+    prod_cycle_dirs = {
+        _collapse_dir(node)
+        for cycle in graph.import_cycles
+        if not cycle.test_only
+        for node in cycle.nodes
+    }
+    test_cycle_dirs = {
+        _collapse_dir(node)
+        for cycle in graph.import_cycles
+        if cycle.test_only
+        for node in cycle.nodes
+    } - prod_cycle_dirs
 
     # Collapse to directory level; a collapsed edge is a cycle edge if ANY of
     # the file-level edges behind it was one. Self-edges are dropped, but
@@ -163,9 +181,19 @@ def render_mermaid(graph: CodebaseGraph, *, max_nodes: int = 40) -> list[str]:
         k for k, cyc in collapsed.items()
         if not cyc and k[0] in kept and k[1] in kept
     )
-    cyclic = sorted(
+    cyclic = [
         k for k, cyc in collapsed.items()
         if cyc and k[0] in kept and k[1] in kept
+    ]
+    # A collapsed cycle edge is "test-only" when neither endpoint dir touches a
+    # production cycle — same rule as the node outline, so edges and nodes agree.
+    prod_cyclic = sorted(
+        k for k in cyclic
+        if k[0] in prod_cycle_dirs or k[1] in prod_cycle_dirs
+    )
+    test_cyclic = sorted(
+        k for k in cyclic
+        if k[0] not in prod_cycle_dirs and k[1] not in prod_cycle_dirs
     )
     cycle_nodes = sorted(kept & cycle_dirs)
 
@@ -178,20 +206,38 @@ def render_mermaid(graph: CodebaseGraph, *, max_nodes: int = 40) -> list[str]:
     lines.append("flowchart LR")
     for label in nodes:
         lines.append(f'    {ids[label]}["{_mermaid_label(label)}"]')
-    for src, dst in plain + cyclic:
+    for src, dst in plain + prod_cyclic + test_cyclic:
         lines.append(f"    {ids[src]} --> {ids[dst]}")
-    if cyclic:
+    # linkStyle indices are emission order; the two cyclic groups are contiguous
+    # tails, so each gets one range.
+    if prod_cyclic:
         first = len(plain)
-        indices = ",".join(str(i) for i in range(first, first + len(cyclic)))
+        indices = ",".join(str(i) for i in range(first, first + len(prod_cyclic)))
         lines.append(f"    linkStyle {indices} stroke:{CYCLE_COLOR},stroke-width:2px")
+    if test_cyclic:
+        first = len(plain) + len(prod_cyclic)
+        indices = ",".join(str(i) for i in range(first, first + len(test_cyclic)))
+        lines.append(
+            f"    linkStyle {indices} stroke:{TEST_CYCLE_COLOR},stroke-width:2px"
+        )
     for label in cycle_nodes:
-        lines.append(f"    style {ids[label]} stroke:{CYCLE_COLOR},stroke-width:2px")
+        color = TEST_CYCLE_COLOR if label in test_cycle_dirs else CYCLE_COLOR
+        lines.append(f"    style {ids[label]} stroke:{color},stroke-width:2px")
     lines.append("```\n")
 
-    if cyclic:
-        lines.append("Red edges are members of an import cycle.")
-    if cycle_nodes:
+    if prod_cyclic:
+        lines.append("Red edges are members of a production import cycle.")
+    if test_cyclic:
+        lines.append("Amber edges are members of a test-code import cycle.")
+    prod_cycle_nodes = [n for n in cycle_nodes if n not in test_cycle_dirs]
+    test_only_nodes = [n for n in cycle_nodes if n in test_cycle_dirs]
+    if prod_cycle_nodes:
         lines.append("Red-outlined directories contain a file in an import cycle.")
+    if test_only_nodes:
+        lines.append(
+            "Amber-outlined directories contain only test-code import cycles "
+            "(usually intentional scaffolding)."
+        )
     if hidden:
         lines.append(f"*… {hidden} more directories not shown*")
     if cyclic or cycle_nodes or hidden:

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from graphlm.cycles_render import render_import_cycles
 from graphlm.mermaid import render_mermaid
 from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 
@@ -197,30 +198,6 @@ def _render_html(graph: CodebaseGraph) -> str:
     return _render_html_impl(graph)
 
 
-_JS_CYCLE_EXTS = frozenset({".js", ".jsx", ".ts", ".tsx"})
-
-
-def _cycle_language_note(cycles: list[Cycle]) -> str | None:
-    """One-line qualifier: JS/TS cycles are often benign, Python cycles less so."""
-    exts = {Path(node).suffix.lower() for cycle in cycles for node in cycle.nodes}
-    js = bool(exts & _JS_CYCLE_EXTS)
-    py = ".py" in exts
-    if js and py:
-        return (
-            "> Note: a Python import cycle is usually a design smell; a "
-            "JavaScript/TypeScript cycle is often benign (circular "
-            "`import`/`require` is common). The risk score still reflects "
-            "size × length."
-        )
-    if js:
-        return (
-            "> Note: import cycles among JavaScript/TypeScript modules are "
-            "often benign (circular `import`/`require` is common); the risk "
-            "score still reflects size × length."
-        )
-    return None
-
-
 def render_markdown(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a Markdown document."""
     lines: list[str] = []
@@ -380,26 +357,9 @@ def render_markdown(graph: CodebaseGraph) -> str:
             lines.append(f"| {ref.query} | `{ref.location}` |")
         lines.append("")
 
-    # Import cycles
-    if graph.import_cycles:
-        lines.append("## Import Cycles\n")
-        cycle_note = _cycle_language_note(graph.import_cycles)
-        if cycle_note:
-            lines.append(cycle_note)
-            lines.append("")
-        for i, cycle in enumerate(
-            sorted(graph.import_cycles, key=lambda c: c.risk_score, reverse=True)
-        ):
-            label = (
-                f"*{cycle.length} nodes — mutual dependency*"
-                if cycle.length == 2
-                else f"*{cycle.length} nodes*"
-            )
-            lines.append(f"### Cycle {i+1} (risk score: {cycle.risk_score:.1f})")
-            lines.append(label)
-            for node in cycle.nodes:
-                lines.append(f"- `{node}`")
-            lines.append("")
+    # Import cycles — production first, test-code cycles grouped and tagged
+    # (see cycles_render.render_import_cycles).
+    lines.extend(render_import_cycles(graph.import_cycles))
 
     return "\n".join(lines) + "\n"
 

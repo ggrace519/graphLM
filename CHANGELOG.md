@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Test-code import cycles are labelled, not hidden.** graphlm's map treated a cycle among test files (fixtures, test helpers) exactly like a production cycle — so a repo with deliberately-cyclic parser fixtures showed "5 import cycles" at the top of its map, misleading an agent into thinking the *product* had circular imports. Cycles whose every member is a test file are now flagged (`Cycle.test_only`, and `test_only` / `production_count` / `test_only_count` on the MCP `cycles` tool) and rendered distinctly across all outputs: `GRAPH.md` lists production cycles first and groups test-code cycles under their own heading (with a clear "no production cycles" banner when *all* cycles are among tests); the Mermaid module graph outlines and colours test-only cycles in muted amber instead of alarming red; and `GRAPH.html` mutes test-file nodes. Tests remain fully in the map — this labels them, it does not drop them (`--no-tests` still does that). The label is derived deterministically from the file path and is exactly the set `--no-tests` would remove.
+
 ## [0.5.0] - 2026-09-22
 
 ### Added

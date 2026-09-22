@@ -508,17 +508,26 @@ def _summary_for(index: MapIndex, path: str) -> str:
 
 
 def cycles(index: MapIndex) -> dict[str, Any]:
-    """Import cycles with risk scores, highest risk first."""
+    """Import cycles with risk scores, highest risk first.
+
+    ``test_only`` marks a cycle whose every member is a test file — usually
+    intentional test scaffolding rather than a production concern.
+    ``production_count`` / ``test_only_count`` split the total so a caller can
+    tell "N real cycles" from "M among tests" at a glance.
+    """
     ordered = sorted(
         index.graph.import_cycles, key=lambda c: (-c.risk_score, tuple(c.nodes))
     )
     return {
         "count": len(ordered),
+        "production_count": sum(1 for c in ordered if not c.test_only),
+        "test_only_count": sum(1 for c in ordered if c.test_only),
         "cycles": [
             {
                 "nodes": [_norm(n) for n in c.nodes],
                 "length": c.length,
                 "risk_score": round(c.risk_score, 2),
+                "test_only": c.test_only,
             }
             for c in ordered
         ],

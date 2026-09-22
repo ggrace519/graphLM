@@ -173,6 +173,83 @@ class TestRenderMarkdown:
         assert md.endswith("\n")
 
 
+class TestTestOnlyCycleGrouping:
+    def _prod(self, nodes: list[str], risk: float = 2.0) -> Cycle:
+        return Cycle(nodes=nodes, edges=[], length=len(nodes), risk_score=risk)
+
+    def _test(self, nodes: list[str], risk: float = 2.0) -> Cycle:
+        return Cycle(
+            nodes=nodes, edges=[], length=len(nodes), risk_score=risk, test_only=True
+        )
+
+    def test_all_test_only_gets_banner_no_production_heading(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[self._test(["tests/a.py", "tests/b.py"])],
+        )
+        md = render_markdown(graph)
+        assert "## Import Cycles" in md
+        assert "All detected import cycles are among test files" in md
+        assert "### Test-code cycles" in md
+        assert "#### Test cycle 1" in md
+        # No production "### Cycle N" heading when nothing is production.
+        assert "### Cycle 1" not in md
+
+    def test_production_first_then_test_group(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[
+                self._prod(["a.py", "b.py"], risk=3.0),
+                self._test(["tests/c.py", "tests/d.py"], risk=1.0),
+            ],
+        )
+        md = render_markdown(graph)
+        # Production section appears before the test-code group.
+        assert md.index("### Cycle 1") < md.index("### Test-code cycles")
+        assert "#### Test cycle 1" in md
+        # The banner (which claims *all* cycles are tests) must NOT appear when
+        # some cycles are production; the italic descriptor is used instead.
+        assert "All detected import cycles are among test files" not in md
+        assert "*Every member is a test file (dropped under `--no-tests`).*" in md
+
+    def test_production_only_section_is_byte_identical_to_pre_feature(self):
+        # Pin the whole production-only cycles section as a golden string: with no
+        # test_only cycles it must render exactly as it did before the feature
+        # (`### Cycle N`, no grouping, no test wording).
+        from graphlm.cycles_render import render_import_cycles
+
+        cycles = [
+            self._prod(["a.py", "b.py"], risk=2.0),
+            self._prod(["x.py", "y.py", "z.py"], risk=1.0),
+        ]
+        section = "\n".join(render_import_cycles(cycles))
+        assert section == (
+            "## Import Cycles\n\n"
+            "### Cycle 1 (risk score: 2.0)\n"
+            "*2 nodes — mutual dependency*\n"
+            "- `a.py`\n"
+            "- `b.py`\n"
+            "\n"
+            "### Cycle 2 (risk score: 1.0)\n"
+            "*3 nodes*\n"
+            "- `x.py`\n"
+            "- `y.py`\n"
+            "- `z.py`\n"
+        )
+        assert "Test-code cycles" not in section
+        assert "test file" not in section
+
+    def test_js_qualifier_computed_over_production_only(self):
+        # A test-only TS cycle must NOT drag a "JS often benign" note above a
+        # "no production cycles" banner.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[self._test(["tests/foo.ts", "tests/bar.ts"])],
+        )
+        md = render_markdown(graph)
+        assert "often benign" not in md
+
+
 class TestRenderJson:
     def test_serializes_all_fields(self):
         graph = CodebaseGraph(
@@ -635,8 +712,10 @@ class TestMermaidModuleGraph:
         assert "linkStyle 2,3 stroke:#e11,stroke-width:2px" in block
         assert "style n_a stroke:#e11,stroke-width:2px" in block
         assert "style n_b stroke:#e11,stroke-width:2px" in block
-        assert "Red edges are members of an import cycle." in md
+        assert "Red edges are members of a production import cycle." in md
         assert "Red-outlined directories contain a file in an import cycle." in md
+        # A production cycle carries no test-code styling.
+        assert "#b8860b" not in block
 
     def test_single_cycle_edge_gets_index_of_last_link(self):
         # Three collapsed edges, exactly one a cycle edge -> linkStyle 2.
@@ -677,6 +756,63 @@ class TestMermaidModuleGraph:
         assert "style n_lib" not in block
         assert "Red edges are members of an import cycle." not in md
         assert "Red-outlined directories contain a file in an import cycle." in md
+
+    def test_test_only_cycle_gets_amber_edges_and_outline(self):
+        # A cross-directory cycle among test files → amber (not red) edge + node
+        # outline, and the amber legend lines.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("tests/a/x.py", "tests/b/y.py"),
+                _edge("tests/b/y.py", "tests/a/x.py"),
+            ],
+            import_cycles=[
+                Cycle(
+                    nodes=["tests/a/x.py", "tests/b/y.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                    test_only=True,
+                )
+            ],
+        )
+        md = render_markdown(graph)
+        block = _mermaid_block(md)
+        assert "#e11" not in block  # no red anywhere
+        assert "stroke:#b8860b,stroke-width:2px" in block  # amber edges + nodes
+        assert "Amber edges are members of a test-code import cycle." in md
+        assert (
+            "Amber-outlined directories contain only test-code import cycles "
+            "(usually intentional scaffolding)." in md
+        )
+
+    def test_mixed_cycle_dir_stays_red_not_amber(self):
+        # A directory touched by BOTH a production and a test-only cycle keeps
+        # the red (production) outline — production wins.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("app/a.py", "lib/b.py"),
+                _edge("lib/b.py", "app/a.py"),
+                _edge("app/t.py", "tests/c.py"),
+                _edge("tests/c.py", "app/t.py"),
+            ],
+            import_cycles=[
+                Cycle(
+                    nodes=["app/a.py", "lib/b.py"], edges=[], length=2, risk_score=2.0
+                ),
+                Cycle(
+                    nodes=["app/t.py", "tests/c.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                    test_only=True,
+                ),
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        # app/ is in both cycles → red, never amber.
+        assert "style n_app stroke:#e11,stroke-width:2px" in block
 
     def test_single_package_project_still_renders_its_node(self):
         # Every edge collapses to a self-edge (all files in one package). The

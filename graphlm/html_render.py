@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from graphlm.models import CodebaseGraph
+from graphlm.testpaths import is_test_path
 
 # Deterministic color palette for directory hashing
 _PALETTE: list[str] = [
@@ -150,6 +151,9 @@ def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
     }
     for node in by_id.values():
         node["in_cycle"] = _norm_path(node["path"]) in cycle_paths
+        # Test files are marked so the template can render them muted — they are
+        # part of the map but usually not what an agent is orienting toward.
+        node["is_test"] = is_test_path(node["path"])
 
     return list(by_id.values())
 
