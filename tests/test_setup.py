@@ -26,6 +26,19 @@ class _Runner:
         return types.SimpleNamespace(returncode=self.returncode)
 
 
+@pytest.fixture(autouse=True)
+def _clear_xdg(monkeypatch):
+    """Isolate marker resolution from the runner's environment.
+
+    ``marker_path`` is XDG-aware, so a runner with ``XDG_CONFIG_HOME`` set (as
+    GitHub Actions does) resolves the marker away from the injected ``home=`` and
+    the ``home``-based tests (notably the symlink-refusal one) fail spuriously.
+    Clear it for the whole module; the one test that exercises XDG sets it again
+    explicitly after this autouse fixture runs.
+    """
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+
 def _which_uv(name: str) -> str | None:
     return "/usr/bin/uv" if name == "uv" else ("/usr/bin/pipx" if name == "pipx" else None)
 

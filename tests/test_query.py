@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
 
 from graphlm import query
+
+# Semantic-find tests that reach ``_run_relevance`` need the real
+# ``typesafe_sdk`` types (``Noul``/``NoulCriteria``) even with a fake client
+# injected — the fake only substitutes the network call, not the request
+# objects. So they skip without the extra, exactly like ``tests/test_evidence.py``
+# and the language-pack tests. The gating tests below (no key / empty query)
+# short-circuit before that import and run unconditionally.
+_HAS_TYPESAFE = importlib.util.find_spec("typesafe_sdk") is not None
 from graphlm.models import (
     ArchitectureNote,
     CodebaseGraph,
@@ -389,6 +398,7 @@ class _RelClient:
         return _RelResp({k: _RelAns(self.by_key.get(k, 0.1)) for k in questions})
 
 
+@pytest.mark.skipif(not _HAS_TYPESAFE, reason="needs the typesafe extra for the real Noul types")
 class TestSemanticFind:
     def test_ranks_by_relevance(self):
         # The corpus is file_summaries (file-level); c0..cN follow summary order.
@@ -435,6 +445,18 @@ class TestSemanticFind:
                                   client=_RelClient({"c0": 0.9, "c1": 0.2}))
         assert res["hits"][0]["kind"] == "module" and res["hits"][0]["path"] == "a.py"
 
+    def test_client_error_signals_unavailable(self, index):
+        class _Boom:
+            def system_one(self, **k):
+                raise RuntimeError("jev down")
+        res = query.semantic_find(index, "q", api_key="k", client=_Boom())
+        assert res["available"] is False  # caller falls back to find
+
+
+class TestSemanticFindGating:
+    """The unavailable/empty paths short-circuit *before* the SDK import, so
+    they run without the typesafe extra (no ``skipif``)."""
+
     def test_no_key_signals_unavailable(self, index):
         res = query.semantic_find(index, "q", api_key=None, client=_RelClient({}))
         assert res["available"] is False and res["hits"] == []
@@ -442,10 +464,3 @@ class TestSemanticFind:
     def test_empty_query_is_available_empty(self, index):
         res = query.semantic_find(index, "   ", api_key="k", client=_RelClient({}))
         assert res["available"] is True and res["hits"] == []
-
-    def test_client_error_signals_unavailable(self, index):
-        class _Boom:
-            def system_one(self, **k):
-                raise RuntimeError("jev down")
-        res = query.semantic_find(index, "q", api_key="k", client=_Boom())
-        assert res["available"] is False  # caller falls back to find
