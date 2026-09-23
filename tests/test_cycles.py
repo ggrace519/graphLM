@@ -343,31 +343,34 @@ class TestIntegration:
         assert hasattr(result.graph, "import_cycles")
         assert isinstance(result.graph.import_cycles, list)
 
-    def test_no_tests_drops_the_cycles_that_were_labelled_test_only(self):
+    def test_no_tests_drops_the_cycles_that_were_labelled_test_only(self, tmp_path):
         """Invariant: a cycle labelled ``test_only`` ⇔ dropped by ``--no-tests``.
 
-        The graphlm repo's own fixtures form several all-test cycles. With tests
-        included they are all flagged ``test_only``; with ``--no-tests`` those
-        exact cycles disappear (their files aren't scanned).
+        Build a self-contained project with a **Python** all-test cycle (Python
+        is parsed in every install — the language-pack fixtures aren't, so this
+        can't depend on which grammar extras are installed). With tests included
+        the cycle is flagged ``test_only``; with ``--no-tests`` it disappears
+        (its files aren't scanned).
         """
-        from pathlib import Path
-
         from graphlm import generate_graph
 
-        repo = Path(__file__).resolve().parent.parent
+        # A 2-file import cycle, both files under tests/ (so both are test paths).
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tmp_path / "app.py").write_text("VALUE = 1\n")  # a non-test module
+        (tests_dir / "test_a.py").write_text("from tests import test_b\n")
+        (tests_dir / "test_b.py").write_text("from tests import test_a\n")
+        (tests_dir / "__init__.py").write_text("")
 
-        with_tests = generate_graph(
-            repo, dry_run=True, use_graphlmignore=False
-        ).graph
+        with_tests = generate_graph(tmp_path, dry_run=True).graph
         labelled_test = [c for c in with_tests.import_cycles if c.test_only]
-        # The fixtures guarantee at least one all-test cycle exists.
-        assert labelled_test, "expected the fixture cycles to be labelled test_only"
+        assert labelled_test, "expected the all-test cycle to be labelled test_only"
         # Every test_only cycle is genuinely all test paths.
         for c in labelled_test:
             assert all(is_test_path(n) for n in c.nodes)
 
         without_tests = generate_graph(
-            repo, dry_run=True, include_tests=False, use_graphlmignore=False
+            tmp_path, dry_run=True, include_tests=False
         ).graph
         # None of the previously-test_only cycles survive --no-tests.
         surviving = {frozenset(c.nodes) for c in without_tests.import_cycles}
