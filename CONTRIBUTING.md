@@ -44,9 +44,10 @@ uv run mypy graphlm --ignore-missing-imports       # type check
 ```
 
 CI runs the suite on Python 3.11 / 3.12 / 3.13 (base + `mcp` extra — language-pack
-enabled-path tests skip), a separate `test-packs` job with `graphlm[all]` on 3.12,
-and mypy on 3.12 (see `.github/workflows/ci.yml`). There is **no linter or
-formatter** configured — match the style of the surrounding code.
+and `typesafe` enabled-path tests skip), a separate `test-packs` job with
+`graphlm[all,mcp,typesafe]` on 3.12 (so the language-pack **and** TypeSafe
+fake-client tests run), and mypy on 3.12 (see `.github/workflows/ci.yml`). There
+is **no linter or formatter** configured — match the style of the surrounding code.
 
 `graphlm <project> --dry-run` is a handy no-network smoke test: it exercises the
 scan, AST parse, and context packing without any LLM call.
