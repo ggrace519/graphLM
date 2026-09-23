@@ -410,23 +410,23 @@ class TestFileLevelImportance:
         )
 
     def test_is_directory_granular(self):
-        from graphlm import _is_directory_granular
+        from graphlm.enrich import is_directory_granular
         from graphlm.models import CodebaseGraph, ModuleDescription
-        assert _is_directory_granular(self._dir_graph()) is True
+        assert is_directory_granular(self._dir_graph()) is True
         file_g = CodebaseGraph(directory_tree="t/", modules=[
             ModuleDescription(path="a.py", name="a", description="x"),
             ModuleDescription(path="b.py", name="b", description="y")])
-        assert _is_directory_granular(file_g) is False
-        assert _is_directory_granular(CodebaseGraph(directory_tree="t/")) is False
+        assert is_directory_granular(file_g) is False
+        assert is_directory_granular(CodebaseGraph(directory_tree="t/")) is False
 
     def test_score_file_importance_ranks_files(self):
-        from graphlm import _score_file_importance
+        from graphlm.enrich import score_file_importance
         from graphlm.models import ImportEdge
         import graphlm.evidence as ev
         g = self._dir_graph()
         edges = [ImportEdge(from_path="src/pkg/util.py", to_path="src/pkg/main.py", kind="import")]
         fc = _FakeScoreClient(by_index={0: 2.8, 1: 0.4})  # main high, util low
-        res = _score_file_importance(g, edges, api_key="k", summaries_by_path={},
+        res = score_file_importance(g, edges, api_key="k", summaries_by_path={},
                                      evidence=ev, client=fc)
         assert res is not None
         assert res[0].path == "src/pkg/main.py"  # load-bearing first
@@ -434,8 +434,8 @@ class TestFileLevelImportance:
         assert all(0 <= f.fused <= 1 for f in res)
 
     def test_score_file_importance_none_without_summaries(self):
-        from graphlm import _score_file_importance
+        from graphlm.enrich import score_file_importance
         from graphlm.models import CodebaseGraph, ModuleDescription
         import graphlm.evidence as ev
         g = CodebaseGraph(directory_tree="t/", modules=[ModuleDescription(path="src/pkg", name="p", description="x")])
-        assert _score_file_importance(g, [], api_key="k", summaries_by_path={}, evidence=ev, client=_FakeScoreClient()) is None
+        assert score_file_importance(g, [], api_key="k", summaries_by_path={}, evidence=ev, client=_FakeScoreClient()) is None
