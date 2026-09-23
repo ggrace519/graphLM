@@ -9,10 +9,10 @@ It's built for the age of coding agents, too: the map stamps itself with the git
 ```console
 $ graphlm ~/code/some-project
 Scanning ~/code/some-project...
-Wrote .graphlm/GRAPH.md, .graphlm/GRAPH.json, .graphlm/GRAPH.html
+Wrote .graphlm/GRAPH.md, .graphlm/GRAPH.html
 ```
 
-By default the map is written into a `.graphlm/` folder inside the project (so it stays out of your way); point it elsewhere with `-o`.
+By default graphlm writes the Markdown map (`GRAPH.md`) and the interactive HTML — the `.md` is the map you feed a coding agent (the JSON's node/link arrays burn a context window faster). Add `--json` for the machine-readable `GRAPH.json`. The map is written into a `.graphlm/` folder inside the project (so it stays out of your way); point it elsewhere with `-o`.
 
 ## What it produces
 
@@ -28,7 +28,7 @@ By default the map is written into a `.graphlm/` folder inside the project (so i
 - **Mermaid module graph** — a directory-level `flowchart` of the parser's import edges inside `GRAPH.md`, with import-cycle members in red. GitHub renders it natively, so a committed map shows a picture with no CDN and no extra file
 - **Interactive HTML** — D3 force graph (`GRAPH.html`) with zoom/pan, search, theme toggle, and layer toggles for parser-proven imports vs LLM-inferred imports vs data flow; cycle members are ringed red
 - **Provenance stamp** — `GRAPH.json` records when and against which git commit the map was generated, and `GRAPH.md` opens with a refresh directive so a coding agent can tell when the map is stale (see [Self-refreshing graph](#self-refreshing-graph))
-- **Graph-vs-graph diff** — every run also writes `GRAPH_DIFF.md` / `GRAPH_DIFF.json`: what changed in the *map* (modules, edges, cycles, data flows, entry points, file summaries added and removed) since the prior run, so you see a new entry point or a broken import cycle at a glance without re-reading the whole graph (see [Graph diff](#graph-diff))
+- **Graph-vs-graph diff** — every run also writes `GRAPH_DIFF.md` (and `GRAPH_DIFF.json` with `--json`): what changed in the *map* (modules, edges, cycles, data flows, entry points, file summaries added and removed) since the prior run, so you see a new entry point or a broken import cycle at a glance without re-reading the whole graph (see [Graph diff](#graph-diff))
 
 ## Install
 
@@ -96,7 +96,7 @@ Want to see what it *would* send the model without spending a token? Add `--dry-
 ### CLI
 
 ```bash
-# Analyze a project; writes GRAPH.md, GRAPH.json, GRAPH.html into <project>/.graphlm/
+# Analyze a project; writes GRAPH.md + GRAPH.html into <project>/.graphlm/ (add --json for GRAPH.json)
 graphlm /path/to/project
 
 # Write to a different directory
@@ -208,7 +208,7 @@ graphlm .                                            # generate the map first (s
 claude mcp add graphlm -- graphlm --serve /path/to/repo   # register with Claude Code (once per repo)
 ```
 
-The server reads `<project>/.graphlm/GRAPH.json` (or the `-o` directory) and picks up a regenerated map automatically — no restart. It never runs the LLM: if there is no map yet it says so and tells the agent to run `graphlm .`. The `--install-skill` guide tells the agent to prefer these tools when they are registered.
+The server reads graphlm's internal working copy `<project>/.graphlm/.graph-state.json` (or the `-o` directory) — written on every run regardless of `--json` — and picks up a regenerated map automatically — no restart. It never runs the LLM: if there is no map yet it says so and tells the agent to run `graphlm .`. The `--install-skill` guide tells the agent to prefer these tools when they are registered.
 
 ## Self-refreshing graph
 
@@ -297,9 +297,11 @@ graph-vs-graph diff, not a code diff (git already does code diffs better).
 On by default. Pass `--no-diff` (or `include_diff=False`) to skip it. `--dry-run`
 writes no diff — it makes no LLM call and produces no authoritative graph. The
 diff is pure local computation over the two graphs: no extra network or LLM call.
-Opting out only *skips writing* — like `--no-html`, it does not delete a
-`GRAPH_DIFF.*` left by a previous run, so a stale diff can linger on disk;
-regenerate (or remove it) if that matters.
+A re-run's fresh-run cleanup removes graphlm's *own* stale artifacts, so opting a
+format out (`--no-diff`, `--no-html`, or dropping `--json`) now also removes a
+`GRAPH_DIFF.*` / `.html` / `GRAPH.json` a previous run left — no stale artifact
+lingers. (Only graphlm's own exact filenames are touched; user files are never
+removed.)
 
 **Committing vs. gitignoring the graph.** The refresh check is `stamped_sha !=
 HEAD`, so **if you commit `GRAPH.*`, the stamp is invalidated by the very commit
@@ -368,7 +370,7 @@ Patterns are merged with the built-in exclude set and any `--exclude` flags (uni
 
 | Flag | Description | Default |
 |---|---|---|
-| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.json`, and `GRAPH.html` | `<project>/.graphlm/` |
+| `-o, --output-dir` | Output directory for `GRAPH.md`, `GRAPH.html` (and `GRAPH.json` with `--json`) | `<project>/.graphlm/` |
 | `-b, --base-url` | LLM API base URL | `GRAPHLM_BASE_URL` env var |
 | `-k, --api-key` | LLM API key | `GRAPHLM_API_KEY` env var |
 | `-m, --model` | Model name | `GRAPHLM_MODEL` env var |
@@ -385,6 +387,7 @@ Patterns are merged with the built-in exclude set and any `--exclude` flags (uni
 | `--no-redact` | Skip secret redaction | Redaction on |
 | `--dry-run` | Show stats without calling LLM | Disabled |
 | `--no-ast` | Skip Tree-sitter AST import edges | AST on |
+| `--json` | Also write the machine-readable `GRAPH.json` / `GRAPH_DIFF.json` | JSON off (`.md` + `.html` only) |
 | `--no-html` | Do not write `GRAPH.html` | HTML on |
 | `--no-diff` | Do not write `GRAPH_DIFF.*` | Diff on |
 | `--no-show-cycles` | Skip the cycle section | Cycles on |

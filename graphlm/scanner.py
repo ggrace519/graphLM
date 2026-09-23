@@ -2,77 +2,21 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import os
 from pathlib import Path
 
+from graphlm.exclusions import _ALWAYS_EXCLUDE, _should_exclude
 from graphlm.redact import _is_sensitive_file, _redact_secrets
+from graphlm.scan_guards import (
+    _is_nested_checkout,
+    _path_is_inside,
+    _symlink_hides_sensitive,
+    load_graphlmignore,
+)
+from graphlm.testpaths import is_test_path
 
 logger = logging.getLogger(__name__)
-
-# Patterns that are always excluded (in addition to user-specified ones)
-_ALWAYS_EXCLUDE = {
-    ".git",
-    ".svn",
-    ".hg",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".hypothesis",  # Hypothesis example DB — thousands of cache files
-    ".tox",
-    ".eggs",
-    "*.egg-info",
-    "node_modules",
-    ".venv",
-    "venv",
-    "env",
-    ".env",
-    ".gitignore",
-    ".gitkeep",
-    ".graphlmignore",  # the ignore file itself — never sent to the LLM (#38)
-    # Build / dist / cache output. These match on any path component, so a
-    # legitimately-named source dir called "build"/"dist"/"target" anywhere in
-    # the tree is also excluded — an accepted trade-off (precedent: bare "env"
-    # above already excludes any component named env). They only remove files
-    # from analysis; no security invariant depends on them. Together with the
-    # per-directory tree cap, this keeps huge polyglot repos (Rust target/,
-    # JS build/, hypothesis caches) from overflowing the LLM context (#17).
-    "target",  # Rust/Java build output (crates/*/target/... is thousands of files)
-    "build",
-    "dist",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".terraform",
-    ".gradle",
-    "coverage",
-    "htmlcov",
-    ".idea",
-    ".vscode",
-    # graphlm's own output directory. The CLI writes GRAPH.* / GRAPH_DIFF.* into
-    # a `.graphlm/` subdir of the scanned project by default, so excluding the
-    # whole directory keeps graphlm from ingesting its own map (and diff, #28) as
-    # source on a re-run. `_should_exclude` matches any path component, so this
-    # drops `.graphlm/` and everything under it in one entry.
-    ".graphlm",
-    # graphlm's own output artifacts *by filename*, for the case where output is
-    # redirected into the scanned tree with `-o` (or a library caller writes to
-    # the project root) rather than the default `.graphlm/` dir. Named explicitly
-    # (not a broad GRAPH*) so a user's GRAPHICS.md etc. is untouched.
-    # NOTE: these are the *default* suffix ("GRAPH") only. write_outputs accepts
-    # custom *_suffix / diff_suffix params, so a library caller writing e.g.
-    # `map.json` / `map_DIFF.json` and then re-scanning that dir would re-ingest
-    # them. Not reachable today (the CLI exposes no suffix flag), so it's not
-    # live — but if a `--json-suffix` / `--diff-suffix` flag is ever added, make
-    # this exclusion suffix-aware (or the self-ingestion bug reopens for it).
-    "GRAPH.md",
-    "GRAPH.json",
-    "GRAPH.html",
-    "GRAPH_DIFF.md",
-    "GRAPH_DIFF.json",
-}
 
 # Hard cap on how many listed children any one directory contributes to the
 # pass-1 tree. Bounds tree size independently of the exclude list so a huge or
@@ -193,133 +137,9 @@ def estimate_tokens(text: str) -> int:
     return len(text.encode("utf-8")) * 2 // 5
 
 
-def _should_exclude(rel_path: str, exclude_patterns: tuple[str, ...]) -> bool:
-    """Check if a relative path matches any exclusion pattern."""
-    parts = Path(rel_path).parts
-    for pattern in exclude_patterns:
-        # Match against the full relative path
-        if fnmatch.fnmatch(rel_path, pattern):
-            return True
-        # Match against individual path components
-        for part in parts:
-            if fnmatch.fnmatch(part, pattern):
-                return True
-    return False
-
-
 def _is_binary(path: Path) -> bool:
     """Check if a file is likely binary by extension."""
     return path.suffix.lower() in _BINARY_EXTS
-
-
-def _symlink_hides_sensitive(
-    path: Path, exclude: tuple[str, ...] | None = None
-) -> bool:
-    """True when ``path`` is a symlink to a never-read file or excluded tree.
-
-    Guards inspect the *link name*; ``read_text`` follows the target, so
-    ``crypto.py → .ssh/id_rsa`` used to send the key body to the LLM, and
-    ``config.yaml → secrets/prod.yaml`` still would when ``secrets`` is
-    only in ``.graphlmignore``.
-    """
-    if not path.is_symlink():
-        return False
-    try:
-        target = path.resolve()
-    except OSError:
-        return True
-    if _is_sensitive_file(target):
-        return True
-    pats = exclude if exclude is not None else tuple(_ALWAYS_EXCLUDE)
-    for part in target.parts:
-        for pat in pats:
-            if fnmatch.fnmatch(part, pat):
-                return True
-    return False
-
-def _is_test_path(rel_path: str) -> bool:
-    """True for test files/dirs — not names that merely contain ``test`` (#94).
-
-    ``latest.py`` / ``contest.py`` / ``testing.py`` are ordinary modules.
-    ``test_foo.py``, ``foo_test.py``, ``foo.test.js``, and anything under
-    ``tests/`` / ``test/`` / ``__tests__/`` are tests.
-    """
-    rel = rel_path.replace("\\", "/").lower()
-    parts = rel.split("/")
-    name = parts[-1]
-    stem = name.rsplit(".", 1)[0] if "." in name else name
-    dir_parts = parts[:-1]
-    if parts[0] in {"tests", "test", "__tests__"} or any(
-        p in {"tests", "test", "__tests__"} for p in dir_parts
-    ):
-        return True
-    if stem.startswith("test_") or stem.endswith("_test") or stem == "test":
-        return True
-    if ".test." in name or ".spec." in name:
-        return True
-    return False
-
-
-def _is_nested_checkout(dir_path: Path) -> bool:
-    """True if ``dir_path`` is the root of another git checkout.
-
-    A git worktree or submodule marks its root with a ``.git`` *file* (a
-    pointer into the parent's gitdir), a vendored clone with a ``.git``
-    directory; ``exists()`` covers both. Such a subtree is a different project
-    — merging it into the parent's map duplicates every module and edge under a
-    second prefix (observed with agent worktrees under ``.claude/worktrees/``
-    and would equally hit submodules). The scan root itself is never tested
-    here (only children are), so scanning a repo is unaffected.
-    """
-    try:
-        return (dir_path / ".git").exists()
-    except OSError:
-        return False
-
-
-def _path_is_inside(project_dir: Path, target: Path) -> bool:
-    """Check if target path is inside (or equal to) project_dir.
-
-    Handles symlinks by resolving the parent of each path component,
-    which prevents symlink traversal attacks.
-    """
-    try:
-        # Resolve both paths
-        project_resolved = project_dir.resolve()
-        target_resolved = target.resolve()
-        # Check containment via commonpath
-        common = str(project_resolved)
-        return str(target_resolved).startswith(common + "/") or str(target_resolved) == common
-    except (ValueError, OSError):
-        return False
-
-
-def load_graphlmignore(project_dir: Path) -> tuple[str, ...]:
-    """Patterns from ``.graphlmignore`` (gitignore-lite). Missing → ``()``.
-
-    One glob per line; ``#`` comments and blanks skipped; trailing ``/``
-    stripped so ``.godot/`` matches the ``.godot`` path component. Never
-    raises — unreadable / non-UTF-8 / escaping-symlink files are skipped.
-    """
-    path = project_dir / ".graphlmignore"
-    try:
-        if path.is_symlink() and not _path_is_inside(project_dir, path):
-            return ()
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return ()
-    except (OSError, UnicodeDecodeError):
-        logger.warning("Could not read %s; ignoring it", path)
-        return ()
-    out: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        line = line.rstrip("/")
-        if line:
-            out.append(line)
-    return tuple(out)
 
 
 def scan_project(
@@ -442,7 +262,7 @@ def scan_project(
                 ):
                     skipped_count += 1
                     continue
-                if not include_tests and _is_test_path(rel_str):
+                if not include_tests and is_test_path(rel_str):
                     skipped_count += 1
                     continue
 
@@ -524,7 +344,7 @@ def scan_project(
             return 1
         if name.endswith("/main.py") or name.endswith("/main.js"):
             return 2
-        if _is_test_path(rel_path):
+        if is_test_path(rel_path):
             return 10
         # Source code outranks non-source text (docs, data, configs not already
         # prioritized above). Under a tight max_files cap, a doc-heavy repo (e.g.
@@ -571,7 +391,7 @@ def scan_project(
             ):
                 skipped_count += 1
                 continue
-            if not include_tests and _is_test_path(rel):
+            if not include_tests and is_test_path(rel):
                 continue
 
             try:

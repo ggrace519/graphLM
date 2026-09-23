@@ -186,6 +186,9 @@ class TestQueries:
         assert ov["counts"]["ast_import_edges"] == 4
         assert ov["counts"]["llm_import_edges"] == 3
         assert ov["counts"]["import_cycles"] == 1
+        # The fixture's lone cycle is production (not test paths).
+        assert ov["counts"]["production_cycles"] == 1
+        assert ov["counts"]["test_only_cycles"] == 0
         assert ov["most_imported"][0] == {"path": "app/core.py", "imported_by": 2}
         assert ov["entry_points"] == [{"path": "app/cli.py", "name": "main()", "kind": "cli_command"}]
         assert ov["architecture_notes"] == ["Two layers."]
@@ -334,7 +337,34 @@ class TestQueries:
     def test_cycles(self, index):
         c = query.cycles(index)
         assert c["count"] == 1
-        assert c["cycles"][0] == {"nodes": ["app/core.py", "app/util.py"], "length": 2, "risk_score": 4.2}
+        # A production (non-test) cycle → test_only False, split counts reflect it.
+        assert c["production_count"] == 1
+        assert c["test_only_count"] == 0
+        assert c["cycles"][0] == {
+            "nodes": ["app/core.py", "app/util.py"],
+            "length": 2,
+            "risk_score": 4.2,
+            "test_only": False,
+        }
+
+    def test_cycles_marks_test_only(self):
+        # A cycle among test files is reported test_only, and split into counts.
+        g = CodebaseGraph(
+            directory_tree="",
+            import_cycles=[
+                Cycle(
+                    nodes=["tests/a.py", "tests/b.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                    test_only=True,
+                )
+            ],
+        )
+        c = query.cycles(query.build_index(g))
+        assert c["production_count"] == 0
+        assert c["test_only_count"] == 1
+        assert c["cycles"][0]["test_only"] is True
 
     def test_entry_points(self, index):
         assert query.entry_points(index)["entry_points"][0]["name"] == "main()"

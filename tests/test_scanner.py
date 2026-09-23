@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
+from graphlm.exclusions import _ALWAYS_EXCLUDE, _should_exclude
+from graphlm.scan_guards import load_graphlmignore
 from graphlm.scanner import (
     FileFragment,
     ScanResult,
     _is_binary,
     _is_sensitive_file,
     _redact_secrets,
-    _should_exclude,
     estimate_tokens,
-    load_graphlmignore,
     scan_project,
 )
 
@@ -50,16 +50,12 @@ class TestShouldExclude:
 
     def test_graphlm_own_outputs_excluded(self):
         """graphlm's own GRAPH.* / GRAPH_DIFF.* artifacts are never re-ingested."""
-        from graphlm.scanner import _ALWAYS_EXCLUDE
-
         pats = tuple(_ALWAYS_EXCLUDE)
         for name in ("GRAPH.md", "GRAPH.json", "GRAPH.html", "GRAPH_DIFF.md", "GRAPH_DIFF.json"):
             assert _should_exclude(name, pats) is True, name
 
     def test_user_graph_named_files_not_excluded(self):
         """The exclusion is named, not a broad GRAPH* glob, so user files survive."""
-        from graphlm.scanner import _ALWAYS_EXCLUDE
-
         pats = tuple(_ALWAYS_EXCLUDE)
         for name in ("GRAPHICS.md", "GRAPHITE.json", "my_GRAPH.md", "docs/GRAPHING.md"):
             assert _should_exclude(name, pats) is False, name

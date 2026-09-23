@@ -436,6 +436,51 @@ def test_diff_json_null_sha_preserved():
     assert data["old_commit_sha"] is None
 
 
+def test_diff_schema_version_is_2():
+    # Bumped for the version_changed state + old/new_graphlm_version fields.
+    assert DIFF_SCHEMA_VERSION == 2
+
+
+def test_version_changed_state_json_names_versions():
+    new = _graph(modules=["b.py"])
+    d = compute_diff(
+        None,
+        new,
+        BaselineState.VERSION_CHANGED,
+        old_version="0.5.0",
+        new_version="0.6.0",
+    )
+    data = json.loads(render_diff_json(d))
+    assert data["state"] == "version_changed"
+    assert data["old_graphlm_version"] == "0.5.0"
+    assert data["new_graphlm_version"] == "0.6.0"
+    # A version change is never a comparison → no added/removed modules.
+    assert data["dimensions"] == {}
+
+
+def test_version_changed_state_markdown_names_versions():
+    d = compute_diff(
+        None,
+        _graph(modules=["b.py"]),
+        BaselineState.VERSION_CHANGED,
+        old_version="0.5.0",
+        new_version="0.6.0",
+    )
+    md = render_diff_markdown(d)
+    assert "graphlm 0.5.0" in md
+    assert "0.6.0" in md
+    assert "regenerated fresh" in md
+    # Distinct from a first run / uncomparable.
+    assert "No prior graph was found" not in md
+    assert "could not be read" not in md
+
+
+def test_version_changed_with_unknown_versions_still_renders():
+    d = compute_diff(None, _graph(modules=["b.py"]), BaselineState.VERSION_CHANGED)
+    md = render_diff_markdown(d)
+    assert "an unknown version" in md
+
+
 # --- write_outputs integration: ordering, WriteResult, on/off ----------------
 
 
@@ -457,7 +502,10 @@ def test_write_outputs_first_run_writes_diff(tmp_path):
 
 
 def test_write_outputs_poison_baseline_still_writes_new_graph(tmp_path):
-    (tmp_path / "GRAPH.json").write_bytes(b"\xff\xfe poison")
+    # The baseline is the internal working copy, not GRAPH.json — poison it there.
+    from graphlm.freshness import STATE_FILENAME
+
+    (tmp_path / STATE_FILENAME).write_bytes(b"\xff\xfe poison")
 
     result = write_outputs(_graph(modules=["new.py"]), tmp_path)
 

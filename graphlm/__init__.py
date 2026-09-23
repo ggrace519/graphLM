@@ -27,6 +27,12 @@ from graphlm.context import (
     filter_requested_files,
 )
 from graphlm.cycles import compute_sloc_map, detect_cycles
+from graphlm.enrich import (
+    build_meta,
+    is_directory_granular,
+    pass_usage,
+    score_file_importance,
+)
 from graphlm.faithfulness import score as score_faithfulness
 from graphlm.llm import (
     CodebaseGraph,
@@ -35,124 +41,13 @@ from graphlm.llm import (
 )
 from graphlm.models import (
     ArchitectureNote,
-    FileImportance,
-    GraphMeta,
     ImportEdge,
-    PassUsage,
     RunUsage,
 )
 from graphlm.parser import build_dependency_graph
 from graphlm.prompts import SYSTEM_PROMPT
-from graphlm.provenance import git_commit_sha, graphlm_version, now_utc_iso
 from graphlm.render import WriteResult, write_outputs
 from graphlm.scanner import ScanResult, scan_project
-
-
-def _is_directory_granular(graph: "CodebaseGraph") -> bool:
-    """True when the LLM described modules at directory (not file) granularity.
-
-    A module path is a directory when its final segment has no file extension. On a
-    large repo the LLM emits packages (``src/pkg/sub``); on small/medium repos it
-    emits files (``src/pkg/mod.py``). We treat the graph as directory-granular when
-    *most* module paths are directories, so a stray extensionless file among real
-    file modules doesn't flip a file-granular graph onto the file-importance path.
-    """
-    mods = graph.modules
-    if not mods:
-        return False
-    dir_like = sum(1 for m in mods if "." not in m.path.replace("\\", "/").rsplit("/", 1)[-1])
-    return dir_like > len(mods) / 2
-
-
-def _score_file_importance(
-    graph: "CodebaseGraph",
-    edges: list["ImportEdge"],
-    *,
-    api_key: str | None,
-    summaries_by_path: dict[str, str],
-    evidence,  # the graphlm.evidence module (passed to avoid a re-import)
-    client=None,  # injectable Jev client (tests pass a fake; None → real)
-) -> "list[FileImportance] | None":
-    """Score file-level importance over file_summaries → sorted FileImportance list.
-
-    Builds file "modules" from ``file_summaries`` (always file-level), reuses
-    ``score_importance`` for the Jev role, fuses with per-file degree the same way
-    ``render._fused_importance`` does, and returns the files sorted most load-bearing
-    first. ``None`` when Jev is off or there are no summaries. Never raises past the
-    caller's guard.
-    """
-    summaries = graph.file_summaries
-    if not summaries:
-        return None
-
-    class _FileMod:
-        __slots__ = ("path", "description")
-
-        def __init__(self, path: str, description: str) -> None:
-            self.path = path
-            self.description = description
-
-    norm = evidence._norm
-    file_mods = [_FileMod(norm(s.path), s.summary) for s in summaries]
-    roles = evidence.score_importance(
-        file_mods, edges, api_key=api_key, summaries_by_path=summaries_by_path,
-        client=client,
-    )
-    if roles is None:
-        return None
-
-    degree = evidence.file_degree(edges)
-    scored = [(p, roles[p], degree.get(p, 0)) for _m in file_mods if (p := _m.path) in roles]
-    if not scored:
-        return None
-    # Rank-normalise degree, blend 0.6*role + 0.4*degree (render's weighting).
-    degs = sorted({d for _p, _r, d in scored})
-    dmax = len(degs) - 1
-    drank = {d: (i / dmax if dmax else 1.0) for i, d in enumerate(degs)}
-    out = [
-        FileImportance(
-            path=p, role=r, degree=d, fused=round(0.6 * (r / 3.0) + 0.4 * drank[d], 4)
-        )
-        for p, r, d in scored
-    ]
-    out.sort(key=lambda fi: (-fi.fused, fi.path))
-    return out
-
-
-def _build_meta(project_path: Path) -> GraphMeta:
-    """Build the provenance stamp for a run against ``project_path``.
-
-    Failure-tolerant throughout: a non-git project yields ``commit_sha=None``,
-    a non-installed checkout yields ``graphlm_version=None``. Never raises.
-    """
-    return GraphMeta(
-        created_at=now_utc_iso(),
-        commit_sha=git_commit_sha(project_path),
-        graphlm_version=graphlm_version(),
-    )
-
-
-def _pass_usage(usage: dict[str, object] | None, estimated: int) -> PassUsage:
-    """Build one pass's ``PassUsage`` from the server's raw ``usage`` dict.
-
-    The dict is untrusted telemetry from the endpoint: a missing key, a
-    non-int (some servers emit floats or strings), or ``None`` all read as
-    "not reported" rather than raising — the run must never fail on
-    accounting. ``bool`` is excluded explicitly because it is an ``int``
-    subclass and ``true`` would otherwise stamp as ``1``.
-    """
-
-    def _int(key: str) -> int | None:
-        value = usage.get(key) if usage else None
-        if isinstance(value, bool) or not isinstance(value, int):
-            return None
-        return value
-
-    return PassUsage(
-        prompt_tokens=_int("prompt_tokens"),
-        completion_tokens=_int("completion_tokens"),
-        estimated_prompt_tokens=estimated,
-    )
 
 
 class GraphResult:
@@ -174,19 +69,19 @@ class GraphResult:
         self,
         output_dir: str | Path,
         *,
+        include_json: bool = True,
         include_html: bool = True,
         include_diff: bool = True,
     ) -> WriteResult:
-        """Write .md, .json (and optionally .html + the diff) to output_dir.
+        """Write .md, optionally .json/.html, and (by default) the diff to output_dir.
 
-        Returns a ``WriteResult`` — the ``(md, json, html)`` path tuple, with
-        ``.diff_md`` / ``.diff_json`` attributes (``None`` when
-        ``include_diff=False``). The diff (``GRAPH_DIFF.*``) reads the prior
-        ``GRAPH.json`` in ``output_dir`` before overwriting it; see ADR-002.
+        Returns ``(md, json, html)`` (+ ``.diff_md``/``.diff_json``); json slot is
+        ``None`` when ``include_json=False``. Library default is ``True``, CLI off;
+        an internal working copy for diff/``--serve`` is kept either way (ADR-016).
         """
         return write_outputs(
-            self.graph, Path(output_dir), html=include_html, diff=include_diff
-        )
+            self.graph, Path(output_dir),
+            json=include_json, html=include_html, diff=include_diff)
 
 
 def generate_graph(
@@ -403,7 +298,7 @@ def generate_graph(
             ]
         # Stamp the dry-run graph too, so its provenance is consistent with a
         # real run (a --dry-run write would otherwise carry no directive).
-        graph.meta = _build_meta(project_path)
+        graph.meta = build_meta(project_path)
         return GraphResult(
             graph=graph,
             pass1_context_tokens=pass1_tokens(scan.tree),
@@ -497,7 +392,7 @@ def generate_graph(
     # Stamp provenance locally, overwriting anything the model may have emitted
     # for `meta` (like directory_tree, meta is filled here, never trusted from
     # the LLM). The GRAPH.md refresh directive is rendered from this.
-    graph.meta = _build_meta(project_path)
+    graph.meta = build_meta(project_path)
     # Run telemetry (innovation #6), also local-only. `usage` pairs the
     # server's real counts with graphlm's own estimate for the same prompt so
     # the estimate_tokens heuristic (#17) is auditable from the stamp;
@@ -505,8 +400,8 @@ def generate_graph(
     # truth (None when AST was off — never a fake zero). Neither is set on a
     # dry run: no LLM call, so no usage and no LLM edges to score.
     graph.meta.usage = RunUsage(
-        pass1=_pass_usage(usage_seen["pass1"], pass1_tokens(scan.tree)),
-        pass2=_pass_usage(usage_seen["pass2"], pass2_tokens),
+        pass1=pass_usage(usage_seen["pass1"], pass1_tokens(scan.tree)),
+        pass2=pass_usage(usage_seen["pass2"], pass2_tokens),
     )
     graph.meta.faithfulness = score_faithfulness(
         graph.import_edges, deterministic_edges
@@ -558,8 +453,8 @@ def generate_graph(
             # +0.105 when scoring the file-level `file_summaries` instead. So score
             # files and stamp meta.file_importance; on a file-granular graph keep the
             # module-level fill exactly as before (INNOVATIONS #6).
-            if _is_directory_granular(graph):
-                graph.meta.file_importance = _score_file_importance(
+            if is_directory_granular(graph):
+                graph.meta.file_importance = score_file_importance(
                     graph, deterministic_edges or [], api_key=api_key,
                     summaries_by_path=summaries_by_path, evidence=_evidence,
                 )
