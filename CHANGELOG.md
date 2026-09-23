@@ -7,6 +7,8 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-23
+
 ### Changed
 
 - **A fresh run leaves the output dir with exactly the artifacts it produced.** When graphlm regenerates a map — especially after an upgrade, or when you toggle a flag like `--json` — it now removes its *own* stale artifacts (e.g. a `GRAPH.json` left over from a prior version) so an agent can't glob an outdated machine-readable map beside a fresh `GRAPH.md`. Only graphlm's own exact artifact names are ever removed (never a directory, never a glob, symlinks skipped) — your `GRAPHICS.md` / `graph.json` / `GRAPH_notes.md` are untouched. When the prior map came from a **different graphlm version**, `GRAPH_DIFF` now says so explicitly ("prior graph from graphlm 0.5.0 — regenerated fresh under 0.6.0, not compared") instead of misreporting it as a first run or a corrupt file; the diff JSON gains `old_graphlm_version` / `new_graphlm_version` and its `diff_schema_version` is bumped to 2. `GRAPH.md`'s provenance line now names the graphlm version that produced it, and `GRAPH.html` embeds it as machine-readable data.
@@ -359,7 +361,8 @@ First public release. graphlm is installable from PyPI (`uv tool install graphlm
 - mypy type checking in CI
 - Removed stale generated artifacts (`graphs.md`, `graphs.json`, `graph.html`) left over from before the `GRAPH.*` output rename, and the committed `.coverage` database; the repo no longer ships tool output. Added `.coverage`, `coverage.xml`, and the `GRAPH.*` output files to `.gitignore` so generated artifacts stay out of version control
 
-[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ggrace519/graphLM/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ggrace519/graphLM/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ggrace519/graphLM/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/ggrace519/graphLM/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ggrace519/graphLM/compare/v0.4.0...v0.4.1
