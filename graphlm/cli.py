@@ -102,9 +102,13 @@ def _do_serve(project_dir: Path | None, output_dir: str | None) -> None:
     ``graphlm .``) rather than a missing extra.
     """
     from graphlm.query import MapUnavailable, load_map
+    from graphlm.render import STATE_FILENAME
 
     project = project_dir if project_dir is not None else Path(".")
-    json_path = output_destination(project, output_dir) / "GRAPH.json"
+    # Serve reads graphlm's internal JSON working copy, which is written on every
+    # real run regardless of --json — so `--serve` works without the user-facing
+    # GRAPH.json deliverable.
+    json_path = output_destination(project, output_dir) / STATE_FILENAME
     try:
         load_map(json_path)
     except MapUnavailable as e:
@@ -330,6 +334,14 @@ def main(
         help="Do not write the GRAPH_DIFF.* graph-vs-graph diff (what changed "
         "in the map since the prior run).",
     ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Also write the machine-readable GRAPH.json (and GRAPH_DIFF.json). "
+        "By default graphlm writes GRAPH.md + GRAPH.html — the .md is the "
+        "agent-facing map; JSON node/link arrays fill a context window faster. "
+        "graphlm keeps an internal working copy either way for --serve/diff.",
+    ),
     no_evidence: bool = typer.Option(
         False,
         "--no-evidence",
@@ -489,13 +501,19 @@ def main(
 
     dest = output_destination(project_dir, output_dir)
     try:
-        written = result.write(dest, include_html=not no_html, include_diff=not no_diff)
+        written = result.write(
+            dest,
+            include_json=json_out,
+            include_html=not no_html,
+            include_diff=not no_diff,
+        )
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(2)
     md_path, json_path, html_path = written
     typer.echo(f"Markdown:  {md_path}", err=True)
-    typer.echo(f"JSON:      {json_path}", err=True)
+    if json_path:
+        typer.echo(f"JSON:      {json_path}", err=True)
     if html_path:
         typer.echo(f"HTML:      {html_path}", err=True)
     if written.diff_md:

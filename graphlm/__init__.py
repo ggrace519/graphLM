@@ -174,18 +174,28 @@ class GraphResult:
         self,
         output_dir: str | Path,
         *,
+        include_json: bool = True,
         include_html: bool = True,
         include_diff: bool = True,
     ) -> WriteResult:
-        """Write .md, .json (and optionally .html + the diff) to output_dir.
+        """Write .md, optionally .json/.html, and (by default) the diff to output_dir.
 
         Returns a ``WriteResult`` — the ``(md, json, html)`` path tuple, with
-        ``.diff_md`` / ``.diff_json`` attributes (``None`` when
-        ``include_diff=False``). The diff (``GRAPH_DIFF.*``) reads the prior
-        ``GRAPH.json`` in ``output_dir`` before overwriting it; see ADR-002.
+        ``.diff_md`` / ``.diff_json`` attributes. The ``json`` slot is ``None``
+        when ``include_json=False``; ``.diff_*`` are ``None`` when the diff /
+        diff-JSON weren't written. graphlm always keeps an internal JSON working
+        copy for the diff baseline and ``--serve`` regardless of
+        ``include_json`` — see ADR-002 and the JSON-opt-in ADR.
+
+        The library default is ``include_json=True`` (the CLI defaults it off) so
+        existing library callers unpacking ``md, json, html`` are unaffected.
         """
         return write_outputs(
-            self.graph, Path(output_dir), html=include_html, diff=include_diff
+            self.graph,
+            Path(output_dir),
+            json=include_json,
+            html=include_html,
+            diff=include_diff,
         )
 
 

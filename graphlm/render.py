@@ -20,6 +20,13 @@ from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 _ROLE_WEIGHT = 0.6
 _DEGREE_WEIGHT = 0.4
 
+# graphlm's internal JSON working copy. Always written (unlike the opt-in
+# user-facing GRAPH.json deliverable) because the graph-vs-graph diff needs the
+# prior run's JSON as its baseline and ``--serve`` reads a JSON map. Dot-prefixed
+# so it reads as internal state, and excluded by the scanner like the other
+# artifacts. It lives beside the artifacts in ``output_dir``.
+STATE_FILENAME = ".graph-state.json"
+
 
 def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | None:
     """Fuse each module's role + degree into a 0–1 importance, or None if unscored.
@@ -468,26 +475,32 @@ def write_outputs(
     *,
     md_suffix: str = "GRAPH",
     json_suffix: str = "GRAPH",
+    json: bool = True,
     html: bool = True,
     html_suffix: str = "GRAPH",
     diff: bool = True,
     diff_suffix: str | None = None,
 ) -> WriteResult:
-    """Write Markdown, JSON, optionally HTML, and (by default) the diff to output_dir.
+    """Write Markdown, an internal JSON working copy, optionally the JSON/HTML/diff.
 
-    The graph-vs-graph diff (``GRAPH_DIFF.md`` + ``.json``) reads the *prior*
-    ``{json_suffix}.json`` in ``output_dir`` — before it is overwritten — and
-    reports what changed in the map (ADR-002). ``diff=False`` skips it.
+    graphlm always writes an internal JSON *working copy* (``STATE_FILENAME``) so
+    the graph-vs-graph diff has a baseline and ``--serve`` has a map to read.
+    The user-facing ``{json_suffix}.json`` deliverable — and the
+    ``{diff_suffix}_DIFF.json`` — are written only when ``json=True``.
+
+    The diff (``GRAPH_DIFF.md`` + optional ``.json``) reads the *prior* working
+    copy — before it is overwritten — and reports what changed in the map
+    (ADR-002). ``diff=False`` skips it. The diff *Markdown* rides ``diff``; the
+    diff *JSON* rides ``json`` too (it is a machine-readable deliverable).
 
     ``diff_suffix`` defaults to **following ``json_suffix``** (ADR-002 decision
-    6: the diff tracks the graph's suffix, so ``json_suffix="map"`` yields
-    ``map_DIFF.*`` — the same base the baseline was read from). Pass an explicit
-    ``diff_suffix`` to override.
+    6). Pass an explicit ``diff_suffix`` to override.
 
     Returns:
-        A ``WriteResult`` — the ``(md_path, json_path, html_path_or_None)``
-        tuple, with ``.diff_md`` / ``.diff_json`` attributes (``None`` when
-        ``diff=False``).
+        A ``WriteResult`` — the ``(md_path, json_path_or_None, html_path_or_None)``
+        tuple, with ``.diff_md`` / ``.diff_json`` attributes. ``json_path`` is
+        ``None`` when ``json=False``; ``.diff_json`` is ``None`` when the diff
+        JSON was not written.
     """
     if diff_suffix is None:
         diff_suffix = json_suffix
@@ -508,19 +521,26 @@ def write_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = output_dir / f"{md_suffix}.md"
-    json_path = output_dir / f"{json_suffix}.json"
+    state_path = output_dir / STATE_FILENAME
     _refuse_symlink(md_path)
-    _refuse_symlink(json_path)
+    _refuse_symlink(state_path)
 
-    # Read the prior graph BEFORE overwriting GRAPH.json (ADR-002 decision 1 —
-    # ordering: baseline read must precede the write).
+    # Read the prior graph from the working copy BEFORE overwriting it (ADR-002
+    # decision 1 — the baseline read must precede the write).
     old_graph = None
     baseline_state = None
     if diff:
-        old_graph, baseline_state = load_baseline(json_path)
+        old_graph, baseline_state = load_baseline(state_path)
 
     md_path.write_text(render_markdown(graph), encoding="utf-8")
-    json_path.write_bytes(render_json(graph))
+
+    payload = render_json(graph)
+    # The user-facing JSON deliverable (opt-in).
+    json_path: Path | None = None
+    if json:
+        json_path = output_dir / f"{json_suffix}.json"
+        _refuse_symlink(json_path)
+        json_path.write_bytes(payload)
 
     html_path: Path | None = None
     if html:
@@ -534,11 +554,16 @@ def write_outputs(
         assert baseline_state is not None
         graph_diff = compute_diff(old_graph, graph, baseline_state)
         diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
-        diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
         _refuse_symlink(diff_md_path)
-        _refuse_symlink(diff_json_path)
         diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
-        diff_json_path.write_bytes(render_diff_json(graph_diff))
+        if json:
+            diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
+            _refuse_symlink(diff_json_path)
+            diff_json_path.write_bytes(render_diff_json(graph_diff))
+
+    # Write the working copy LAST, so a crash mid-write leaves the prior
+    # baseline intact for the next run's diff.
+    state_path.write_bytes(payload)
 
     return WriteResult(
         md_path,

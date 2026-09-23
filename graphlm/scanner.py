@@ -73,6 +73,10 @@ _ALWAYS_EXCLUDE = {
     "GRAPH.html",
     "GRAPH_DIFF.md",
     "GRAPH_DIFF.json",
+    # graphlm's internal JSON working copy (render.STATE_FILENAME) — always
+    # written for the diff baseline / --serve, so exclude it from a re-scan the
+    # same way as the deliverables. Not suffix-dependent (fixed name).
+    ".graph-state.json",
 }
 
 # Hard cap on how many listed children any one directory contributes to the

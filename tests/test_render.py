@@ -303,6 +303,69 @@ class TestWriteOutputs:
             assert json_path.exists()
             assert html_path is None
 
+    def test_working_copy_always_written(self):
+        # The internal working copy exists regardless of the json flag — the diff
+        # baseline and --serve depend on it.
+        from graphlm.render import STATE_FILENAME
+
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(graph, out, json=False, html=False, diff=False)
+            assert (out / STATE_FILENAME).exists()
+
+    def test_json_off_omits_deliverable_but_keeps_working_copy(self):
+        from graphlm.render import STATE_FILENAME
+
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            md_path, json_path, _ = write_outputs(graph, out, json=False, html=False)
+            assert md_path.exists()
+            assert json_path is None  # no user-facing deliverable
+            assert not (out / "GRAPH.json").exists()
+            assert (out / STATE_FILENAME).exists()  # but the working copy is there
+
+    def test_json_off_omits_diff_json_but_keeps_diff_md(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            result = write_outputs(graph, out, json=False, html=False, diff=True)
+            assert result.diff_md is not None and result.diff_md.exists()
+            assert result.diff_json is None
+            assert not (out / "GRAPH_DIFF.json").exists()
+
+    def test_json_on_writes_deliverable_and_diff_json(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            md_path, json_path, _ = write_outputs(graph, out, json=True, html=False)
+            assert json_path is not None and json_path.name == "GRAPH.json"
+            assert json_path.exists()
+
+    def test_diff_reads_working_copy_across_two_runs(self):
+        # Run 1 (json off) writes only the working copy; run 2 must still diff
+        # against it (proving the diff no longer depends on GRAPH.json).
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(
+                CodebaseGraph(directory_tree="root/\n"), out, json=False, html=False
+            )
+            result = write_outputs(
+                CodebaseGraph(
+                    directory_tree="root/\n",
+                    modules=[ModuleDescription(path="new.py", name="n", description="d")],
+                ),
+                out,
+                json=True,
+                html=False,
+            )
+            # A real prior baseline existed → the diff is NORMAL, not first-run.
+            assert result.diff_json is not None
+            import json as _json
+
+            assert _json.loads(result.diff_json.read_text())["state"] == "normal"
+
     def test_refuses_to_write_through_graph_json_symlink(self):
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:

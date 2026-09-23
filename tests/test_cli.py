@@ -93,6 +93,9 @@ class TestCLI:
 
     def test_serve_runs_server_with_resolved_paths(self, tmp_path, monkeypatch):
         # -o is honored for the map location, and PROJECT_DIR defaults to cwd.
+        # --serve reads the internal working copy, not the opt-in GRAPH.json.
+        from graphlm.render import STATE_FILENAME
+
         out = tmp_path / "maps"
         write_outputs(CodebaseGraph(directory_tree=""), out, html=False, diff=False)
         calls = []
@@ -102,7 +105,7 @@ class TestCLI:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["--serve", "-o", str(out)])
         assert result.exit_code == 0, result.stdout + result.stderr
-        assert calls == [(tmp_path.resolve(), (out / "GRAPH.json").resolve())]
+        assert calls == [(tmp_path.resolve(), (out / STATE_FILENAME).resolve())]
 
     def test_install_skill_local_needs_project_dir(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -268,7 +271,9 @@ class TestCLI:
     def test_full_run_prints_telemetry_lines(self, small_project, tmp_path):
         from graphlm.models import Faithfulness, GraphMeta, PassUsage, RunUsage
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir).resolve()
             return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
 
@@ -303,7 +308,9 @@ class TestCLI:
         # Faithfulness lines rather than "None" placeholders.
         from graphlm.models import GraphMeta
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir).resolve()
             return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
 
@@ -352,7 +359,9 @@ class TestCLI:
         monkeypatch.chdir(cwd)
         recorded: dict[str, Path] = {}
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir).resolve()
             recorded["dest"] = dest
             md = dest / "GRAPH.md"
@@ -383,7 +392,9 @@ class TestCLI:
         monkeypatch.chdir(cwd)
         recorded: dict[str, Path] = {}
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir).resolve()
             recorded["dest"] = dest
             md = dest / "GRAPH.md"
@@ -403,7 +414,9 @@ class TestCLI:
         assert recorded["dest"] == out.resolve()
 
     def test_cli_reports_diff_outputs(self, small_project, tmp_path):
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir)
             return WriteResult(
                 dest / "GRAPH.md",
@@ -436,7 +449,9 @@ class TestCLI:
     ):
         recorded: dict[str, bool] = {}
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             recorded["write_include_diff"] = include_diff
             dest = Path(output_dir)
             return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
@@ -462,6 +477,60 @@ class TestCLI:
         assert "Diff (md):" not in result.stderr
         assert "Diff (json):" not in result.stderr
 
+    def test_json_flag_off_by_default_and_omits_json_line(
+        self, small_project, tmp_path
+    ):
+        recorded: dict[str, bool] = {}
+
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
+            recorded["include_json"] = include_json
+            dest = Path(output_dir)
+            # Mirror real write_outputs: no deliverable json when off.
+            js = dest / "GRAPH.json" if include_json else None
+            return WriteResult(dest / "GRAPH.md", js, None)
+
+        def fake_generate_graph(**kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(
+                app, [str(small_project), "-o", str(tmp_path / "out")]
+            )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert recorded["include_json"] is False  # CLI default is off
+        assert "JSON:" not in result.stderr  # no json line when not written
+
+    def test_json_flag_on_writes_and_echoes(self, small_project, tmp_path):
+        recorded: dict[str, bool] = {}
+
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
+            recorded["include_json"] = include_json
+            dest = Path(output_dir)
+            js = dest / "GRAPH.json" if include_json else None
+            return WriteResult(dest / "GRAPH.md", js, None)
+
+        def fake_generate_graph(**kwargs):
+            return GraphResult(CodebaseGraph(directory_tree="t/\n"), 1, 1, 1)
+
+        with (
+            patch("graphlm.generate_graph", fake_generate_graph),
+            patch.object(GraphResult, "write", fake_write),
+        ):
+            result = runner.invoke(
+                app, [str(small_project), "--json", "-o", str(tmp_path / "out")]
+            )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert recorded["include_json"] is True
+        assert "JSON:" in result.stderr
+        assert str(tmp_path / "out" / "GRAPH.json") in result.stderr
+
     def test_help_lists_no_skeleton(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -472,7 +541,9 @@ class TestCLI:
     def test_no_skeleton_threads_through(self, small_project, tmp_path):
         recorded: dict[str, bool] = {}
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir)
             return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
 
@@ -503,7 +574,9 @@ class TestCLI:
     def test_no_graphlmignore_threads_through(self, small_project, tmp_path):
         recorded: dict[str, bool] = {}
 
-        def fake_write(self, output_dir, *, include_html=True, include_diff=True):
+        def fake_write(
+            self, output_dir, *, include_json=False, include_html=True, include_diff=True
+        ):
             dest = Path(output_dir)
             return WriteResult(dest / "GRAPH.md", dest / "GRAPH.json", None)
 

@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **`GRAPH.json` is now opt-in (`--json`); the default outputs are `GRAPH.md` + `GRAPH.html`.** The Markdown map is the artifact a coding agent should read — the JSON's node/link arrays fill a context window far faster for the same information — so the CLI no longer writes `GRAPH.json` (or `GRAPH_DIFF.json`) unless you pass `--json`. Nothing else changes: graphlm keeps an internal JSON working copy (`.graphlm/.graph-state.json`) on every run, so the graph-vs-graph diff and `graphlm --serve` (MCP) work exactly as before with or without `--json`. The **library** API is unchanged — `generate_graph(output_dir=...)` and `GraphResult.write(...)` still write `GRAPH.json` by default (new `include_json=` param to opt out), so `md, json, html = result.write(dir)` and `load_map(".graphlm/GRAPH.json")` keep working. Upgrading users: a `.graphlm/GRAPH.json` from a prior version is now stale unless you run with `--json`.
+
 ### Added
 
 - **`GRAPH.md` opens with a compact orientation block.** The map's highest-signal facts — entry points, whether there are any production import cycles, and the highest-fan-in (blast-radius) files — used to sit hundreds of lines down, after a full directory tree, so an agent (or a human verifying the map) burned context scrolling to find the shape of the repo. A short `## Orientation` section now sits right under the provenance directive, before the directory tree. Fan-in is labelled "most imported (blast radius)", never "importance" — raw import degree measures reach, not architectural weight (ADR-015). The block is a summary of data still rendered in full below, omits any line it has no data for, and is absent entirely when the graph has no entry points, cycles, or edges. The MCP `overview` tool gains matching `production_cycles` / `test_only_cycles` counts and shares the same fan-in computation.

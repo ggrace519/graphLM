@@ -457,7 +457,10 @@ def test_write_outputs_first_run_writes_diff(tmp_path):
 
 
 def test_write_outputs_poison_baseline_still_writes_new_graph(tmp_path):
-    (tmp_path / "GRAPH.json").write_bytes(b"\xff\xfe poison")
+    # The baseline is the internal working copy, not GRAPH.json — poison it there.
+    from graphlm.render import STATE_FILENAME
+
+    (tmp_path / STATE_FILENAME).write_bytes(b"\xff\xfe poison")
 
     result = write_outputs(_graph(modules=["new.py"]), tmp_path)
 
