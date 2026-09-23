@@ -186,6 +186,9 @@ class TestQueries:
         assert ov["counts"]["ast_import_edges"] == 4
         assert ov["counts"]["llm_import_edges"] == 3
         assert ov["counts"]["import_cycles"] == 1
+        # The fixture's lone cycle is production (not test paths).
+        assert ov["counts"]["production_cycles"] == 1
+        assert ov["counts"]["test_only_cycles"] == 0
         assert ov["most_imported"][0] == {"path": "app/core.py", "imported_by": 2}
         assert ov["entry_points"] == [{"path": "app/cli.py", "name": "main()", "kind": "cli_command"}]
         assert ov["architecture_notes"] == ["Two layers."]

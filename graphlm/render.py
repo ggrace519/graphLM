@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from graphlm.cycles_render import render_import_cycles
+from graphlm.orientation import render_orientation
 from graphlm.mermaid import render_mermaid
 from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 
@@ -218,6 +219,11 @@ def render_markdown(graph: CodebaseGraph) -> str:
         "This file was generated automatically by graphLM. "
         "Use it as a map of the project structure without reading every file.\n"
     )
+
+    # Orientation block — a compact, token-cheap summary (entry points, cycle
+    # counts, top fan-in) up front, so an agent gets the shape of the repo
+    # before the directory tree. Omitted entirely when there's nothing to say.
+    lines.extend(render_orientation(graph, importance_summary(graph)))
 
     # Directory tree
     lines.append("## Directory Tree\n")

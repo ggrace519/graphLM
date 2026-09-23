@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from graphlm.degree import top_fan_in
 from graphlm.models import CodebaseGraph, ImportEdge
+from graphlm.pathnorm import norm_path as _norm
 
 
 # Hard ceiling on model-supplied `limit` arguments — a tool call can't flood
@@ -33,14 +35,6 @@ MAX_LIMIT = 1000
 
 class MapUnavailable(Exception):
     """No readable map at the expected location (missing or uncomparable)."""
-
-
-def _norm(path: str) -> str:
-    """Canonical map path: forward slashes, no leading ``./``."""
-    p = path.replace("\\", "/")
-    while p.startswith("./"):
-        p = p[2:]
-    return p
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,10 +200,8 @@ def _unresolved(path: str, candidates: list[str]) -> dict[str, Any]:
 def overview(index: MapIndex) -> dict[str, Any]:
     """Counts, provenance, hubs, and the architecture notes — the 30-second tour."""
     g = index.graph
-    # Distinct importing *files*: a file that both `import x` and
-    # `from x import y` contributes two edge rows but one importer.
-    in_degree = {p: _distinct(v) for p, v in index.in_edges.items()}
-    hubs = sorted(in_degree.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    # Top fan-in (blast radius) — shared with the GRAPH.md orientation block.
+    hubs = top_fan_in(g, limit=10)
     meta = g.meta.model_dump() if g.meta is not None else None
     return {
         "meta": meta,
@@ -223,6 +215,8 @@ def overview(index: MapIndex) -> dict[str, Any]:
             ),
             "data_flows": len(g.data_flow),
             "import_cycles": len(g.import_cycles),
+            "production_cycles": sum(1 for c in g.import_cycles if not c.test_only),
+            "test_only_cycles": sum(1 for c in g.import_cycles if c.test_only),
             "quick_reference": len(g.quick_reference),
             "database_tables": (
                 None if g.database_schema is None else len(g.database_schema)
