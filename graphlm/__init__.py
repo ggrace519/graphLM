@@ -174,19 +174,19 @@ class GraphResult:
         self,
         output_dir: str | Path,
         *,
+        include_json: bool = True,
         include_html: bool = True,
         include_diff: bool = True,
     ) -> WriteResult:
-        """Write .md, .json (and optionally .html + the diff) to output_dir.
+        """Write .md, optionally .json/.html, and (by default) the diff to output_dir.
 
-        Returns a ``WriteResult`` — the ``(md, json, html)`` path tuple, with
-        ``.diff_md`` / ``.diff_json`` attributes (``None`` when
-        ``include_diff=False``). The diff (``GRAPH_DIFF.*``) reads the prior
-        ``GRAPH.json`` in ``output_dir`` before overwriting it; see ADR-002.
+        Returns ``(md, json, html)`` (+ ``.diff_md``/``.diff_json``); json slot is
+        ``None`` when ``include_json=False``. Library default is ``True``, CLI off;
+        an internal working copy for diff/``--serve`` is kept either way (ADR-016).
         """
         return write_outputs(
-            self.graph, Path(output_dir), html=include_html, diff=include_diff
-        )
+            self.graph, Path(output_dir),
+            json=include_json, html=include_html, diff=include_diff)
 
 
 def generate_graph(

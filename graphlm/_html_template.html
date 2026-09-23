@@ -119,6 +119,9 @@ const CYCLE_COLOR = '#e11';
 function nodeStroke(d) { return d.in_cycle ? CYCLE_COLOR : '#fff'; }
 function nodeStrokeWidth(d) { return d.in_cycle ? 2.5 : 1.5; }
 function nodeStrokeOpacity(d) { return d.in_cycle ? 1 : 0.3; }
+// Test files are muted (kept in the map, but not what an agent orients toward).
+// Opacity, not color/stroke, so it never fights the red cycle ring.
+function nodeFillOpacity(d) { return d.is_test ? 0.45 : 1; }
 function buildLegend() {
   const el = document.getElementById('legend');
   el.innerHTML = '<h3>Legend</h3>';
@@ -127,6 +130,7 @@ function buildLegend() {
     {label:'Entry Point', html:'<span class="rect"></span>'},
     {label:'File Summary', html:'<span class="dot" style="width:6px;height:6px"></span>'},
     {label:'In Import Cycle', html:'<span class="dot" style="border:2px solid ' + CYCLE_COLOR + '"></span>'},
+    {label:'Test file (muted)', html:'<span class="dot" style="opacity:0.45"></span>'},
     {label:'Parser Import (AST)', html:'<span class="line" style="border-color:#7aa2f7"></span>'},
     {label:'LLM Import', html:'<span class="line" style="border-color:#888"></span>'},
     {label:'Data Flow', html:'<span class="line" style="border-color:#c69;border-style:dashed"></span>'},
@@ -207,12 +211,12 @@ function initGraph() {
       sel.append('rect')
         .attr('x', -d.r).attr('y', -d.r)
         .attr('width', d.r * 2).attr('height', d.r * 2)
-        .attr('rx', 3).attr('fill', nodeColor(d))
+        .attr('rx', 3).attr('fill', nodeColor(d)).attr('fill-opacity', nodeFillOpacity(d))
         .attr('stroke', nodeStroke(d)).attr('stroke-width', nodeStrokeWidth(d))
         .attr('stroke-opacity', nodeStrokeOpacity(d));
     } else {
       sel.append('circle')
-        .attr('r', d.r).attr('fill', nodeColor(d))
+        .attr('r', d.r).attr('fill', nodeColor(d)).attr('fill-opacity', nodeFillOpacity(d))
         .attr('stroke', nodeStroke(d)).attr('stroke-width', nodeStrokeWidth(d))
         .attr('stroke-opacity', nodeStrokeOpacity(d));
     }

@@ -16,6 +16,7 @@ from graphlm.cycles import (
 )
 from graphlm.models import Cycle, ImportEdge
 from graphlm.scanner import FileFragment
+from graphlm.testpaths import is_test_path
 
 
 def _edge(a: str, b: str, kind: str = "import") -> ImportEdge:
@@ -182,6 +183,50 @@ class TestDetectCycles:
 
 
 # ---------------------------------------------------------------------------
+# test_only classification
+# ---------------------------------------------------------------------------
+
+
+class TestCycleTestOnly:
+    def test_all_production_is_not_test_only(self):
+        edges = [_edge("a.py", "b.py"), _edge("b.py", "a.py")]
+        (cycle,) = detect_cycles(edges)
+        assert cycle.test_only is False
+
+    def test_all_test_is_test_only(self):
+        edges = [
+            _edge("tests/a.py", "tests/b.py"),
+            _edge("tests/b.py", "tests/a.py"),
+        ]
+        (cycle,) = detect_cycles(edges)
+        assert cycle.test_only is True
+
+    def test_mixed_cycle_is_not_test_only(self):
+        # One production file caught in a cycle with test files → production.
+        edges = [
+            _edge("tests/a.py", "b.py"),
+            _edge("b.py", "tests/a.py"),
+        ]
+        (cycle,) = detect_cycles(edges)
+        assert cycle.test_only is False
+
+    def test_fixture_dir_cycle_is_test_only(self):
+        # A cycle among tests/fixtures/... (the graphlm dogfood case).
+        edges = [
+            _edge("tests/fixtures/p/foo.rs", "tests/fixtures/p/bar.rs"),
+            _edge("tests/fixtures/p/bar.rs", "tests/fixtures/p/foo.rs"),
+        ]
+        (cycle,) = detect_cycles(edges)
+        assert cycle.test_only is True
+
+    def test_default_is_false_for_hand_built_cycle(self):
+        # Additive-optional: a Cycle built without the field defaults False so
+        # old baselines validate NORMAL.
+        c = Cycle(nodes=["a.py"], edges=[], length=1, risk_score=1.0)
+        assert c.test_only is False
+
+
+# ---------------------------------------------------------------------------
 # Risk score computation
 # ---------------------------------------------------------------------------
 
@@ -297,6 +342,39 @@ class TestIntegration:
         result = generate_graph(small_project, dry_run=True)
         assert hasattr(result.graph, "import_cycles")
         assert isinstance(result.graph.import_cycles, list)
+
+    def test_no_tests_drops_the_cycles_that_were_labelled_test_only(self):
+        """Invariant: a cycle labelled ``test_only`` ⇔ dropped by ``--no-tests``.
+
+        The graphlm repo's own fixtures form several all-test cycles. With tests
+        included they are all flagged ``test_only``; with ``--no-tests`` those
+        exact cycles disappear (their files aren't scanned).
+        """
+        from pathlib import Path
+
+        from graphlm import generate_graph
+
+        repo = Path(__file__).resolve().parent.parent
+
+        with_tests = generate_graph(
+            repo, dry_run=True, use_graphlmignore=False
+        ).graph
+        labelled_test = [c for c in with_tests.import_cycles if c.test_only]
+        # The fixtures guarantee at least one all-test cycle exists.
+        assert labelled_test, "expected the fixture cycles to be labelled test_only"
+        # Every test_only cycle is genuinely all test paths.
+        for c in labelled_test:
+            assert all(is_test_path(n) for n in c.nodes)
+
+        without_tests = generate_graph(
+            repo, dry_run=True, include_tests=False, use_graphlmignore=False
+        ).graph
+        # None of the previously-test_only cycles survive --no-tests.
+        surviving = {frozenset(c.nodes) for c in without_tests.import_cycles}
+        for c in labelled_test:
+            assert frozenset(c.nodes) not in surviving
+        # And nothing left after --no-tests is test_only (they were all dropped).
+        assert not [c for c in without_tests.import_cycles if c.test_only]
 
     def test_render_markdown_includes_cycles(self):
         from graphlm.models import CodebaseGraph

@@ -7,7 +7,9 @@ import logging
 import os
 from pathlib import Path
 
+from graphlm.freshness import STATE_FILENAME
 from graphlm.redact import _is_sensitive_file, _redact_secrets
+from graphlm.testpaths import is_test_path
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,10 @@ _ALWAYS_EXCLUDE = {
     "GRAPH.html",
     "GRAPH_DIFF.md",
     "GRAPH_DIFF.json",
+    # graphlm's internal JSON working copy — always written for the diff baseline
+    # / --serve, so exclude it from a re-scan the same way as the deliverables.
+    # Sourced from the single definition in freshness.py (not a hardcoded copy).
+    STATE_FILENAME,
 }
 
 # Hard cap on how many listed children any one directory contributes to the
@@ -235,28 +241,6 @@ def _symlink_hides_sensitive(
         for pat in pats:
             if fnmatch.fnmatch(part, pat):
                 return True
-    return False
-
-def _is_test_path(rel_path: str) -> bool:
-    """True for test files/dirs — not names that merely contain ``test`` (#94).
-
-    ``latest.py`` / ``contest.py`` / ``testing.py`` are ordinary modules.
-    ``test_foo.py``, ``foo_test.py``, ``foo.test.js``, and anything under
-    ``tests/`` / ``test/`` / ``__tests__/`` are tests.
-    """
-    rel = rel_path.replace("\\", "/").lower()
-    parts = rel.split("/")
-    name = parts[-1]
-    stem = name.rsplit(".", 1)[0] if "." in name else name
-    dir_parts = parts[:-1]
-    if parts[0] in {"tests", "test", "__tests__"} or any(
-        p in {"tests", "test", "__tests__"} for p in dir_parts
-    ):
-        return True
-    if stem.startswith("test_") or stem.endswith("_test") or stem == "test":
-        return True
-    if ".test." in name or ".spec." in name:
-        return True
     return False
 
 
@@ -442,7 +426,7 @@ def scan_project(
                 ):
                     skipped_count += 1
                     continue
-                if not include_tests and _is_test_path(rel_str):
+                if not include_tests and is_test_path(rel_str):
                     skipped_count += 1
                     continue
 
@@ -524,7 +508,7 @@ def scan_project(
             return 1
         if name.endswith("/main.py") or name.endswith("/main.js"):
             return 2
-        if _is_test_path(rel_path):
+        if is_test_path(rel_path):
             return 10
         # Source code outranks non-source text (docs, data, configs not already
         # prioritized above). Under a tight max_files cap, a doc-heavy repo (e.g.
@@ -571,7 +555,7 @@ def scan_project(
             ):
                 skipped_count += 1
                 continue
-            if not include_tests and _is_test_path(rel):
+            if not include_tests and is_test_path(rel):
                 continue
 
             try:

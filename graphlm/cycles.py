@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from graphlm.models import Cycle, ImportEdge
 from graphlm.scanner import FileFragment
+from graphlm.testpaths import is_test_path
 
 
 def _norm_path(path: str) -> str:
@@ -148,6 +149,10 @@ def detect_cycles(
                 edges=scc_edges,
                 length=len(scc),
                 risk_score=risk,
+                # A cycle is "test code" only when *every* member is a test
+                # file — a mixed cycle (one production file caught in a test's
+                # cycle) stays a production cycle so it isn't hidden.
+                test_only=all(is_test_path(n) for n in scc),
             )
         )
 

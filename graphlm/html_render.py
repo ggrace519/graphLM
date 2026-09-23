@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from graphlm.models import CodebaseGraph
+from graphlm.testpaths import is_test_path
 
 # Deterministic color palette for directory hashing
 _PALETTE: list[str] = [
@@ -150,6 +151,9 @@ def _build_nodes(graph: CodebaseGraph) -> list[dict[str, Any]]:
     }
     for node in by_id.values():
         node["in_cycle"] = _norm_path(node["path"]) in cycle_paths
+        # Test files are marked so the template can render them muted — they are
+        # part of the map but usually not what an agent is orienting toward.
+        node["is_test"] = is_test_path(node["path"])
 
     return list(by_id.values())
 
@@ -239,12 +243,22 @@ def render_html(graph: CodebaseGraph) -> str:
     """
     # ``cycles`` is the SCC count for the stats line — it is not derivable
     # from the in_cycle node flags (two cycles of three nodes and one of six
-    # both flag six nodes).
+    # both flag six nodes). ``provenance`` carries the version/commit/date so a
+    # tool reading the HTML can identify which graphlm produced it (mirrors
+    # GRAPH.json's ``meta``); it is embedded data, not shown in the UI.
+    provenance = None
+    if graph.meta is not None:
+        provenance = {
+            "graphlm_version": graph.meta.graphlm_version,
+            "commit_sha": graph.meta.commit_sha,
+            "generated_at": graph.meta.created_at,
+        }
     data = _json_for_script(
         {
             "nodes": _build_nodes(graph),
             "links": _build_links(graph),
             "cycles": len(graph.import_cycles),
+            "provenance": provenance,
         }
     )
     palette_js = _json_for_script(_PALETTE)

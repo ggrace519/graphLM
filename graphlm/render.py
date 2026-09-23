@@ -6,6 +6,9 @@ import json
 import os
 from pathlib import Path
 
+from graphlm.cycles_render import render_import_cycles
+from graphlm.orientation import render_orientation
+from graphlm.telemetry_render import render_telemetry
 from graphlm.mermaid import render_mermaid
 from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 
@@ -17,7 +20,6 @@ from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 # kept as named constants for exactly that reason.
 _ROLE_WEIGHT = 0.6
 _DEGREE_WEIGHT = 0.4
-
 
 def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | None:
     """Fuse each module's role + degree into a 0–1 importance, or None if unscored.
@@ -80,11 +82,14 @@ def _render_directive(meta: GraphMeta) -> str:
     path and the line is copy-pasteable anywhere.
     """
     date = meta.created_at
+    # Name the graphlm version so a human verifying the map can see which
+    # version produced it (and a stale map from an old version is obvious).
+    by = f"by graphlm {meta.graphlm_version} " if meta.graphlm_version else ""
     if meta.commit_sha:
         sha8 = meta.commit_sha[:8]
         return (
             "> **Provenance & refresh directive.** This codebase map was "
-            f"generated against commit `{sha8}` on {date}.\n"
+            f"generated {by}against commit `{sha8}` on {date}.\n"
             "> Before relying on it, check whether the repo has moved on: "
             "compare the current `git rev-parse HEAD` to that commit. If they "
             "differ, the map may be out of date — regenerate it by running "
@@ -93,132 +98,18 @@ def _render_directive(meta: GraphMeta) -> str:
         )
     return (
         "> **Provenance & refresh directive.** This codebase map was generated "
-        f"on {date}. No git commit tracking was available, so staleness can't "
-        "be checked automatically.\n"
+        f"{by}on {date}. No git commit tracking was available, so staleness "
+        "can't be checked automatically.\n"
         "> Regenerate it by running `graphlm .` from the project root whenever "
         "you believe the code has changed. This is advisory; the map is "
         "best-effort, not guaranteed current."
     )
 
 
-def usage_summary(meta: GraphMeta) -> str | None:
-    """One terse clause on pass-2 token usage, or None when there is nothing to say.
-
-    Reports the server's real prompt count beside graphlm's own estimate so a
-    reader can see how far the ``estimate_tokens`` heuristic (#17) is off on
-    this endpoint, plus the output size. Pass 1 is omitted from the prose (it
-    is a tree-only prompt and rarely interesting); it stays in ``GRAPH.json``.
-    Shared by ``GRAPH.md`` and the CLI so the wording cannot drift.
-    """
-    if meta.usage is None or meta.usage.pass2 is None:
-        return None
-    p2 = meta.usage.pass2
-    prompt = (
-        f"{p2.prompt_tokens} tokens"
-        if p2.prompt_tokens is not None
-        else "not reported by endpoint"
-    )
-    text = f"pass 2 prompt: {prompt} (graphlm estimated {p2.estimated_prompt_tokens})"
-    if p2.completion_tokens is not None:
-        text += f"; output: {p2.completion_tokens} tokens"
-    return text
-
-
-def faithfulness_summary(meta: GraphMeta) -> str | None:
-    """One terse clause on LLM-vs-AST edge agreement, or None when not scored.
-
-    ``n/a`` marks a ratio with no denominator (no comparable LLM edges, or no
-    AST edges) — distinct from a real 0.00, which means the sides disagree.
-    Shared by ``GRAPH.md`` and the CLI.
-    """
-    f = meta.faithfulness
-    if f is None:
-        return None
-
-    def _ratio(value: float | None) -> str:
-        return "n/a" if value is None else f"{value:.2f}"
-
-    return (
-        "LLM import edges vs parser ground truth: "
-        f"precision {_ratio(f.precision)}, recall {_ratio(f.recall)} "
-        f"(n={f.llm_edges} LLM / {f.ast_edges} AST, {f.matched} matched)"
-    )
-
-
-def evidence_summary(meta: GraphMeta) -> str | None:
-    """One terse clause on how well the LLM's summaries are backed by their source.
-
-    ``None`` when evidence scoring did not run (TypeSafe off, ``--no-redact``, a
-    dry run, or nothing to score). A low mean, or named low outliers, means the
-    prose claims more than the source the model saw supports — a trust weight,
-    not a hallucination verdict (a skeletonised fragment lowers it by design).
-    Shared by ``GRAPH.md`` and the CLI so the wording cannot drift.
-    """
-    e = meta.evidence_support
-    if e is None:
-        return None
-    mean = "n/a" if e.mean is None else f"{e.mean:.2f}"
-    text = (
-        f"summary evidence support: mean {mean} "
-        f"(n={e.scored} scored, {e.skipped} skipped)"
-    )
-    if e.low:
-        worst = ", ".join(f"{fs.path} {fs.score:.2f}" for fs in e.low[:3])
-        text += f"; weakest: {worst}"
-    return text
-
-
-def _render_telemetry(meta: GraphMeta) -> str | None:
-    """Render the run-telemetry blockquote line under the directive, or None.
-
-    Each part is optional (a dry run has none; ``--no-ast`` has no faithfulness;
-    TypeSafe off has no evidence support; an endpoint may report no usage) —
-    whichever are present are shown, and the line is omitted entirely when none
-    is. Terse on purpose: this is read by agents deciding how much to trust the
-    LLM's edge table and prose.
-    """
-    parts = [
-        p
-        for p in (
-            usage_summary(meta),
-            faithfulness_summary(meta),
-            evidence_summary(meta),
-        )
-        if p is not None
-    ]
-    if not parts:
-        return None
-    return "> **Run telemetry.** " + ". ".join(parts) + "."
-
-
 def _render_html(graph: CodebaseGraph) -> str:
     """Render a CodebaseGraph as a self-contained HTML visualization."""
     from graphlm.html_render import render_html as _render_html_impl
     return _render_html_impl(graph)
-
-
-_JS_CYCLE_EXTS = frozenset({".js", ".jsx", ".ts", ".tsx"})
-
-
-def _cycle_language_note(cycles: list[Cycle]) -> str | None:
-    """One-line qualifier: JS/TS cycles are often benign, Python cycles less so."""
-    exts = {Path(node).suffix.lower() for cycle in cycles for node in cycle.nodes}
-    js = bool(exts & _JS_CYCLE_EXTS)
-    py = ".py" in exts
-    if js and py:
-        return (
-            "> Note: a Python import cycle is usually a design smell; a "
-            "JavaScript/TypeScript cycle is often benign (circular "
-            "`import`/`require` is common). The risk score still reflects "
-            "size × length."
-        )
-    if js:
-        return (
-            "> Note: import cycles among JavaScript/TypeScript modules are "
-            "often benign (circular `import`/`require` is common); the risk "
-            "score still reflects size × length."
-        )
-    return None
 
 
 def render_markdown(graph: CodebaseGraph) -> str:
@@ -230,7 +121,7 @@ def render_markdown(graph: CodebaseGraph) -> str:
     # there is no stamp (older format or a library caller that never set meta).
     if graph.meta is not None:
         lines.append(_render_directive(graph.meta))
-        telemetry = _render_telemetry(graph.meta)
+        telemetry = render_telemetry(graph.meta)
         if telemetry is not None:
             lines.append(telemetry)
         lines.append("")
@@ -241,6 +132,11 @@ def render_markdown(graph: CodebaseGraph) -> str:
         "This file was generated automatically by graphLM. "
         "Use it as a map of the project structure without reading every file.\n"
     )
+
+    # Orientation block — a compact, token-cheap summary (entry points, cycle
+    # counts, top fan-in) up front, so an agent gets the shape of the repo
+    # before the directory tree. Omitted entirely when there's nothing to say.
+    lines.extend(render_orientation(graph, importance_summary(graph)))
 
     # Directory tree
     lines.append("## Directory Tree\n")
@@ -380,26 +276,9 @@ def render_markdown(graph: CodebaseGraph) -> str:
             lines.append(f"| {ref.query} | `{ref.location}` |")
         lines.append("")
 
-    # Import cycles
-    if graph.import_cycles:
-        lines.append("## Import Cycles\n")
-        cycle_note = _cycle_language_note(graph.import_cycles)
-        if cycle_note:
-            lines.append(cycle_note)
-            lines.append("")
-        for i, cycle in enumerate(
-            sorted(graph.import_cycles, key=lambda c: c.risk_score, reverse=True)
-        ):
-            label = (
-                f"*{cycle.length} nodes — mutual dependency*"
-                if cycle.length == 2
-                else f"*{cycle.length} nodes*"
-            )
-            lines.append(f"### Cycle {i+1} (risk score: {cycle.risk_score:.1f})")
-            lines.append(label)
-            for node in cycle.nodes:
-                lines.append(f"- `{node}`")
-            lines.append("")
+    # Import cycles — production first, test-code cycles grouped and tagged
+    # (see cycles_render.render_import_cycles).
+    lines.extend(render_import_cycles(graph.import_cycles))
 
     return "\n".join(lines) + "\n"
 
@@ -502,34 +381,52 @@ def write_outputs(
     *,
     md_suffix: str = "GRAPH",
     json_suffix: str = "GRAPH",
+    json: bool = True,
     html: bool = True,
     html_suffix: str = "GRAPH",
     diff: bool = True,
     diff_suffix: str | None = None,
 ) -> WriteResult:
-    """Write Markdown, JSON, optionally HTML, and (by default) the diff to output_dir.
+    """Write Markdown, an internal JSON working copy, optionally the JSON/HTML/diff.
 
-    The graph-vs-graph diff (``GRAPH_DIFF.md`` + ``.json``) reads the *prior*
-    ``{json_suffix}.json`` in ``output_dir`` — before it is overwritten — and
-    reports what changed in the map (ADR-002). ``diff=False`` skips it.
+    graphlm always writes an internal JSON *working copy* (``STATE_FILENAME``) so
+    the graph-vs-graph diff has a baseline and ``--serve`` has a map to read.
+    The user-facing ``{json_suffix}.json`` deliverable — and the
+    ``{diff_suffix}_DIFF.json`` — are written only when ``json=True``.
+
+    The diff (``GRAPH_DIFF.md`` + optional ``.json``) reads the *prior* working
+    copy — before it is overwritten — and reports what changed in the map
+    (ADR-002). ``diff=False`` skips it. The diff *Markdown* rides ``diff``; the
+    diff *JSON* rides ``json`` too (it is a machine-readable deliverable).
 
     ``diff_suffix`` defaults to **following ``json_suffix``** (ADR-002 decision
-    6: the diff tracks the graph's suffix, so ``json_suffix="map"`` yields
-    ``map_DIFF.*`` — the same base the baseline was read from). Pass an explicit
-    ``diff_suffix`` to override.
+    6). Pass an explicit ``diff_suffix`` to override.
+
+    **Fresh-run cleanup:** if graphlm has written to ``output_dir`` before (a
+    working copy or a prior ``{json_suffix}.json`` exists), any of *its own*
+    artifacts this run is not producing — e.g. a ``{json_suffix}.json`` left by a
+    prior ``json=True`` run, or a prior ``.html``/``_DIFF.*`` now turned off — is
+    **deleted**, so a fresh map isn't left beside a stale one. Only graphlm's own
+    exact artifact names are touched (never a directory, glob, symlink, or user
+    file), and a delete failure is swallowed (the graph is still written). When
+    the prior map came from a different graphlm version, the diff reports
+    ``VERSION_CHANGED`` rather than comparing across the boundary.
 
     Returns:
-        A ``WriteResult`` — the ``(md_path, json_path, html_path_or_None)``
-        tuple, with ``.diff_md`` / ``.diff_json`` attributes (``None`` when
-        ``diff=False``).
+        A ``WriteResult`` — the ``(md_path, json_path_or_None, html_path_or_None)``
+        tuple, with ``.diff_md`` / ``.diff_json`` attributes. ``json_path`` is
+        ``None`` when ``json=False``; ``.diff_json`` is ``None`` when the diff
+        JSON was not written.
     """
     if diff_suffix is None:
         diff_suffix = json_suffix
-    from graphlm.diff import (
-        compute_diff,
-        load_baseline,
-        render_diff_json,
-        render_diff_markdown,
+    from graphlm.diff import compute_diff, render_diff_json, render_diff_markdown
+    from graphlm.freshness import (
+        STATE_FILENAME,
+        graphlm_artifact_names,
+        keep_names,
+        prepare_baseline,
+        remove_stale_artifacts,
     )
 
     # Do not Path.resolve() — that follows a directory symlink and would
@@ -542,37 +439,78 @@ def write_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = output_dir / f"{md_suffix}.md"
-    json_path = output_dir / f"{json_suffix}.json"
-    _refuse_symlink(md_path)
-    _refuse_symlink(json_path)
+    state_path = output_dir / STATE_FILENAME
 
-    # Read the prior graph BEFORE overwriting GRAPH.json (ADR-002 decision 1 —
-    # ordering: baseline read must precede the write).
-    old_graph = None
-    baseline_state = None
-    if diff:
-        old_graph, baseline_state = load_baseline(json_path)
+    # Read the baseline (working copy, else prior GRAPH.json — ADR-002 dec.1,
+    # before any overwrite) and resolve the version-change state. Runs even with
+    # diff=False so the cleanup ownership gate (owns_dir) is known.
+    plan = prepare_baseline(
+        output_dir, graph, state_path=state_path, json_suffix=json_suffix
+    )
+
+    # Compute every path this run will write, and refuse a symlink at ANY of them
+    # up front — BEFORE cleanup deletes or any file is written — so a symlinked
+    # HTML can't let cleanup remove a stale JSON and leave a half-written dir.
+    json_path = output_dir / f"{json_suffix}.json" if json else None
+    html_path = output_dir / f"{html_suffix}.html" if html else None
+    diff_md_path = output_dir / f"{diff_suffix}_DIFF.md" if diff else None
+    diff_json_path = (
+        output_dir / f"{diff_suffix}_DIFF.json" if (diff and json) else None
+    )
+    for p in (md_path, state_path, json_path, html_path, diff_md_path, diff_json_path):
+        if p is not None:
+            _refuse_symlink(p)
+
+    # Remove graphlm's own stale artifacts (e.g. a GRAPH.json from a prior
+    # version / flag toggle) — but only in a dir graphlm has written before
+    # (owns_dir), so a run into a fresh user dir (`-o docs/`) never deletes a
+    # same-named user file. Exact names only (no glob/dir), symlinks skipped,
+    # never raises. --dry-run never reaches write_outputs.
+    if plan.owns_dir:
+        remove_stale_artifacts(
+            output_dir,
+            graphlm_artifact_names(
+                md_suffix=md_suffix,
+                json_suffix=json_suffix,
+                html_suffix=html_suffix,
+                diff_suffix=diff_suffix,
+            ),
+            keep=keep_names(
+                md_suffix=md_suffix,
+                json_suffix=json_suffix,
+                html_suffix=html_suffix,
+                diff_suffix=diff_suffix,
+                json=json,
+                html=html,
+                diff=diff,
+            ),
+        )
 
     md_path.write_text(render_markdown(graph), encoding="utf-8")
-    json_path.write_bytes(render_json(graph))
 
-    html_path: Path | None = None
-    if html:
-        html_path = output_dir / f"{html_suffix}.html"
-        _refuse_symlink(html_path)
+    payload = render_json(graph)
+    if json_path is not None:
+        json_path.write_bytes(payload)
+
+    if html_path is not None:
         html_path.write_text(_render_html(graph), encoding="utf-8")
 
-    diff_md_path: Path | None = None
-    diff_json_path: Path | None = None
     if diff:
-        assert baseline_state is not None
-        graph_diff = compute_diff(old_graph, graph, baseline_state)
-        diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
-        diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
-        _refuse_symlink(diff_md_path)
-        _refuse_symlink(diff_json_path)
+        graph_diff = compute_diff(
+            plan.old_graph,
+            graph,
+            plan.state,
+            old_version=plan.old_version,
+            new_version=plan.new_version,
+        )
+        assert diff_md_path is not None
         diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
-        diff_json_path.write_bytes(render_diff_json(graph_diff))
+        if diff_json_path is not None:
+            diff_json_path.write_bytes(render_diff_json(graph_diff))
+
+    # Write the working copy LAST, so a crash mid-write leaves the prior
+    # baseline intact for the next run's diff.
+    state_path.write_bytes(payload)
 
     return WriteResult(
         md_path,

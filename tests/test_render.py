@@ -21,6 +21,7 @@ from graphlm.models import (
     QuickReference,
     TestMapping,
 )
+from graphlm.freshness import STATE_FILENAME
 from graphlm.render import WriteResult, render_json, render_markdown, write_outputs
 
 
@@ -173,6 +174,83 @@ class TestRenderMarkdown:
         assert md.endswith("\n")
 
 
+class TestTestOnlyCycleGrouping:
+    def _prod(self, nodes: list[str], risk: float = 2.0) -> Cycle:
+        return Cycle(nodes=nodes, edges=[], length=len(nodes), risk_score=risk)
+
+    def _test(self, nodes: list[str], risk: float = 2.0) -> Cycle:
+        return Cycle(
+            nodes=nodes, edges=[], length=len(nodes), risk_score=risk, test_only=True
+        )
+
+    def test_all_test_only_gets_banner_no_production_heading(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[self._test(["tests/a.py", "tests/b.py"])],
+        )
+        md = render_markdown(graph)
+        assert "## Import Cycles" in md
+        assert "All detected import cycles are among test files" in md
+        assert "### Test-code cycles" in md
+        assert "#### Test cycle 1" in md
+        # No production "### Cycle N" heading when nothing is production.
+        assert "### Cycle 1" not in md
+
+    def test_production_first_then_test_group(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[
+                self._prod(["a.py", "b.py"], risk=3.0),
+                self._test(["tests/c.py", "tests/d.py"], risk=1.0),
+            ],
+        )
+        md = render_markdown(graph)
+        # Production section appears before the test-code group.
+        assert md.index("### Cycle 1") < md.index("### Test-code cycles")
+        assert "#### Test cycle 1" in md
+        # The banner (which claims *all* cycles are tests) must NOT appear when
+        # some cycles are production; the italic descriptor is used instead.
+        assert "All detected import cycles are among test files" not in md
+        assert "*Every member is a test file (dropped under `--no-tests`).*" in md
+
+    def test_production_only_section_is_byte_identical_to_pre_feature(self):
+        # Pin the whole production-only cycles section as a golden string: with no
+        # test_only cycles it must render exactly as it did before the feature
+        # (`### Cycle N`, no grouping, no test wording).
+        from graphlm.cycles_render import render_import_cycles
+
+        cycles = [
+            self._prod(["a.py", "b.py"], risk=2.0),
+            self._prod(["x.py", "y.py", "z.py"], risk=1.0),
+        ]
+        section = "\n".join(render_import_cycles(cycles))
+        assert section == (
+            "## Import Cycles\n\n"
+            "### Cycle 1 (risk score: 2.0)\n"
+            "*2 nodes — mutual dependency*\n"
+            "- `a.py`\n"
+            "- `b.py`\n"
+            "\n"
+            "### Cycle 2 (risk score: 1.0)\n"
+            "*3 nodes*\n"
+            "- `x.py`\n"
+            "- `y.py`\n"
+            "- `z.py`\n"
+        )
+        assert "Test-code cycles" not in section
+        assert "test file" not in section
+
+    def test_js_qualifier_computed_over_production_only(self):
+        # A test-only TS cycle must NOT drag a "JS often benign" note above a
+        # "no production cycles" banner.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            import_cycles=[self._test(["tests/foo.ts", "tests/bar.ts"])],
+        )
+        md = render_markdown(graph)
+        assert "often benign" not in md
+
+
 class TestRenderJson:
     def test_serializes_all_fields(self):
         graph = CodebaseGraph(
@@ -225,6 +303,228 @@ class TestWriteOutputs:
             assert md_path.exists()
             assert json_path.exists()
             assert html_path is None
+
+    def test_working_copy_always_written(self):
+        # The internal working copy exists regardless of the json flag — the diff
+        # baseline and --serve depend on it.
+        from graphlm.freshness import STATE_FILENAME
+
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(graph, out, json=False, html=False, diff=False)
+            assert (out / STATE_FILENAME).exists()
+
+    def test_json_off_omits_deliverable_but_keeps_working_copy(self):
+        from graphlm.freshness import STATE_FILENAME
+
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            md_path, json_path, _ = write_outputs(graph, out, json=False, html=False)
+            assert md_path.exists()
+            assert json_path is None  # no user-facing deliverable
+            assert not (out / "GRAPH.json").exists()
+            assert (out / STATE_FILENAME).exists()  # but the working copy is there
+
+    def test_json_off_omits_diff_json_but_keeps_diff_md(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            result = write_outputs(graph, out, json=False, html=False, diff=True)
+            assert result.diff_md is not None and result.diff_md.exists()
+            assert result.diff_json is None
+            assert not (out / "GRAPH_DIFF.json").exists()
+
+    def test_json_on_writes_deliverable_and_diff_json(self):
+        graph = CodebaseGraph(directory_tree="root/\n")
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            md_path, json_path, _ = write_outputs(graph, out, json=True, html=False)
+            assert json_path is not None and json_path.name == "GRAPH.json"
+            assert json_path.exists()
+
+    def test_diff_reads_working_copy_across_two_runs(self):
+        # Run 1 (json off) writes only the working copy; run 2 must still diff
+        # against it (proving the diff no longer depends on GRAPH.json).
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(
+                CodebaseGraph(directory_tree="root/\n"), out, json=False, html=False
+            )
+            result = write_outputs(
+                CodebaseGraph(
+                    directory_tree="root/\n",
+                    modules=[ModuleDescription(path="new.py", name="n", description="d")],
+                ),
+                out,
+                json=True,
+                html=False,
+            )
+            # A real prior baseline existed → the diff is NORMAL, not first-run.
+            assert result.diff_json is not None
+            import json as _json
+
+            assert _json.loads(result.diff_json.read_text())["state"] == "normal"
+
+    def _versioned(self, version, **kw):
+        return CodebaseGraph(
+            directory_tree="root/\n",
+            meta=GraphMeta(created_at="t", graphlm_version=version),
+            **kw,
+        )
+
+    def test_version_change_removes_stale_json_and_reports_state(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Run 1: version 0.5.0, --json ON (leaves a GRAPH.json deliverable).
+            write_outputs(self._versioned("0.5.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            # Run 2: version 0.6.0, --json OFF. The stale GRAPH.json must go, and
+            # the diff must report version_changed (not first_run/normal).
+            result = write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()  # stale deliverable removed
+            assert (out / STATE_FILENAME).exists()  # working copy refreshed
+            # diff_json is off (json=False); read the state from the md instead.
+            md = result.diff_md.read_text()
+            assert "different graphlm version" in md or "regenerated fresh" in md
+
+    def test_same_version_json_toggle_removes_stale_deliverable(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Run 1: --json ON → GRAPH.json written.
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            # Run 2: SAME version, --json OFF → stale GRAPH.json removed even
+            # though the version didn't change (the flag-toggle case).
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()
+
+    def test_same_version_normal_diff_no_spurious_version_change(self):
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert _json.loads(result.diff_json.read_text())["state"] == "normal"
+
+    def test_upgrade_bootstrap_from_legacy_graph_json(self):
+        # First post-upgrade run: no working copy, but a legacy 0.5.0 GRAPH.json.
+        # The diff must report version_changed (NOT first_run) and name versions.
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(render_json(self._versioned("0.5.0")))
+            assert not (out / STATE_FILENAME).exists()
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "version_changed"
+            assert data["old_graphlm_version"] == "0.5.0"
+            assert data["new_graphlm_version"] == "0.6.0"
+
+    def test_bootstrap_removes_legacy_json_when_json_off(self):
+        # Same as above but --json off: the legacy deliverable is removed and the
+        # state is read from the diff md.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(render_json(self._versioned("0.5.0")))
+            result = write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()
+            assert "regenerated fresh" in result.diff_md.read_text()
+
+    def test_bootstrap_same_version_legacy_is_normal_diff(self):
+        # A source checkout (version None on both sides) must NOT be a spurious
+        # version change, and a legacy GRAPH.json with the same version diffs
+        # NORMAL — not FIRST_RUN (ADR-002 dec.4).
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(
+                render_json(self._versioned("0.6.0", modules=[]))
+            )
+            result = write_outputs(
+                self._versioned(
+                    "0.6.0",
+                    modules=[ModuleDescription(path="new.py", name="n", description="d")],
+                ),
+                out,
+                json=True,
+                html=False,
+            )
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "normal"
+            assert data["dimensions"]["modules"]["added"] == ["`new.py`"]
+
+    def test_bootstrap_corrupt_legacy_is_uncomparable_not_first_run(self):
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(b"\xff\xfe not json")
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "uncomparable"
+
+    def test_symlinked_html_blocks_cleanup_before_any_delete(self):
+        # A symlinked output path must be refused BEFORE cleanup runs, so a stale
+        # GRAPH.json is not deleted when the write is going to abort anyway.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Prior graphlm run so owns_dir is true and a stale GRAPH.json exists.
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            canary = out / "canary"
+            canary.write_text("USER")
+            (out / "GRAPH.html").symlink_to(canary)
+            try:
+                write_outputs(self._versioned("0.6.0"), out, json=False, html=True)
+                assert False, "expected ValueError for symlinked GRAPH.html"
+            except ValueError as e:
+                assert "symlink" in str(e)
+            # Cleanup must NOT have run: the stale GRAPH.json survives.
+            assert (out / "GRAPH.json").exists()
+            assert canary.read_text() == "USER"
+
+    def test_unlink_failure_still_writes_graph(self, monkeypatch):
+        # If cleanup's unlink fails, the new graph + working copy are still written.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            real_unlink = Path.unlink
+
+            def boom(self, *a, **k):
+                if self.name == "GRAPH.json":
+                    raise OSError("cannot remove")
+                return real_unlink(self, *a, **k)
+
+            monkeypatch.setattr(Path, "unlink", boom)
+            # --json off would try to remove GRAPH.json; the failure is swallowed.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert (out / "GRAPH.md").exists()
+            assert (out / STATE_FILENAME).exists()
+
+    def test_cleanup_skipped_in_unowned_dir(self):
+        # -o into a fresh user dir with a same-named file graphlm never wrote:
+        # cleanup must not fire (owns_dir is False), so the user file survives.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            user_html = out / "GRAPH.html"
+            user_html.write_text("USER'S OWN GRAPH.html")
+            # First graphlm run here with --no-html: without the ownership gate
+            # this would delete the user's GRAPH.html.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert user_html.read_text() == "USER'S OWN GRAPH.html"
+
+    def test_cleanup_runs_even_with_no_diff(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_text("stale")
+            # --no-diff: cleanup must still remove the stale deliverable.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False, diff=False)
+            assert not (out / "GRAPH.json").exists()
 
     def test_refuses_to_write_through_graph_json_symlink(self):
         graph = CodebaseGraph(directory_tree="root/\n")
@@ -378,11 +678,24 @@ class TestRefreshDirective:
         md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=_GIT_META))
         # Directive is the first line, above the heading.
         assert md.lstrip().startswith(">")
-        assert "generated against commit `d38e47d2`" in md
+        # The graphlm version is named ahead of the commit for a human check.
+        assert "generated by graphlm 0.1.0 against commit `d38e47d2`" in md
         assert "2026-08-30T14:22:05Z" in md
         assert "graphlm ." in md
         assert "git rev-parse HEAD" in md
         assert "advisory" in md.lower()
+
+    def test_directive_omits_version_prefix_when_version_unknown(self):
+        # A source checkout / library caller with no graphlm_version → the
+        # "by graphlm X" prefix is dropped, wording stays clean.
+        meta = GraphMeta(
+            created_at="2026-08-30T14:22:05Z",
+            commit_sha="d38e47d21406cf6482c0272587d17d92629059be",
+            graphlm_version=None,
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=meta))
+        assert "generated against commit `d38e47d2`" in md
+        assert "by graphlm" not in md
 
     def test_non_git_form_when_sha_none(self):
         md = render_markdown(
@@ -635,8 +948,10 @@ class TestMermaidModuleGraph:
         assert "linkStyle 2,3 stroke:#e11,stroke-width:2px" in block
         assert "style n_a stroke:#e11,stroke-width:2px" in block
         assert "style n_b stroke:#e11,stroke-width:2px" in block
-        assert "Red edges are members of an import cycle." in md
+        assert "Red edges are members of a production import cycle." in md
         assert "Red-outlined directories contain a file in an import cycle." in md
+        # A production cycle carries no test-code styling.
+        assert "#b8860b" not in block
 
     def test_single_cycle_edge_gets_index_of_last_link(self):
         # Three collapsed edges, exactly one a cycle edge -> linkStyle 2.
@@ -677,6 +992,63 @@ class TestMermaidModuleGraph:
         assert "style n_lib" not in block
         assert "Red edges are members of an import cycle." not in md
         assert "Red-outlined directories contain a file in an import cycle." in md
+
+    def test_test_only_cycle_gets_amber_edges_and_outline(self):
+        # A cross-directory cycle among test files → amber (not red) edge + node
+        # outline, and the amber legend lines.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("tests/a/x.py", "tests/b/y.py"),
+                _edge("tests/b/y.py", "tests/a/x.py"),
+            ],
+            import_cycles=[
+                Cycle(
+                    nodes=["tests/a/x.py", "tests/b/y.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                    test_only=True,
+                )
+            ],
+        )
+        md = render_markdown(graph)
+        block = _mermaid_block(md)
+        assert "#e11" not in block  # no red anywhere
+        assert "stroke:#b8860b,stroke-width:2px" in block  # amber edges + nodes
+        assert "Amber edges are members of a test-code import cycle." in md
+        assert (
+            "Amber-outlined directories contain only test-code import cycles "
+            "(usually intentional scaffolding)." in md
+        )
+
+    def test_mixed_cycle_dir_stays_red_not_amber(self):
+        # A directory touched by BOTH a production and a test-only cycle keeps
+        # the red (production) outline — production wins.
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            deterministic_edges=[
+                _edge("app/a.py", "lib/b.py"),
+                _edge("lib/b.py", "app/a.py"),
+                _edge("app/t.py", "tests/c.py"),
+                _edge("tests/c.py", "app/t.py"),
+            ],
+            import_cycles=[
+                Cycle(
+                    nodes=["app/a.py", "lib/b.py"], edges=[], length=2, risk_score=2.0
+                ),
+                Cycle(
+                    nodes=["app/t.py", "tests/c.py"],
+                    edges=[],
+                    length=2,
+                    risk_score=1.0,
+                    test_only=True,
+                ),
+            ],
+        )
+        block = _mermaid_block(render_markdown(graph))
+        # app/ is in both cycles → red, never amber.
+        assert "style n_app stroke:#e11,stroke-width:2px" in block
 
     def test_single_package_project_still_renders_its_node(self):
         # Every edge collapses to a self-edge (all files in one package). The
@@ -858,13 +1230,13 @@ class TestEvidenceSummary:
         return GraphMeta(created_at="2026-01-01T00:00:00Z", evidence_support=es)
 
     def test_none_when_unset(self):
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         assert evidence_summary(self._meta(None)) is None
 
     def test_with_low_outliers(self):
         from graphlm.models import EvidenceSupport, FileScore
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         es = EvidenceSupport(
             mean=0.81, scored=20, skipped=2,
@@ -877,7 +1249,7 @@ class TestEvidenceSummary:
 
     def test_na_mean_when_nothing_scored(self):
         from graphlm.models import EvidenceSupport
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         es = EvidenceSupport(mean=None, scored=0, skipped=3, low=[])
         text = evidence_summary(self._meta(es))
@@ -886,7 +1258,7 @@ class TestEvidenceSummary:
 
     def test_in_telemetry_line(self):
         from graphlm.models import EvidenceSupport
-        from graphlm.render import _render_telemetry
+        from graphlm.telemetry_render import render_telemetry as _render_telemetry
 
         es = EvidenceSupport(mean=0.9, scored=5, skipped=0, low=[])
         line = _render_telemetry(self._meta(es))

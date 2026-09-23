@@ -633,6 +633,20 @@ class TestGroundTruthNodes:
         flags = {n["id"]: n["in_cycle"] for n in _build_nodes(graph)}
         assert flags == {"a.py": True, "b.py": True, "c.py": False}
 
+    def test_is_test_flag_set_from_path(self):
+        graph = CodebaseGraph(
+            directory_tree="root/",
+            modules=[
+                ModuleDescription(path="app/core.py", name="core", description="prod"),
+            ],
+            file_summaries=[
+                FileSummary(path="tests/test_core.py", summary="a test"),
+            ],
+        )
+        flags = {n["id"]: n["is_test"] for n in _build_nodes(graph)}
+        assert flags["tests/test_core.py"] is True
+        assert flags["app/core.py"] is False
+
     def test_in_cycle_false_everywhere_without_cycles(self):
         graph = CodebaseGraph(
             directory_tree="root/",

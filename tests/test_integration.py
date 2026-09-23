@@ -600,9 +600,10 @@ class TestProvenanceStamp:
         assert re.fullmatch(r"[0-9a-f]{40}([0-9a-f]{24})?", meta.commit_sha)
         assert meta.created_at.endswith("Z")
         assert meta.schema_version == 1
-        # And the directive reached GRAPH.md.
+        # And the directive reached GRAPH.md ("generated [by graphlm X] against
+        # commit …" — the version prefix is present when installed).
         md = (out / "GRAPH.md").read_text()
-        assert "generated against commit" in md
+        assert "against commit" in md
         assert meta.commit_sha[:8] in md
 
     def test_llm_hallucinated_meta_is_overwritten(self, httpx_mock, small_project):
