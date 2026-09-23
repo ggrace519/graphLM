@@ -1057,13 +1057,13 @@ class TestEvidenceSummary:
         return GraphMeta(created_at="2026-01-01T00:00:00Z", evidence_support=es)
 
     def test_none_when_unset(self):
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         assert evidence_summary(self._meta(None)) is None
 
     def test_with_low_outliers(self):
         from graphlm.models import EvidenceSupport, FileScore
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         es = EvidenceSupport(
             mean=0.81, scored=20, skipped=2,
@@ -1076,7 +1076,7 @@ class TestEvidenceSummary:
 
     def test_na_mean_when_nothing_scored(self):
         from graphlm.models import EvidenceSupport
-        from graphlm.render import evidence_summary
+        from graphlm.telemetry_render import evidence_summary
 
         es = EvidenceSupport(mean=None, scored=0, skipped=3, low=[])
         text = evidence_summary(self._meta(es))
@@ -1085,7 +1085,7 @@ class TestEvidenceSummary:
 
     def test_in_telemetry_line(self):
         from graphlm.models import EvidenceSupport
-        from graphlm.render import _render_telemetry
+        from graphlm.telemetry_render import render_telemetry as _render_telemetry
 
         es = EvidenceSupport(mean=0.9, scored=5, skipped=0, low=[])
         line = _render_telemetry(self._meta(es))

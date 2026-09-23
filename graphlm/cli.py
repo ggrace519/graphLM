@@ -536,10 +536,10 @@ def main(
     # fact per line. Each is omitted when it wasn't measured (no usage from
     # the endpoint / AST off).
     if result.graph.meta is not None:
-        from graphlm.render import (
+        from graphlm.render import importance_summary
+        from graphlm.telemetry_render import (
             evidence_summary,
             faithfulness_summary,
-            importance_summary,
             usage_summary,
         )
 
