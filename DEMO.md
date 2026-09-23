@@ -36,16 +36,17 @@ Needs the map + the TypeSafe extra + a key:
 ```bash
 uv sync --group dev --extra mcp --extra typesafe
 # ensure TYPESAFE_API_KEY is in ~/.config/graphlm/.env (or exported)
-graphlm .                       # generate .graphlm/GRAPH.json for the target repo
+graphlm . --json                # generate the map incl. the machine-readable GRAPH.json
 ```
 
-Programmatically:
+Programmatically (`load_map` reads either the internal working copy or a
+`--json` deliverable — both are the same graph):
 
 ```python
 from pathlib import Path
 from graphlm.query import build_index, load_map, semantic_find
 import os
-idx = build_index(load_map(Path(".graphlm/GRAPH.json")))
+idx = build_index(load_map(Path(".graphlm/.graph-state.json")))
 res = semantic_find(idx, "which module handles rate limiting?",
                     api_key=os.environ["TYPESAFE_API_KEY"])
 for h in res["hits"][:5]:

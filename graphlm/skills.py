@@ -52,9 +52,12 @@ def _skill_markdown_body() -> str:
 
 [graphlm](https://github.com/ggrace519/graphLM) generates a **map of a
 codebase** — modules, import/dependency edges, data flow, entry points, import
-cycles, and "where do I find X?" answers — as Markdown, JSON, and interactive
-HTML. It lives at `.graphlm/GRAPH.md` (machine-readable `.graphlm/GRAPH.json`;
-clickable `.graphlm/GRAPH.html`).
+cycles, and "where do I find X?" answers. **Read `.graphlm/GRAPH.md`** — the
+Markdown map is what you want as an agent (it opens with a compact orientation
+block and costs far fewer tokens than the JSON's node/link arrays). A clickable
+`.graphlm/GRAPH.html` is also written. The machine-readable `.graphlm/GRAPH.json`
+is **opt-in** — run `graphlm . --json` if you need it — but prefer `GRAPH.md` or
+the MCP tools (see `--serve` below) over parsing JSON.
 
 **First, know which situation you're in — the right action differs.**
 
