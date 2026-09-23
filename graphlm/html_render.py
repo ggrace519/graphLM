@@ -243,12 +243,22 @@ def render_html(graph: CodebaseGraph) -> str:
     """
     # ``cycles`` is the SCC count for the stats line — it is not derivable
     # from the in_cycle node flags (two cycles of three nodes and one of six
-    # both flag six nodes).
+    # both flag six nodes). ``provenance`` carries the version/commit/date so a
+    # tool reading the HTML can identify which graphlm produced it (mirrors
+    # GRAPH.json's ``meta``); it is embedded data, not shown in the UI.
+    provenance = None
+    if graph.meta is not None:
+        provenance = {
+            "graphlm_version": graph.meta.graphlm_version,
+            "commit_sha": graph.meta.commit_sha,
+            "generated_at": graph.meta.created_at,
+        }
     data = _json_for_script(
         {
             "nodes": _build_nodes(graph),
             "links": _build_links(graph),
             "cycles": len(graph.import_cycles),
+            "provenance": provenance,
         }
     )
     palette_js = _json_for_script(_PALETTE)

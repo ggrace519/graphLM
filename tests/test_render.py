@@ -21,6 +21,7 @@ from graphlm.models import (
     QuickReference,
     TestMapping,
 )
+from graphlm.freshness import STATE_FILENAME
 from graphlm.render import WriteResult, render_json, render_markdown, write_outputs
 
 
@@ -306,7 +307,7 @@ class TestWriteOutputs:
     def test_working_copy_always_written(self):
         # The internal working copy exists regardless of the json flag — the diff
         # baseline and --serve depend on it.
-        from graphlm.render import STATE_FILENAME
+        from graphlm.freshness import STATE_FILENAME
 
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
@@ -315,7 +316,7 @@ class TestWriteOutputs:
             assert (out / STATE_FILENAME).exists()
 
     def test_json_off_omits_deliverable_but_keeps_working_copy(self):
-        from graphlm.render import STATE_FILENAME
+        from graphlm.freshness import STATE_FILENAME
 
         graph = CodebaseGraph(directory_tree="root/\n")
         with TemporaryDirectory() as tmpdir:
@@ -365,6 +366,165 @@ class TestWriteOutputs:
             import json as _json
 
             assert _json.loads(result.diff_json.read_text())["state"] == "normal"
+
+    def _versioned(self, version, **kw):
+        return CodebaseGraph(
+            directory_tree="root/\n",
+            meta=GraphMeta(created_at="t", graphlm_version=version),
+            **kw,
+        )
+
+    def test_version_change_removes_stale_json_and_reports_state(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Run 1: version 0.5.0, --json ON (leaves a GRAPH.json deliverable).
+            write_outputs(self._versioned("0.5.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            # Run 2: version 0.6.0, --json OFF. The stale GRAPH.json must go, and
+            # the diff must report version_changed (not first_run/normal).
+            result = write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()  # stale deliverable removed
+            assert (out / STATE_FILENAME).exists()  # working copy refreshed
+            # diff_json is off (json=False); read the state from the md instead.
+            md = result.diff_md.read_text()
+            assert "different graphlm version" in md or "regenerated fresh" in md
+
+    def test_same_version_json_toggle_removes_stale_deliverable(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Run 1: --json ON → GRAPH.json written.
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            # Run 2: SAME version, --json OFF → stale GRAPH.json removed even
+            # though the version didn't change (the flag-toggle case).
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()
+
+    def test_same_version_normal_diff_no_spurious_version_change(self):
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert _json.loads(result.diff_json.read_text())["state"] == "normal"
+
+    def test_upgrade_bootstrap_from_legacy_graph_json(self):
+        # First post-upgrade run: no working copy, but a legacy 0.5.0 GRAPH.json.
+        # The diff must report version_changed (NOT first_run) and name versions.
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(render_json(self._versioned("0.5.0")))
+            assert not (out / STATE_FILENAME).exists()
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "version_changed"
+            assert data["old_graphlm_version"] == "0.5.0"
+            assert data["new_graphlm_version"] == "0.6.0"
+
+    def test_bootstrap_removes_legacy_json_when_json_off(self):
+        # Same as above but --json off: the legacy deliverable is removed and the
+        # state is read from the diff md.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(render_json(self._versioned("0.5.0")))
+            result = write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert not (out / "GRAPH.json").exists()
+            assert "regenerated fresh" in result.diff_md.read_text()
+
+    def test_bootstrap_same_version_legacy_is_normal_diff(self):
+        # A source checkout (version None on both sides) must NOT be a spurious
+        # version change, and a legacy GRAPH.json with the same version diffs
+        # NORMAL — not FIRST_RUN (ADR-002 dec.4).
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(
+                render_json(self._versioned("0.6.0", modules=[]))
+            )
+            result = write_outputs(
+                self._versioned(
+                    "0.6.0",
+                    modules=[ModuleDescription(path="new.py", name="n", description="d")],
+                ),
+                out,
+                json=True,
+                html=False,
+            )
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "normal"
+            assert data["dimensions"]["modules"]["added"] == ["`new.py`"]
+
+    def test_bootstrap_corrupt_legacy_is_uncomparable_not_first_run(self):
+        import json as _json
+
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_bytes(b"\xff\xfe not json")
+            result = write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            data = _json.loads(result.diff_json.read_text())
+            assert data["state"] == "uncomparable"
+
+    def test_symlinked_html_blocks_cleanup_before_any_delete(self):
+        # A symlinked output path must be refused BEFORE cleanup runs, so a stale
+        # GRAPH.json is not deleted when the write is going to abort anyway.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            # Prior graphlm run so owns_dir is true and a stale GRAPH.json exists.
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            assert (out / "GRAPH.json").exists()
+            canary = out / "canary"
+            canary.write_text("USER")
+            (out / "GRAPH.html").symlink_to(canary)
+            try:
+                write_outputs(self._versioned("0.6.0"), out, json=False, html=True)
+                assert False, "expected ValueError for symlinked GRAPH.html"
+            except ValueError as e:
+                assert "symlink" in str(e)
+            # Cleanup must NOT have run: the stale GRAPH.json survives.
+            assert (out / "GRAPH.json").exists()
+            assert canary.read_text() == "USER"
+
+    def test_unlink_failure_still_writes_graph(self, monkeypatch):
+        # If cleanup's unlink fails, the new graph + working copy are still written.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            write_outputs(self._versioned("0.6.0"), out, json=True, html=False)
+            real_unlink = Path.unlink
+
+            def boom(self, *a, **k):
+                if self.name == "GRAPH.json":
+                    raise OSError("cannot remove")
+                return real_unlink(self, *a, **k)
+
+            monkeypatch.setattr(Path, "unlink", boom)
+            # --json off would try to remove GRAPH.json; the failure is swallowed.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert (out / "GRAPH.md").exists()
+            assert (out / STATE_FILENAME).exists()
+
+    def test_cleanup_skipped_in_unowned_dir(self):
+        # -o into a fresh user dir with a same-named file graphlm never wrote:
+        # cleanup must not fire (owns_dir is False), so the user file survives.
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            user_html = out / "GRAPH.html"
+            user_html.write_text("USER'S OWN GRAPH.html")
+            # First graphlm run here with --no-html: without the ownership gate
+            # this would delete the user's GRAPH.html.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False)
+            assert user_html.read_text() == "USER'S OWN GRAPH.html"
+
+    def test_cleanup_runs_even_with_no_diff(self):
+        with TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            (out / "GRAPH.json").write_text("stale")
+            # --no-diff: cleanup must still remove the stale deliverable.
+            write_outputs(self._versioned("0.6.0"), out, json=False, html=False, diff=False)
+            assert not (out / "GRAPH.json").exists()
 
     def test_refuses_to_write_through_graph_json_symlink(self):
         graph = CodebaseGraph(directory_tree="root/\n")
@@ -518,11 +678,24 @@ class TestRefreshDirective:
         md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=_GIT_META))
         # Directive is the first line, above the heading.
         assert md.lstrip().startswith(">")
-        assert "generated against commit `d38e47d2`" in md
+        # The graphlm version is named ahead of the commit for a human check.
+        assert "generated by graphlm 0.1.0 against commit `d38e47d2`" in md
         assert "2026-08-30T14:22:05Z" in md
         assert "graphlm ." in md
         assert "git rev-parse HEAD" in md
         assert "advisory" in md.lower()
+
+    def test_directive_omits_version_prefix_when_version_unknown(self):
+        # A source checkout / library caller with no graphlm_version → the
+        # "by graphlm X" prefix is dropped, wording stays clean.
+        meta = GraphMeta(
+            created_at="2026-08-30T14:22:05Z",
+            commit_sha="d38e47d21406cf6482c0272587d17d92629059be",
+            graphlm_version=None,
+        )
+        md = render_markdown(CodebaseGraph(directory_tree="root/\n", meta=meta))
+        assert "generated against commit `d38e47d2`" in md
+        assert "by graphlm" not in md
 
     def test_non_git_form_when_sha_none(self):
         md = render_markdown(

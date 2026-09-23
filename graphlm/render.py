@@ -21,14 +21,6 @@ from graphlm.models import CodebaseGraph, Cycle, GraphMeta, ModuleDescription
 _ROLE_WEIGHT = 0.6
 _DEGREE_WEIGHT = 0.4
 
-# graphlm's internal JSON working copy. Always written (unlike the opt-in
-# user-facing GRAPH.json deliverable) because the graph-vs-graph diff needs the
-# prior run's JSON as its baseline and ``--serve`` reads a JSON map. Dot-prefixed
-# so it reads as internal state, and excluded by the scanner like the other
-# artifacts. It lives beside the artifacts in ``output_dir``.
-STATE_FILENAME = ".graph-state.json"
-
-
 def _fused_importance(modules: list[ModuleDescription]) -> dict[str, float] | None:
     """Fuse each module's role + degree into a 0–1 importance, or None if unscored.
 
@@ -90,11 +82,14 @@ def _render_directive(meta: GraphMeta) -> str:
     path and the line is copy-pasteable anywhere.
     """
     date = meta.created_at
+    # Name the graphlm version so a human verifying the map can see which
+    # version produced it (and a stale map from an old version is obvious).
+    by = f"by graphlm {meta.graphlm_version} " if meta.graphlm_version else ""
     if meta.commit_sha:
         sha8 = meta.commit_sha[:8]
         return (
             "> **Provenance & refresh directive.** This codebase map was "
-            f"generated against commit `{sha8}` on {date}.\n"
+            f"generated {by}against commit `{sha8}` on {date}.\n"
             "> Before relying on it, check whether the repo has moved on: "
             "compare the current `git rev-parse HEAD` to that commit. If they "
             "differ, the map may be out of date — regenerate it by running "
@@ -103,8 +98,8 @@ def _render_directive(meta: GraphMeta) -> str:
         )
     return (
         "> **Provenance & refresh directive.** This codebase map was generated "
-        f"on {date}. No git commit tracking was available, so staleness can't "
-        "be checked automatically.\n"
+        f"{by}on {date}. No git commit tracking was available, so staleness "
+        "can't be checked automatically.\n"
         "> Regenerate it by running `graphlm .` from the project root whenever "
         "you believe the code has changed. This is advisory; the map is "
         "best-effort, not guaranteed current."
@@ -407,6 +402,16 @@ def write_outputs(
     ``diff_suffix`` defaults to **following ``json_suffix``** (ADR-002 decision
     6). Pass an explicit ``diff_suffix`` to override.
 
+    **Fresh-run cleanup:** if graphlm has written to ``output_dir`` before (a
+    working copy or a prior ``{json_suffix}.json`` exists), any of *its own*
+    artifacts this run is not producing — e.g. a ``{json_suffix}.json`` left by a
+    prior ``json=True`` run, or a prior ``.html``/``_DIFF.*`` now turned off — is
+    **deleted**, so a fresh map isn't left beside a stale one. Only graphlm's own
+    exact artifact names are touched (never a directory, glob, symlink, or user
+    file), and a delete failure is swallowed (the graph is still written). When
+    the prior map came from a different graphlm version, the diff reports
+    ``VERSION_CHANGED`` rather than comparing across the boundary.
+
     Returns:
         A ``WriteResult`` — the ``(md_path, json_path_or_None, html_path_or_None)``
         tuple, with ``.diff_md`` / ``.diff_json`` attributes. ``json_path`` is
@@ -415,11 +420,13 @@ def write_outputs(
     """
     if diff_suffix is None:
         diff_suffix = json_suffix
-    from graphlm.diff import (
-        compute_diff,
-        load_baseline,
-        render_diff_json,
-        render_diff_markdown,
+    from graphlm.diff import compute_diff, render_diff_json, render_diff_markdown
+    from graphlm.freshness import (
+        STATE_FILENAME,
+        graphlm_artifact_names,
+        keep_names,
+        prepare_baseline,
+        remove_stale_artifacts,
     )
 
     # Do not Path.resolve() — that follows a directory symlink and would
@@ -433,43 +440,72 @@ def write_outputs(
 
     md_path = output_dir / f"{md_suffix}.md"
     state_path = output_dir / STATE_FILENAME
-    _refuse_symlink(md_path)
-    _refuse_symlink(state_path)
 
-    # Read the prior graph from the working copy BEFORE overwriting it (ADR-002
-    # decision 1 — the baseline read must precede the write).
-    old_graph = None
-    baseline_state = None
-    if diff:
-        old_graph, baseline_state = load_baseline(state_path)
+    # Read the baseline (working copy, else prior GRAPH.json — ADR-002 dec.1,
+    # before any overwrite) and resolve the version-change state. Runs even with
+    # diff=False so the cleanup ownership gate (owns_dir) is known.
+    plan = prepare_baseline(
+        output_dir, graph, state_path=state_path, json_suffix=json_suffix
+    )
+
+    # Compute every path this run will write, and refuse a symlink at ANY of them
+    # up front — BEFORE cleanup deletes or any file is written — so a symlinked
+    # HTML can't let cleanup remove a stale JSON and leave a half-written dir.
+    json_path = output_dir / f"{json_suffix}.json" if json else None
+    html_path = output_dir / f"{html_suffix}.html" if html else None
+    diff_md_path = output_dir / f"{diff_suffix}_DIFF.md" if diff else None
+    diff_json_path = (
+        output_dir / f"{diff_suffix}_DIFF.json" if (diff and json) else None
+    )
+    for p in (md_path, state_path, json_path, html_path, diff_md_path, diff_json_path):
+        if p is not None:
+            _refuse_symlink(p)
+
+    # Remove graphlm's own stale artifacts (e.g. a GRAPH.json from a prior
+    # version / flag toggle) — but only in a dir graphlm has written before
+    # (owns_dir), so a run into a fresh user dir (`-o docs/`) never deletes a
+    # same-named user file. Exact names only (no glob/dir), symlinks skipped,
+    # never raises. --dry-run never reaches write_outputs.
+    if plan.owns_dir:
+        remove_stale_artifacts(
+            output_dir,
+            graphlm_artifact_names(
+                md_suffix=md_suffix,
+                json_suffix=json_suffix,
+                html_suffix=html_suffix,
+                diff_suffix=diff_suffix,
+            ),
+            keep=keep_names(
+                md_suffix=md_suffix,
+                json_suffix=json_suffix,
+                html_suffix=html_suffix,
+                diff_suffix=diff_suffix,
+                json=json,
+                html=html,
+                diff=diff,
+            ),
+        )
 
     md_path.write_text(render_markdown(graph), encoding="utf-8")
 
     payload = render_json(graph)
-    # The user-facing JSON deliverable (opt-in).
-    json_path: Path | None = None
-    if json:
-        json_path = output_dir / f"{json_suffix}.json"
-        _refuse_symlink(json_path)
+    if json_path is not None:
         json_path.write_bytes(payload)
 
-    html_path: Path | None = None
-    if html:
-        html_path = output_dir / f"{html_suffix}.html"
-        _refuse_symlink(html_path)
+    if html_path is not None:
         html_path.write_text(_render_html(graph), encoding="utf-8")
 
-    diff_md_path: Path | None = None
-    diff_json_path: Path | None = None
     if diff:
-        assert baseline_state is not None
-        graph_diff = compute_diff(old_graph, graph, baseline_state)
-        diff_md_path = output_dir / f"{diff_suffix}_DIFF.md"
-        _refuse_symlink(diff_md_path)
+        graph_diff = compute_diff(
+            plan.old_graph,
+            graph,
+            plan.state,
+            old_version=plan.old_version,
+            new_version=plan.new_version,
+        )
+        assert diff_md_path is not None
         diff_md_path.write_text(render_diff_markdown(graph_diff), encoding="utf-8")
-        if json:
-            diff_json_path = output_dir / f"{diff_suffix}_DIFF.json"
-            _refuse_symlink(diff_json_path)
+        if diff_json_path is not None:
             diff_json_path.write_bytes(render_diff_json(graph_diff))
 
     # Write the working copy LAST, so a crash mid-write leaves the prior

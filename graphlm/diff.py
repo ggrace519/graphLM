@@ -40,7 +40,8 @@ from graphlm.models import (
 
 # Bump when the GRAPH_DIFF.json shape changes. Independent of the graph's own
 # GRAPH_META_SCHEMA_VERSION — the diff artifact has its own wire format.
-DIFF_SCHEMA_VERSION = 1
+# v2: added the `version_changed` state and `old/new_graphlm_version` fields.
+DIFF_SCHEMA_VERSION = 2
 
 # Meta schema versions this graphlm knows how to read as a comparable baseline.
 # A newer graphlm reading an older *known* version still compares; only an
@@ -49,10 +50,18 @@ _KNOWN_META_SCHEMA_VERSIONS = frozenset(range(1, GRAPH_META_SCHEMA_VERSION + 1))
 
 
 class BaselineState(str, Enum):
-    """Which of the three baseline states a diff run is in (ADR-002 decision 4)."""
+    """Which baseline state a diff run is in (ADR-002 decision 4, amended).
+
+    ``VERSION_CHANGED`` was added when fresh-run cleanup landed: the prior map
+    was written by a *different* graphlm version and its stale artifacts were
+    removed, so the run is regenerated fresh and not compared. It is distinct
+    from ``FIRST_RUN`` (which would falsely claim "no prior version existed")
+    and ``UNCOMPARABLE`` (which would falsely claim the prior file was corrupt).
+    """
 
     FIRST_RUN = "first_run"
     UNCOMPARABLE = "uncomparable"
+    VERSION_CHANGED = "version_changed"
     NORMAL = "normal"
 
 
@@ -61,8 +70,22 @@ class BaselineState(str, Enum):
 _STATE_LABEL = {
     BaselineState.FIRST_RUN: "initial graph — no prior version to compare",
     BaselineState.UNCOMPARABLE: "prior graph could not be read — not compared",
+    BaselineState.VERSION_CHANGED: "prior graph from a different graphlm version "
+    "— regenerated fresh, not compared",
     BaselineState.NORMAL: "compared against the prior graph",
 }
+
+
+def _state_label(diff: "GraphDiff") -> str:
+    """State label, naming the two versions for the VERSION_CHANGED state."""
+    if diff.state is BaselineState.VERSION_CHANGED:
+        old = diff.old_version or "an unknown version"
+        new = diff.new_version or "an unknown version"
+        return (
+            f"prior graph from graphlm {old} — regenerated fresh under "
+            f"{new}, not compared"
+        )
+    return _STATE_LABEL[diff.state]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +118,10 @@ class GraphDiff:
     old_sha: Optional[str]
     new_sha: Optional[str]
     dimensions: dict[str, DimensionDiff]
+    # The two graphlm versions, populated only for the VERSION_CHANGED state so
+    # the label can name them ("prior map from graphlm X; regenerated under Y").
+    old_version: Optional[str] = None
+    new_version: Optional[str] = None
 
     @property
     def has_changes(self) -> bool:
@@ -242,21 +269,32 @@ def compute_diff(
     old_graph: Optional[CodebaseGraph],
     new_graph: CodebaseGraph,
     state: BaselineState,
+    *,
+    old_version: Optional[str] = None,
+    new_version: Optional[str] = None,
 ) -> GraphDiff:
     """Compute the structural diff of ``old_graph`` vs ``new_graph``.
 
-    When ``state`` is not ``NORMAL`` (``old_graph`` is ``None``), every
-    dimension is empty — the artifact still carries the state label so an agent
-    can tell "no changes" from "never compared". SHA range is read from each
-    side's ``meta.commit_sha`` regardless of state.
+    When ``state`` is not ``NORMAL``, every dimension is empty — the artifact
+    still carries the state label so an agent can tell "no changes" from "never
+    compared". SHA range is read from each side's ``meta.commit_sha`` regardless
+    of state. ``old_version`` / ``new_version`` are recorded only for the
+    ``VERSION_CHANGED`` state so its label can name the two graphlm versions.
     """
     old_sha = _sha_of(old_graph)
     new_sha = _sha_of(new_graph)
 
     dims: dict[str, DimensionDiff] = {}
     if old_graph is None or state is not BaselineState.NORMAL:
-        # first-run / uncomparable: no comparison, empty dimensions.
-        return GraphDiff(state=state, old_sha=old_sha, new_sha=new_sha, dimensions=dims)
+        # first-run / uncomparable / version-changed: no comparison, empty dims.
+        return GraphDiff(
+            state=state,
+            old_sha=old_sha,
+            new_sha=new_sha,
+            dimensions=dims,
+            old_version=old_version,
+            new_version=new_version,
+        )
 
     dims["modules"] = _diff_by_key(
         old_graph.modules, new_graph.modules, lambda m: m.path, _fmt_module
@@ -353,21 +391,30 @@ def render_diff_markdown(diff: GraphDiff) -> str:
         "in the *map*, not the code. Added/removed only (a pure prose rewrite is "
         "intentionally invisible).\n"
     )
-    lines.append(f"- **State:** {_STATE_LABEL[diff.state]}")
+    lines.append(f"- **State:** {_state_label(diff)}")
     lines.append(f"- **Commit range:** {_sha_range(diff.old_sha, diff.new_sha)}")
     lines.append("")
 
     if diff.state is BaselineState.FIRST_RUN:
         lines.append(
-            "No prior `GRAPH.json` was found in the output directory, so there is "
+            "No prior graph was found in the output directory, so there is "
             "nothing to compare against. The next run will diff against this one."
         )
         return "\n".join(lines) + "\n"
     if diff.state is BaselineState.UNCOMPARABLE:
         lines.append(
-            "A prior `GRAPH.json` exists but could not be read (corrupt JSON or an "
+            "A prior graph exists but could not be read (corrupt JSON or an "
             "unrecognized schema version), so no comparison was made. This is "
             "distinct from a first run."
+        )
+        return "\n".join(lines) + "\n"
+    if diff.state is BaselineState.VERSION_CHANGED:
+        old = diff.old_version or "an unknown version"
+        new = diff.new_version or "an unknown version"
+        lines.append(
+            f"The prior graph was generated by graphlm {old}; this run is "
+            f"{new}. The map was regenerated fresh rather than compared across a "
+            "version boundary. The next run will diff against this one."
         )
         return "\n".join(lines) + "\n"
 
@@ -430,9 +477,11 @@ def render_diff_json(diff: GraphDiff) -> bytes:
     data = {
         "diff_schema_version": DIFF_SCHEMA_VERSION,
         "state": diff.state.value,
-        "state_label": _STATE_LABEL[diff.state],
+        "state_label": _state_label(diff),
         "old_commit_sha": diff.old_sha,
         "new_commit_sha": diff.new_sha,
+        "old_graphlm_version": diff.old_version,
+        "new_graphlm_version": diff.new_version,
         "dimensions": dimensions,
     }
     return json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")

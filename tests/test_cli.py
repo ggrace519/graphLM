@@ -94,7 +94,7 @@ class TestCLI:
     def test_serve_runs_server_with_resolved_paths(self, tmp_path, monkeypatch):
         # -o is honored for the map location, and PROJECT_DIR defaults to cwd.
         # --serve reads the internal working copy, not the opt-in GRAPH.json.
-        from graphlm.render import STATE_FILENAME
+        from graphlm.freshness import STATE_FILENAME
 
         out = tmp_path / "maps"
         write_outputs(CodebaseGraph(directory_tree=""), out, html=False, diff=False)

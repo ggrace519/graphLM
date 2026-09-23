@@ -101,8 +101,8 @@ def _do_serve(project_dir: Path | None, output_dir: str | None) -> None:
     ``mcp`` import so a missing map reports the actionable problem (run
     ``graphlm .``) rather than a missing extra.
     """
+    from graphlm.freshness import STATE_FILENAME
     from graphlm.query import MapUnavailable, load_map
-    from graphlm.render import STATE_FILENAME
 
     project = project_dir if project_dir is not None else Path(".")
     # Serve reads graphlm's internal JSON working copy, which is written on every

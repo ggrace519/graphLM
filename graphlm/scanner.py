@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 
+from graphlm.freshness import STATE_FILENAME
 from graphlm.redact import _is_sensitive_file, _redact_secrets
 from graphlm.testpaths import is_test_path
 
@@ -73,10 +74,10 @@ _ALWAYS_EXCLUDE = {
     "GRAPH.html",
     "GRAPH_DIFF.md",
     "GRAPH_DIFF.json",
-    # graphlm's internal JSON working copy (render.STATE_FILENAME) — always
-    # written for the diff baseline / --serve, so exclude it from a re-scan the
-    # same way as the deliverables. Not suffix-dependent (fixed name).
-    ".graph-state.json",
+    # graphlm's internal JSON working copy — always written for the diff baseline
+    # / --serve, so exclude it from a re-scan the same way as the deliverables.
+    # Sourced from the single definition in freshness.py (not a hardcoded copy).
+    STATE_FILENAME,
 }
 
 # Hard cap on how many listed children any one directory contributes to the
